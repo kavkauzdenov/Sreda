@@ -25,6 +25,11 @@ import { formatRelativeDateTime } from "@/lib/format";
 import { isDemoMode } from "@/lib/dataMode";
 import { apiRequest } from "@/lib/apiClient";
 import {
+  resolveSetupSteps,
+  setupStepsForIndustry,
+  type SetupReadiness,
+} from "@/lib/setupSteps";
+import {
   recommendationSummary,
   recommendedSolutionCodes,
 } from "@/lib/businessTypeRecommendations";
@@ -61,6 +66,7 @@ export function DashboardView() {
     industry: string | null;
     onboardingDone: boolean;
     progress: Record<string, boolean>;
+    readiness: SetupReadiness;
   } | null>(null);
 
   useEffect(() => {
@@ -93,6 +99,7 @@ export function DashboardView() {
       industry?: string | null;
       onboarding_completed_at?: string | null;
       setup_progress?: Record<string, boolean>;
+      readiness?: SetupReadiness;
     }>(`/api/v1/businesses/${encodeURIComponent(businessId)}/industry`)
       .then((row) => {
         if (active)
@@ -101,6 +108,7 @@ export function DashboardView() {
             industry: row.industry ?? null,
             onboardingDone: !!row.onboarding_completed_at,
             progress: row.setup_progress ?? {},
+            readiness: row.readiness ?? {},
           });
       })
       .catch(() => {
@@ -122,33 +130,35 @@ export function DashboardView() {
     industryHint?.id === data.businessId &&
     !industryHint.industry &&
     !industryHint.onboardingDone;
-  const setupSteps = (() => {
+  const setup = (() => {
     if (!industryHint || industryHint.id !== data.businessId) return null;
     if (industryHint.onboardingDone) return null;
-    const p = industryHint.progress;
-    const keys = Object.keys(p);
-    const total = Math.max(keys.length, 4);
-    const done = keys.length
-      ? keys.filter((k) => p[k]).length
-      : industryHint.industry
-        ? 1
-        : 0;
-    if (done >= total) return null;
-    return { done, total };
+    return resolveSetupSteps({
+      steps: setupStepsForIndustry(industryHint.industry),
+      progress: industryHint.progress,
+      readiness: industryHint.readiness,
+    });
   })();
+  const setupSteps =
+    setup && setup.done < setup.total
+      ? { done: setup.done, total: setup.total }
+      : null;
   const nextSetupHint = (() => {
     if (!industryHint?.industry || industryHint.onboardingDone) return null;
+    const done = new Set(
+      (setup?.steps ?? []).filter((s) => s.done).map((s) => s.id),
+    );
     if (
-      !industryHint.progress.schedule &&
+      !done.has("schedule") &&
       ["beauty", "education", "rental", "sport_health", "automotive"].includes(
         industryHint.industry,
       )
     )
       return "Настройте расписание, чтобы открыть онлайн-запись.";
-    if (!industryHint.progress.telegram)
+    if (!done.has("telegram"))
       return "Подключите Telegram, чтобы клиенты могли писать боту.";
     if (
-      !industryHint.progress.catalog &&
+      !done.has("catalog") &&
       ["retail", "food"].includes(industryHint.industry)
     )
       return "Заполните каталог товаров.";
@@ -337,7 +347,7 @@ export function DashboardView() {
               Стартовая настройка: {setupSteps.done} из {setupSteps.total}{" "}
               шагов.
               {nextSetupHint ? ` ${nextSetupHint}` : ""}{" "}
-              <Link href="/onboarding">Продолжить</Link>
+              <Link href={setup?.next?.href ?? "/onboarding"}>Продолжить</Link>
             </p>
           ) : null}
           {!isDemoMode &&
@@ -355,9 +365,7 @@ export function DashboardView() {
                   (item) =>
                     item.status === "active" || item.status === "setup_required",
                 ),
-                hasConnection: data.connections.some(
-                  (c) => c.status === "connected",
-                ),
+                hasConnection: !!industryHint.readiness.hasConnection,
               }}
             />
           ) : null}

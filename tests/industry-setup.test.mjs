@@ -233,3 +233,133 @@ test("lead form preset seeds fields only when empty", async () => {
   const rows = await leads.list(f.uid, f.b.public_id, true);
   assert.ok(rows.some((r) => /автомоб|проблем|имя/i.test(r.label)));
 });
+
+async function connectTelegram(businessId, status = "connected") {
+  const id = randomUUID();
+  await db
+    .insertInto("business_connection")
+    .values({
+      id,
+      business_id: businessId,
+      platform: "telegram",
+      external_account_id: randomUUID(),
+      display_name: "@test_bot",
+      status,
+    })
+    .execute();
+  return id;
+}
+
+test("readiness: telegram step is done only for a connected telegram channel", async () => {
+  const f = await fixture();
+  await f.industry.save(f.uid, f.b.public_id, {
+    industry: "other",
+    setup_mode: "advanced",
+    capabilities_enabled: ["telegram", "inbox", "admin_messages"],
+  });
+
+  const fresh = await f.industry.get(f.uid, f.b.public_id);
+  assert.equal(fresh.readiness.hasConnection, false);
+  assert.equal(fresh.readiness.hasIndustry, true);
+  assert.equal(fresh.readiness.hasActiveSolution, false);
+
+  const connectionId = await connectTelegram(f.b.id, "pending");
+  const pending = await f.industry.get(f.uid, f.b.public_id);
+  assert.equal(pending.readiness.hasConnection, false);
+
+  await db
+    .updateTable("business_connection")
+    .set({ status: "connected" })
+    .where("id", "=", connectionId)
+    .execute();
+  const connected = await f.industry.get(f.uid, f.b.public_id);
+  assert.equal(connected.readiness.hasConnection, true);
+  // Manual progress from the advanced save must not be required for the step.
+  assert.equal(connected.setup_progress.telegram, undefined);
+});
+
+test("readiness: non-telegram channel does not complete the telegram step", async () => {
+  const f = await fixture();
+  await f.industry.save(f.uid, f.b.public_id, { industry: "other" });
+  const id = randomUUID();
+  await db
+    .insertInto("business_connection")
+    .values({
+      id,
+      business_id: f.b.id,
+      platform: "vk",
+      external_account_id: randomUUID(),
+      display_name: "vk",
+      status: "connected",
+    })
+    .execute();
+  const loaded = await f.industry.get(f.uid, f.b.public_id);
+  assert.equal(loaded.readiness.hasConnection, false);
+});
+
+test("readiness is stable for an already-connected business (idempotent reload)", async () => {
+  const f = await fixture();
+  await f.industry.save(f.uid, f.b.public_id, {
+    industry: "other",
+    setup_mode: "advanced",
+  });
+  const connectionId = await connectTelegram(f.b.id);
+
+  const first = await f.industry.get(f.uid, f.b.public_id);
+  const second = await f.industry.get(f.uid, f.b.public_id);
+  assert.deepEqual(first.readiness, second.readiness);
+  assert.equal(first.readiness.hasConnection, true);
+  assert.deepEqual(first.setup_progress, second.setup_progress);
+
+  // Reconnecting the same channel keeps the step done and progress untouched.
+  await db
+    .updateTable("business_connection")
+    .set({ status: "disconnected" })
+    .where("id", "=", connectionId)
+    .execute();
+  assert.equal((await f.industry.get(f.uid, f.b.public_id)).readiness.hasConnection, false);
+  await db
+    .updateTable("business_connection")
+    .set({ status: "connected" })
+    .where("id", "=", connectionId)
+    .execute();
+  const third = await f.industry.get(f.uid, f.b.public_id);
+  assert.deepEqual(third.readiness, first.readiness);
+  assert.deepEqual(third.setup_progress, first.setup_progress);
+});
+
+test("readiness: active solution and in-progress setup both count as connected", async () => {
+  const f = await fixture();
+  await f.industry.save(f.uid, f.b.public_id, { industry: "retail" });
+  assert.equal((await f.industry.get(f.uid, f.b.public_id)).readiness.hasActiveSolution, false);
+
+  await db
+    .insertInto("solution_setup_draft")
+    .values({
+      business_id: f.b.id,
+      solution_code: "leads",
+      status: "in_progress",
+    })
+    .execute();
+  const inProgress = await f.industry.get(f.uid, f.b.public_id);
+  assert.equal(inProgress.readiness.hasActiveSolution, true);
+
+  await db
+    .updateTable("solution_setup_draft")
+    .set({ status: "completed" })
+    .execute();
+  const afterDone = await f.industry.get(f.uid, f.b.public_id);
+  assert.equal(afterDone.readiness.hasActiveSolution, false);
+
+  await db
+    .insertInto("business_solution")
+    .values({
+      business_id: f.b.id,
+      solution_code: "leads",
+      status: "active",
+      starts_at: new Date(),
+    })
+    .execute();
+  const active = await f.industry.get(f.uid, f.b.public_id);
+  assert.equal(active.readiness.hasActiveSolution, true);
+});

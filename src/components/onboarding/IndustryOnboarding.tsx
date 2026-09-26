@@ -11,6 +11,11 @@ import type {
 import { FieldHint } from "@/components/ui/SetupChrome";
 import { AdvancedConfigurator } from "@/components/onboarding/AdvancedConfigurator";
 import { SetupChecklist } from "@/components/onboarding/SetupChecklist";
+import {
+  resolveSetupSteps,
+  setupStepsForIndustry,
+  type SetupReadiness,
+} from "@/lib/setupSteps";
 
 const SOLUTION_LABELS: Record<string, string> = {
   leads: "Приём заявок",
@@ -46,6 +51,7 @@ type IndustryState = {
   capabilities_enabled: CapabilityId[];
   setup_progress: Record<string, boolean>;
   onboarding_completed_at: string | null;
+  readiness: SetupReadiness;
   name: string;
   preset: PresetSummary | null;
   catalogs: {
@@ -153,6 +159,11 @@ export function IndustryOnboarding({ businessId }: { businessId: string }) {
   const industries = data.catalogs.industries;
   const subtypes = data.preset?.subtypes ?? [];
   const recommended = data.preset?.recommendedSolutions ?? [];
+  const nextSetupStep = resolveSetupSteps({
+    steps: setupStepsForIndustry(data.industry),
+    progress: data.setup_progress,
+    readiness: data.readiness,
+  }).next;
   const isBookingIndustry =
     recommended.includes("booking") || Boolean(data.preset?.bookingPreset);
 
@@ -182,6 +193,36 @@ export function IndustryOnboarding({ businessId }: { businessId: string }) {
             setForceEdit(false);
             void reload();
           }}
+        />
+        <section className="panel stack-md">
+          <h2 className="text-section-title">Что дальше</h2>
+          <p className="text-body-sm">
+            Возможности сохранены. Дальше — подключить площадку и довести
+            стартовую настройку до конца.
+          </p>
+          <div className="message-actions">
+            {nextSetupStep ? (
+              <Link href={nextSetupStep.href} className="button button--primary">
+                {nextSetupStep.label}
+              </Link>
+            ) : (
+              <Link href="/dashboard" className="button button--primary">
+                Перейти в дашборд
+              </Link>
+            )}
+            <Link href="/dashboard" className="button button--outline">
+              Вернуться в дашборд
+            </Link>
+          </div>
+        </section>
+        <SetupChecklist
+          businessId={businessId}
+          progress={data.setup_progress}
+          industry={data.industry}
+          readiness={data.readiness}
+          onProgressChange={(progress) =>
+            setData((prev) => (prev ? { ...prev, setup_progress: progress } : prev))
+          }
         />
         <p>
           <button
@@ -265,6 +306,7 @@ export function IndustryOnboarding({ businessId }: { businessId: string }) {
           businessId={businessId}
           progress={data.setup_progress}
           industry={data.industry}
+          readiness={data.readiness}
         />
       </div>
     );

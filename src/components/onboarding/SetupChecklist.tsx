@@ -3,106 +3,15 @@
 import Link from "next/link";
 import { useState } from "react";
 import { apiRequest } from "@/lib/apiClient";
-import { terminologyFor } from "@/lib/industryPresets";
+import {
+  readinessSetupSteps,
+  resolveSetupSteps,
+  setupStepsForIndustry,
+  type SetupReadiness,
+  type SetupStep,
+} from "@/lib/setupSteps";
 
-type ChecklistStep = {
-  id: string;
-  label: string;
-  href: string;
-};
-
-function stepsForIndustry(industry?: string | null): ChecklistStep[] {
-  const terms = terminologyFor(industry);
-  switch (industry) {
-    case "beauty":
-    case "sport_health":
-    case "education":
-    case "rental":
-      return [
-        {
-          id: "services",
-          label: "Добавить услуги",
-          href: "/bookings?tab=config",
-        },
-        {
-          id: "specialists",
-          label: `Добавить: ${terms.specialists.toLowerCase()}`,
-          href: "/bookings?tab=config",
-        },
-        {
-          id: "schedule",
-          label: "Настроить расписание",
-          href: "/bookings?tab=config",
-        },
-        { id: "telegram", label: "Подключить Telegram", href: "/connections" },
-      ];
-    case "retail":
-    case "food":
-      return [
-        { id: "catalog", label: "Заполнить каталог", href: "/orders" },
-        { id: "orders", label: "Проверить приём заказов", href: "/orders" },
-        { id: "telegram", label: "Подключить Telegram", href: "/connections" },
-      ];
-    case "automotive":
-      return [
-        {
-          id: "services",
-          label: "Услуги или работы",
-          href: "/bookings?tab=config",
-        },
-        {
-          id: "leads",
-          label: "Настроить заявки",
-          href: "/solutions/leads/setup",
-        },
-        { id: "telegram", label: "Подключить Telegram", href: "/connections" },
-      ];
-    case "construction":
-    case "professional_services":
-      return [
-        {
-          id: "leads",
-          label: "Настроить заявки",
-          href: "/solutions/leads/setup",
-        },
-        { id: "telegram", label: "Подключить Telegram", href: "/connections" },
-        { id: "ai", label: "Заполнить AI-профиль", href: "/settings?section=ai" },
-      ];
-    default:
-      return [
-        { id: "industry", label: "Выбрать направление", href: "/onboarding" },
-        { id: "solutions", label: "Посмотреть решения", href: "/solutions" },
-        { id: "telegram", label: "Подключить Telegram", href: "/connections" },
-        { id: "ai", label: "Заполнить AI-профиль", href: "/settings?section=ai" },
-      ];
-  }
-}
-
-export type SetupReadiness = {
-  hasIndustry?: boolean;
-  hasActiveSolution?: boolean;
-  hasConnection?: boolean;
-};
-
-function readinessSteps(): ChecklistStep[] {
-  return [
-    {
-      id: "industry",
-      label: "Выбрать направление",
-      href: "/onboarding",
-    },
-    {
-      id: "solutions",
-      label: "Подключить решение",
-      href: "/solutions",
-    },
-    {
-      id: "telegram",
-      label: "Подключить площадку",
-      href: "/settings?section=connections",
-    },
-  ];
-}
+export type { SetupReadiness } from "@/lib/setupSteps";
 
 export function SetupChecklist({
   businessId,
@@ -122,28 +31,25 @@ export function SetupChecklist({
   const [busy, setBusy] = useState(false);
   const [local, setLocal] = useState(progress);
 
+  const source: SetupStep[] =
+    variant === "compact" ? readinessSetupSteps() : setupStepsForIndustry(industry);
+  const resolved = resolveSetupSteps({
+    steps: source,
+    progress: local,
+    readiness,
+  });
+
   if (variant === "compact") {
-    const derived = readinessSteps();
-    const doneMap: Record<string, boolean> = {
-      industry: !!(readiness?.hasIndustry || local.industry),
-      solutions: !!(readiness?.hasActiveSolution || local.solutions),
-      telegram: !!(readiness?.hasConnection || local.telegram),
-    };
-    const steps = derived.map((step) => ({
-      ...step,
-      done: doneMap[step.id] === true,
-    }));
-    const done = steps.filter((s) => s.done).length;
-    if (done >= steps.length) return null;
+    if (resolved.done >= resolved.total) return null;
     return (
       <section className="setup-checklist setup-checklist--compact" aria-label="Чеклист настройки">
         <div className="setup-checklist__head">
           <h2 className="text-section-title">
-            Стартовая настройка: {done} из {steps.length} шагов
+            Стартовая настройка: {resolved.done} из {resolved.total} шагов
           </h2>
         </div>
         <ul className="setup-progress__list">
-          {steps.map((step) => (
+          {resolved.steps.map((step) => (
             <li key={step.id} className={step.done ? "is-done" : ""}>
               <Link href={step.href} className="text-link">
                 <span aria-hidden>{step.done ? "✓" : "○"}</span> {step.label}
@@ -155,21 +61,16 @@ export function SetupChecklist({
     );
   }
 
-  const steps = stepsForIndustry(industry).map((step) => ({
-    ...step,
-    done:
-      local[step.id] === true ||
-      (step.id === "industry" && local.industry === true),
-  }));
-  const done = steps.filter((s) => s.done).length;
-
   async function toggle(id: string, value: boolean) {
     setBusy(true);
     try {
       const next = { ...local, [id]: value };
-      const allDone = stepsForIndustry(industry).every(
-        (s) => next[s.id] === true || (s.id === "industry" && next.industry),
-      );
+      const after = resolveSetupSteps({
+        steps: setupStepsForIndustry(industry),
+        progress: next,
+        readiness,
+      });
+      const allDone = after.done >= after.total;
       const saved = await apiRequest<{
         setup_progress: Record<string, boolean>;
       }>(`/api/v1/businesses/${businessId}/industry`, {
@@ -189,26 +90,38 @@ export function SetupChecklist({
   return (
     <section className="panel stack-md" aria-label="Чеклист настройки">
       <h2 className="text-section-title">
-        Стартовая настройка: {done} из {steps.length} шагов
+        Стартовая настройка: {resolved.done} из {resolved.total} шагов
       </h2>
       <p className="text-body-sm">Отмечайте шаги по мере готовности.</p>
       <ul className="setup-progress__list">
-        {steps.map((step) => (
+        {resolved.steps.map((step) => (
           <li key={step.id} className={step.done ? "is-done" : ""}>
-            <label className="capability-row">
-              <input
-                type="checkbox"
-                checked={step.done}
-                disabled={busy}
-                onChange={(e) => void toggle(step.id, e.target.checked)}
-              />
+            {step.derived ? (
               <span>
                 <span aria-hidden>{step.done ? "✓" : "○"}</span>{" "}
                 <Link href={step.href} className="text-link">
                   {step.label}
                 </Link>
+                {step.done ? (
+                  <span className="text-caption"> · подключено автоматически</span>
+                ) : null}
               </span>
-            </label>
+            ) : (
+              <label className="capability-row">
+                <input
+                  type="checkbox"
+                  checked={step.done}
+                  disabled={busy}
+                  onChange={(e) => void toggle(step.id, e.target.checked)}
+                />
+                <span>
+                  <span aria-hidden>{step.done ? "✓" : "○"}</span>{" "}
+                  <Link href={step.href} className="text-link">
+                    {step.label}
+                  </Link>
+                </span>
+              </label>
+            )}
           </li>
         ))}
       </ul>
