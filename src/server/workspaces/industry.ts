@@ -66,8 +66,54 @@ function parseProgress(raw: unknown): Record<string, boolean> {
   return out;
 }
 
+/** Mirrors SolutionService entitlement mapping: trial/active and not expired. */
+function solutionEntitled(
+  status: "active" | "trial" | "expired" | "disabled" | "paused",
+  expiresAt: Date | null,
+  now: number,
+): boolean {
+  if (expiresAt && expiresAt.getTime() <= now) return false;
+  return status === "active" || status === "trial";
+}
+
 export class IndustrySetupService {
   constructor(private db: Kysely<Database>) {}
+
+  /**
+   * Setup steps that have a source of truth in live data are derived here, not
+   * read from business.setup_progress, so a manual tick can never make the
+   * checklist claim progress the business does not have.
+   */
+  private async readiness(businessId: string, hasIndustry: boolean) {
+    const now = Date.now();
+    const [connections, solutions, drafts] = await Promise.all([
+      this.db
+        .selectFrom("business_connection")
+        .select(["platform", "status"])
+        .where("business_id", "=", businessId)
+        .execute(),
+      this.db
+        .selectFrom("business_solution")
+        .select(["status", "expires_at"])
+        .where("business_id", "=", businessId)
+        .execute(),
+      this.db
+        .selectFrom("solution_setup_draft")
+        .select("solution_code")
+        .where("business_id", "=", businessId)
+        .where("status", "in", ["in_progress", "reminded"])
+        .executeTakeFirst(),
+    ]);
+    return {
+      hasIndustry,
+      hasActiveSolution:
+        solutions.some((row) => solutionEntitled(row.status, row.expires_at, now)) ||
+        Boolean(drafts),
+      hasConnection: connections.some(
+        (row) => row.platform === "telegram" && row.status === "connected",
+      ),
+    };
+  }
 
   async get(userId: string, publicId: string) {
     const b = await requireBusiness(this.db, userId, publicId, "clients.read");
@@ -87,10 +133,12 @@ export class IndustrySetupService {
       .where("id", "=", b.id)
       .executeTakeFirstOrThrow();
     const preset = industryPreset(row.industry);
+    const readiness = await this.readiness(b.id, Boolean(row.industry));
     return {
       ...row,
       capabilities_enabled: parseCapabilities(row.capabilities),
       setup_progress: parseProgress(row.setup_progress),
+      readiness,
       preset: preset
         ? {
             id: preset.id,
