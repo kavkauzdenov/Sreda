@@ -335,20 +335,49 @@ export function DashboardView() {
           </header>
 
           {showIndustryNudge ? (
-            <p className="account-notice" role="status">
-              Помогите {APP_NAME} лучше настроиться под ваш бизнес.{" "}
-              <Link href="/onboarding">Выбрать направление</Link>
-              {" · "}
-              <Link href="/settings/advanced">Расширенная настройка</Link>
-            </p>
+            <div className="panel panel--subtle" role="status">
+              <p className="account-notice" role="status">
+                Помогите {APP_NAME} лучше настроиться под ваш бизнес.{" "}
+                <Link href="/onboarding">Выбрать направление</Link>
+                {" · "}
+                <Link href="/settings/advanced">Расширенная настройка</Link>
+              </p>
+            </div>
           ) : null}
           {setupSteps && !showIndustryNudge ? (
-            <p className="account-notice" role="status">
-              Стартовая настройка: {setupSteps.done} из {setupSteps.total}{" "}
-              шагов.
-              {nextSetupHint ? ` ${nextSetupHint}` : ""}{" "}
-              <Link href={setup?.next?.href ?? "/onboarding"}>Продолжить</Link>
-            </p>
+            <section className="dashboard-onboarding-card" role="status" aria-label="Прогресс настройки">
+              <div className="dashboard-onboarding-card__header">
+                <h2 className="dashboard-onboarding-card__title">
+                  Стартовая настройка
+                </h2>
+                <span className="dashboard-onboarding-card__progress">
+                  {setupSteps.done} из {setupSteps.total}
+                </span>
+              </div>
+              <div className="onboarding-stepper" role="progressbar" aria-valuenow={setupSteps.done} aria-valuemin={0} aria-valuemax={setupSteps.total}>
+                {setup?.steps.map((step) => (
+                  <div
+                    key={step.id}
+                    className={`onboarding-stepper__item ${step.done ? "is-complete" : ""} ${!step.done && step === setup.next ? "is-current" : ""}`}
+                  >
+                    <div className="onboarding-stepper__dot">
+                      {step.done ? (
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
+                      ) : (
+                        <span aria-hidden>{step.id === "telegram" ? "📱" : step.id === "solutions" ? "🧩" : step.id === "industry" ? "🏢" : step.id === "ai" ? "🤖" : step.id === "catalog" ? "📦" : "○"}</span>
+                      )}
+                    </div>
+                    <span className="onboarding-stepper__label">{step.label}</span>
+                  </div>
+                ))}
+              </div>
+              <p className="dashboard-onboarding-card__cta">
+                {nextSetupHint ? `${nextSetupHint} ` : ""}
+                <Link href={setup?.next?.href ?? "/onboarding"} className="text-link">
+                  Продолжить →
+                </Link>
+              </p>
+            </section>
           ) : null}
           {!isDemoMode &&
           data.businessId &&

@@ -428,22 +428,6 @@ function Connections({ id }: { id: string }) {
     return () => window.removeEventListener("message", onMessage);
   }, []);
 
-  function metaLabel(platform: MetaPlatform, connection?: Connection) {
-    if (platform === "whatsapp")
-      return (
-        connection?.displayPhoneNumber ||
-        connection?.displayName ||
-        "WhatsApp"
-      );
-    return (
-      (connection?.igUsername
-        ? `@${connection.igUsername.replace(/^@/, "")}`
-        : null) ||
-      connection?.displayName ||
-      "Instagram"
-    );
-  }
-
   return (
     <div className="connections-page">
       <header>
@@ -460,28 +444,61 @@ function Connections({ id }: { id: string }) {
           {notice}
         </p>
       )}
-      {(["telegram", "vk"] as const).map((platform) => {
-        const connection = connections.find((c) => c.platform === platform);
-        return (
-          <section className="panel connection-setup" key={platform}>
-            <h2>{platform === "telegram" ? "Telegram" : "ВКонтакте"}</h2>
-            {connection?.status === "connected" ? (
-              <>
-                <p>Токен проверен: {connection.displayName}</p>
-                <p className="connection-runtime" role="status">
-                  {connection.runtimeStatus === "ready"
-                    ? "● Бот работает"
-                    : connection.runtimeStatus === "error"
-                      ? "⚠ Ошибка запуска"
-                      : "○ Остановлен"}
-                </p>
-                <div className="message-actions">
-                  <Link className="button button--outline" href="/solutions">
+      <div className="connections-grid" style={{ display: "grid", gap: "var(--space-4)" }}>
+        {(["telegram", "vk"] as const).map((platform) => {
+          const connection = connections.find((c) => c.platform === platform);
+          return (
+            <article className="connection-item" key={platform}>
+              <div className="connection-item__header">
+                <div className="connection-item__icon platform-icon platform-icon--{platform}">
+                  <b>{platform === "telegram" ? "TG" : "VK"}</b>
+                </div>
+                <div className="connection-item__info">
+                  <div className="connection-item__name">
+                    {platform === "telegram" ? "Telegram" : "ВКонтакте"}
+                  </div>
+                  {connection ? (
+                    <div className="connection-item__status">
+                      <span
+                        className={`connection-item__status-dot connection-item__status-dot--${connection.status}`}
+                      />
+                      <span
+                        className={`connection-item__status-text connection-item__status-text--${connection.status}`}
+                      >
+                        {connection.status === "connected"
+                          ? "Подключён"
+                          : connection.status === "pending"
+                          ? "Ожидает"
+                          : connection.status === "error"
+                          ? "Ошибка"
+                          : "Отключён"}
+                      </span>
+                      {connection.runtimeStatus && (
+                        <span className="connection-item__runtime">
+                          {connection.runtimeStatus === "ready"
+                            ? "● Работает"
+                            : connection.runtimeStatus === "error"
+                            ? "⚠ Ошибка запуска"
+                            : "○ Остановлен"}
+                        </span>
+                      )}
+                    </div>
+                  ) : (
+                    <span className="connection-item__status">
+                      <span className="connection-item__status-dot connection-item__status-dot--disconnected" />
+                      <span className="connection-item__status-text connection-item__status-text--disconnected">Не подключён</span>
+                    </span>
+                  )}
+                </div>
+              </div>
+              {connection && connection.status === "connected" ? (
+                <div className="connection-item__actions">
+                  <Link className="connection-item__action" href="/solutions">
                     Настроить решения
                   </Link>
                   {connection.runtimeStatus === "ready" ? (
                     <button
-                      className="button button--outline"
+                      className="connection-item__action"
                       disabled={busy}
                       onClick={() => void act(platform, "stop")}
                     >
@@ -489,7 +506,7 @@ function Connections({ id }: { id: string }) {
                     </button>
                   ) : (
                     <button
-                      className="button button--primary"
+                      className="connection-item__action connection-item__action--primary"
                       disabled={busy}
                       onClick={() => void act(platform, "start")}
                     >
@@ -497,7 +514,7 @@ function Connections({ id }: { id: string }) {
                     </button>
                   )}
                   <button
-                    className="button button--outline"
+                    className="connection-item__action connection-item__action--danger"
                     disabled={busy}
                     aria-haspopup="dialog"
                     aria-expanded={confirmation === platform}
@@ -506,103 +523,117 @@ function Connections({ id }: { id: string }) {
                     Отключить
                   </button>
                 </div>
-              </>
-            ) : (
-              <form
-                className="connection-token-form"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void act(platform, "connect");
-                }}
-              >
-                <p>
-                  {platform === "telegram" ? (
-                    <>
-                      Получите токен своего бота в{" "}
-                      <a
-                        href="https://t.me/BotFather"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        @BotFather
-                      </a>
-                      .
-                    </>
+              ) : (
+                <form
+                  className="connection-token-form"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void act(platform, "connect");
+                  }}
+                >
+                  <p>
+                    {platform === "telegram" ? (
+                      <>
+                        Получите токен своего бота в{" "}
+                        <a
+                          href="https://t.me/BotFather"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          @BotFather
+                        </a>
+                        .
+                      </>
+                    ) : (
+                      "Создайте ключ доступа сообщества VK с правами сообщений и управления. Включите сообщения сообщества в настройках VK."
+                    )}
+                  </p>
+                  <label htmlFor={"token-" + platform}>
+                    Токен {platform === "telegram" ? "бота" : "сообщества"}
+                  </label>
+                  <input
+                    id={"token-" + platform}
+                    type="password"
+                    autoComplete="off"
+                    autoCapitalize="none"
+                    spellCheck={false}
+                    value={tokens[platform]}
+                    onChange={(e) =>
+                      setTokens({ ...tokens, [platform]: e.target.value })
+                    }
+                    disabled={busy}
+                  />
+                  <p>Токен хранится на сервере в зашифрованном виде.</p>
+                  <button className="button button--primary" disabled={busy}>
+                    {busy ? "Проверяем…" : "Подключить"}
+                  </button>
+                </form>
+              )}
+            </article>
+          );
+        })}
+        {(["whatsapp", "instagram"] as const).map((platform) => {
+          const connection = connections.find((c) => c.platform === platform);
+          const ready =
+            platform === "whatsapp"
+              ? metaStatus?.whatsappEmbeddedSignupReady
+              : metaStatus?.instagramLoginReady;
+          const configured = Boolean(metaStatus?.configured);
+          return (
+            <article className="connection-item" key={platform}>
+              <div className="connection-item__header">
+                <div className="connection-item__icon platform-icon platform-icon--{platform}">
+                  <b>{platform === "whatsapp" ? "WA" : "IG"}</b>
+                </div>
+                <div className="connection-item__info">
+                  <div className="connection-item__name">
+                    {platformLabel(platform as Platform)}
+                  </div>
+                  {connection && connection.status === "connected" ? (
+                    <div className="connection-item__status">
+                      <span className="connection-item__status-dot connection-item__status-dot--connected" />
+                      <span className="connection-item__status-text connection-item__status-text--connected">Подключён</span>
+                      {connection.runtimeStatus === "ready" ? (
+                        <>
+                          <span className="connection-item__runtime">● Работает</span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="connection-item__runtime connection-item__runtime--pending">○ Остановлен</span>
+                        </>
+                      )}
+                    </div>
+                  ) : !configured || !ready ? (
+                    <div className="connection-item__status">
+                      <span className="connection-item__status-dot connection-item__status-dot--pending" />
+                      <span className="connection-item__status-text connection-item__status-text--pending">Требуется настройка Meta</span>
+                    </div>
                   ) : (
-                    "Создайте ключ доступа сообщества VK с правами сообщений и управления. Включите сообщения сообщества в настройках VK."
+                    <div className="connection-item__status">
+                      <span className="connection-item__status-dot connection-item__status-dot--disconnected" />
+                      <span className="connection-item__status-text connection-item__status-text--disconnected">Не подключён</span>
+                    </div>
                   )}
-                </p>
-                <label htmlFor={"token-" + platform}>
-                  Токен {platform === "telegram" ? "бота" : "сообщества"}
-                </label>
-                <input
-                  id={"token-" + platform}
-                  type="password"
-                  autoComplete="off"
-                  autoCapitalize="none"
-                  spellCheck={false}
-                  value={tokens[platform]}
-                  onChange={(e) =>
-                    setTokens({ ...tokens, [platform]: e.target.value })
-                  }
-                  disabled={busy}
-                />
-                <p>Токен хранится на сервере в зашифрованном виде.</p>
-                <button className="button button--primary" disabled={busy}>
-                  {busy ? "Проверяем…" : "Подключить"}
-                </button>
-              </form>
-            )}
-          </section>
-        );
-      })}
-      {(["whatsapp", "instagram"] as const).map((platform) => {
-        const connection = connections.find((c) => c.platform === platform);
-        const ready =
-          platform === "whatsapp"
-            ? metaStatus?.whatsappEmbeddedSignupReady
-            : metaStatus?.instagramLoginReady;
-        const configured = Boolean(metaStatus?.configured);
-        return (
-          <section className="panel connection-setup" key={platform}>
-            <h2>{platformLabel(platform as Platform)}</h2>
-            {!configured || !ready ? (
-              <>
-                <p role="status">Требуется настройка Meta</p>
-                <p>
-                  {platform === "whatsapp"
-                    ? "Для WhatsApp Cloud API нужны META_APP_ID, META_APP_SECRET, META_WEBHOOK_VERIFY_TOKEN и META_WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID."
-                    : "Для Instagram Messaging нужны META_APP_ID, META_APP_SECRET, META_WEBHOOK_VERIFY_TOKEN и META_INSTAGRAM_LOGIN_CONFIG_ID."}
-                </p>
-                <button className="button button--primary" disabled>
-                  Подключить
-                </button>
-              </>
-            ) : connection?.status === "connected" ? (
-              <>
-                <p>Подключено: {metaLabel(platform, connection)}</p>
-                {connection.runtimeStatus === "ready" ? (
-                  <p>Приём сообщений активен.</p>
-                ) : (
-                  <p>Сохранено. Запустите приём, чтобы активировать webhook.</p>
-                )}
-                <div className="message-actions">
+                </div>
+              </div>
+              {connection && connection.status === "connected" ? (
+                <div className="connection-item__actions">
                   <button
-                    className="button button--primary"
+                    className="connection-item__action connection-item__action--primary"
                     disabled={busy}
                     onClick={() => void metaStart(platform)}
                   >
                     Запустить приём
                   </button>
                   <button
-                    className="button button--outline"
+                    className="connection-item__action"
                     disabled={busy}
                     onClick={() => void connectMeta(platform)}
                   >
                     Переподключить
                   </button>
                   <button
-                    className="button button--outline"
+                    className="connection-item__action connection-item__action--danger"
                     disabled={busy}
                     aria-haspopup="dialog"
                     aria-expanded={confirmation === platform}
@@ -611,26 +642,27 @@ function Connections({ id }: { id: string }) {
                     Отключить
                   </button>
                 </div>
-              </>
-            ) : (
-              <>
-                <p>
-                  {platform === "whatsapp"
-                    ? "Подключение через официальный WhatsApp Embedded Signup (Meta)."
-                    : "Подключение профессиональной страницы Instagram через Facebook Login."}
-                </p>
-                <button
-                  className="button button--primary"
-                  disabled={busy}
-                  onClick={() => void connectMeta(platform)}
-                >
-                  {busy ? "Подключаем…" : "Подключить"}
-                </button>
-              </>
-            )}
-          </section>
-        );
-      })}
+              ) : !configured || !ready ? (
+                <div className="connection-item__actions">
+                  <button className="connection-item__action connection-item__action--primary" disabled>
+                    Подключить
+                  </button>
+                </div>
+              ) : (
+                <div className="connection-item__actions">
+                  <button
+                    className="connection-item__action connection-item__action--primary"
+                    disabled={busy}
+                    onClick={() => void connectMeta(platform)}
+                  >
+                    {busy ? "Подключаем…" : "Подключить"}
+                  </button>
+                </div>
+              )}
+            </article>
+          );
+        })}
+      </div>
       {igCandidates.length > 0 && (
         <section className="panel connection-setup" aria-label="Выбор Instagram">
           <h2>Выберите Instagram</h2>
