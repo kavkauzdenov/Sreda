@@ -42,21 +42,39 @@ export function SetupChecklist({
   if (variant === "compact") {
     if (resolved.done >= resolved.total) return null;
     return (
-      <section className="setup-checklist setup-checklist--compact" aria-label="Чеклист настройки">
-        <div className="setup-checklist__head">
-          <h2 className="text-section-title">
-            Стартовая настройка: {resolved.done} из {resolved.total} шагов
+      <section className="dashboard-onboarding-card" aria-label="Чеклист настройки">
+        <div className="dashboard-onboarding-card__header">
+          <h2 className="dashboard-onboarding-card__title">
+            Стартовая настройка
           </h2>
+          <span className="dashboard-onboarding-card__progress">
+            {resolved.done} из {resolved.total}
+          </span>
         </div>
-        <ul className="setup-progress__list">
+        <div className="dashboard-onboarding-card__steps">
           {resolved.steps.map((step) => (
-            <li key={step.id} className={step.done ? "is-done" : ""}>
-              <Link href={step.href} className="text-link">
-                <span aria-hidden>{step.done ? "✓" : "○"}</span> {step.label}
+            <div
+              key={step.id}
+              className={`dashboard-onboarding-card__step ${step.done ? "is-done" : ""} ${!step.done && step === resolved.next ? "is-current" : ""} ${!step.done && step !== resolved.next ? "is-pending" : ""}`}
+            >
+              <div className="dashboard-onboarding-card__step-icon">
+                {step.done ? (
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
+                ) : (
+                  <span>{step.done ? "✓" : ""}</span>
+                )}
+              </div>
+              <Link href={step.href} className="dashboard-onboarding-card__step-label text-link">
+                {step.label}
               </Link>
-            </li>
+            </div>
           ))}
-        </ul>
+        </div>
+        {resolved.next && (
+          <Link href={resolved.next.href} className="dashboard-onboarding-card__cta">
+            {resolved.next.label} →
+          </Link>
+        )}
       </section>
     );
   }
@@ -88,43 +106,48 @@ export function SetupChecklist({
   }
 
   return (
-    <section className="panel stack-md" aria-label="Чеклист настройки">
-      <h2 className="text-section-title">
-        Стартовая настройка: {resolved.done} из {resolved.total} шагов
-      </h2>
-      <p className="text-body-sm">Отмечайте шаги по мере готовности.</p>
-      <ul className="setup-progress__list">
-        {resolved.steps.map((step) => (
-          <li key={step.id} className={step.done ? "is-done" : ""}>
-            {step.derived ? (
-              <span>
-                <span aria-hidden>{step.done ? "✓" : "○"}</span>{" "}
-                <Link href={step.href} className="text-link">
-                  {step.label}
-                </Link>
-                {step.done ? (
-                  <span className="text-caption"> · подключено автоматически</span>
-                ) : null}
-              </span>
-            ) : (
-              <label className="capability-row">
-                <input
-                  type="checkbox"
-                  checked={step.done}
-                  disabled={busy}
-                  onChange={(e) => void toggle(step.id, e.target.checked)}
-                />
-                <span>
-                  <span aria-hidden>{step.done ? "✓" : "○"}</span>{" "}
-                  <Link href={step.href} className="text-link">
-                    {step.label}
+    <div className="setup-page stack-lg">
+      <div className="onboarding-card">
+        <h2 className="text-section-title">
+          Стартовая настройка: {resolved.done} из {resolved.total} шагов
+        </h2>
+        <p className="text-body-sm">Отмечайте шаги по мере готовности.</p>
+        <ul className="setup-progress__list">
+          {resolved.steps.map((step) => (
+            <li key={step.id} className={step.done ? "is-done" : ""}>
+              {step.derived ? (
+                <div className="onboarding-status onboarding-status--success">
+                  <div className="onboarding-status__icon">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
+                  </div>
+                  <div className="onboarding-status__text">
+                    <div className="onboarding-status__label">{step.label}</div>
+                    <div className="onboarding-status__detail">подключено автоматически</div>
+                  </div>
+                  <Link href={step.href} className="onboarding-status__action button button--ghost button--sm">
+                    Открыть
                   </Link>
-                </span>
-              </label>
-            )}
-          </li>
-        ))}
-      </ul>
-    </section>
+                </div>
+              ) : (
+                <label className="capability-row">
+                  <input
+                    type="checkbox"
+                    checked={step.done}
+                    disabled={busy}
+                    onChange={(e) => void toggle(step.id, e.target.checked)}
+                  />
+                  <span>
+                    <span aria-hidden>{step.done ? "✓" : "○"}</span>{" "}
+                    <Link href={step.href} className="text-link">
+                      {step.label}
+                    </Link>
+                  </span>
+                </label>
+              )}
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
   );
 }
