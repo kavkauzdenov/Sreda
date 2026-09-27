@@ -51,7 +51,7 @@ async function recordStatusHistory(
     })
     .execute();
 }
-function clean(input: unknown): Input {
+function clean(input: unknown): Input & { clientId?: string } {
   if (!input || typeof input !== "object" || Array.isArray(input))
     throw new AppError(400, "INVALID_LEAD", "Проверьте данные заявки.");
   const value = input as Record<string, unknown>;
@@ -67,6 +67,8 @@ function clean(input: unknown): Input {
           "answers",
           "platformUserId",
           "username",
+          "clientId",
+          "client_id",
         ].includes(key),
     )
   )
@@ -84,12 +86,21 @@ function clean(input: unknown): Input {
         : (() => {
             throw new AppError(400, "INVALID_LEAD", "Проверьте данные заявки.");
           })();
+  const clientIdRaw = value.clientId ?? value.client_id;
+  const clientId =
+    typeof clientIdRaw === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      clientIdRaw,
+    )
+      ? clientIdRaw
+      : undefined;
   return {
     source: value.source as Input["source"],
     name,
     phone: optional("phone", 40),
     message: optional("message", 2000),
     externalEventId: optional("externalEventId", 200),
+    ...(clientId ? { clientId } : {}),
   };
 }
 
@@ -896,6 +907,7 @@ export async function createLead(
     platformUserId?: string;
     username?: string;
     answers?: Record<string, unknown>;
+    clientId?: string;
   },
 ) {
   await tx
@@ -915,21 +927,41 @@ export async function createLead(
       .executeTakeFirst();
     if (existing) return existing;
   }
-  const clientId = await matchClient(tx, businessId, {
-    name: input.name,
-    phone: input.phone,
-    email: emailFromAnswers(input.answers),
-    identities:
-      input.platformUserId && input.source !== "max"
-        ? [
-            {
-              kind: input.source,
-              value: input.platformUserId,
-              username: input.username,
-            },
-          ]
-        : [],
-  });
+  let clientId = input.clientId;
+  if (clientId) {
+    const existingClient = await tx
+      .selectFrom("client")
+      .select("id")
+      .where("business_id", "=", businessId)
+      .where("id", "=", clientId)
+      .where("archived_at", "is", null)
+      .executeTakeFirst();
+    if (!existingClient)
+      throw new AppError(404, "CLIENT_NOT_FOUND", "Клиент не найден.");
+    // Touch last_seen — this is a client-facing lead action.
+    await tx
+      .updateTable("client")
+      .set({ last_seen_at: new Date(), updated_at: new Date() })
+      .where("business_id", "=", businessId)
+      .where("id", "=", clientId)
+      .execute();
+  } else {
+    clientId = await matchClient(tx, businessId, {
+      name: input.name,
+      phone: input.phone,
+      email: emailFromAnswers(input.answers),
+      identities:
+        input.platformUserId && input.source !== "max"
+          ? [
+              {
+                kind: input.source,
+                value: input.platformUserId,
+                username: input.username,
+              },
+            ]
+          : [],
+    });
+  }
   const lead = await tx
     .insertInto("lead")
     .values({

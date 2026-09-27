@@ -4,7 +4,7 @@ import type { Kysely, Transaction } from "kysely";
 import type { Database } from "../db/schema.ts";
 import { AppError } from "../http/errors.ts";
 import { requireBusiness } from "../access/permissions.ts";
-import { audit } from "../audit/service.ts";
+import { normalizeTagName } from "./types.ts";
 type Identity = {
   kind: "telegram" | "vk" | "whatsapp" | "instagram" | "phone" | "email";
   value: string;
@@ -140,6 +140,7 @@ export async function clientActivity(
   eventKey: string,
   targetId: string | null = null,
   actorId: string | null = null,
+  metadata: Record<string, unknown> | null = null,
 ) {
   await tx
     .insertInto("client_activity")
@@ -151,6 +152,7 @@ export async function clientActivity(
       event_key: eventKey,
       target_id: targetId,
       actor_user_id: actorId,
+      ...(metadata ? { metadata: JSON.stringify(metadata) } : {}),
     })
     .onConflict((oc) => oc.columns(["business_id", "event_key"]).doNothing())
     .execute();
@@ -383,6 +385,34 @@ export class ClientService {
   ) {
     if (id !== undefined) requireUuid(id);
     const input = clientInput(raw);
+    const profileNoteRaw =
+      typeof raw.profileNote === "string"
+        ? raw.profileNote
+        : typeof raw.profile_note === "string"
+          ? raw.profile_note
+          : undefined;
+    const profileNote =
+      profileNoteRaw !== undefined
+        ? profileNoteRaw.trim().slice(0, 4000) || null
+        : undefined;
+    const noteText =
+      typeof raw.note === "string" ? raw.note.trim().slice(0, 4000) : "";
+    const tagIds = Array.isArray(raw.tagIds)
+      ? raw.tagIds.filter(
+          (v): v is string =>
+            typeof v === "string" &&
+            /^[0-9a-f-]{36}$/i.test(v),
+        )
+      : [];
+    const tagNames = Array.isArray(raw.tags)
+      ? raw.tags
+          .filter((v): v is string => typeof v === "string")
+          .map((v) => v.trim())
+          .filter((v) => v.length > 0 && v.length <= 40)
+      : [];
+    const assignedRaw =
+      raw.assignedUserId ?? raw.assigned_user_id ?? undefined;
+
     return this.db.transaction().execute(async (tx) => {
       const b = await requireBusiness(tx, userId, publicId, "clients.write");
       await tx
@@ -392,10 +422,49 @@ export class ClientService {
         .forUpdate()
         .execute();
       await requireBusiness(tx, userId, publicId, "clients.write");
+
+      let assignedUserId: string | null | undefined;
+      if (assignedRaw === null || assignedRaw === "") {
+        assignedUserId = null;
+      } else if (typeof assignedRaw === "string") {
+        requireUuid(assignedRaw);
+        const member = await tx
+          .selectFrom("business_member")
+          .select("user_id")
+          .where("business_id", "=", b.id)
+          .where("user_id", "=", assignedRaw)
+          .where("status", "=", "active")
+          .executeTakeFirst();
+        if (!member)
+          throw new AppError(
+            400,
+            "INVALID_ASSIGNEE",
+            "Сотрудник недоступен в этом бизнесе.",
+          );
+        const isOwnerAdmin = b.role === "owner" || b.role === "admin";
+        if (!isOwnerAdmin && assignedRaw !== userId)
+          throw new AppError(
+            403,
+            "FORBIDDEN",
+            "Оператор может назначить клиента только на себя.",
+          );
+        assignedUserId = assignedRaw;
+      }
+
+      const now = new Date();
       if (id) {
+        const patch: Record<string, unknown> = {
+          ...input,
+          updated_at: now,
+        };
+        if (profileNote !== undefined) patch.profile_note = profileNote;
+        if (assignedUserId !== undefined) {
+          patch.assigned_user_id = assignedUserId;
+          patch.assigned_at = assignedUserId ? now : null;
+        }
         const changed = await tx
           .updateTable("client")
-          .set({ ...input, updated_at: new Date() })
+          .set(patch)
           .where("business_id", "=", b.id)
           .where("id", "=", id)
           .where("archived_at", "is", null)
@@ -403,17 +472,130 @@ export class ClientService {
           .executeTakeFirst();
         if (!changed)
           throw new AppError(404, "CLIENT_NOT_FOUND", "Клиент не найден.");
-      } else id = await matchClient(tx, b.id, { ...input, identities: [] });
-      await clientActivity(
-        tx,
-        b.id,
-        id,
-        "client.updated",
-        randomUUID(),
-        id,
-        userId,
-      );
-      return { id };
+        await clientActivity(
+          tx,
+          b.id,
+          id,
+          "client.updated",
+          randomUUID(),
+          id,
+          userId,
+        );
+      } else {
+        id = randomUUID();
+        await tx
+          .insertInto("client")
+          .values({
+            id,
+            business_id: b.id,
+            name: input.name,
+            phone: input.phone,
+            email: input.email,
+            profile_note: profileNote ?? null,
+            assigned_user_id: assignedUserId ?? null,
+            assigned_at: assignedUserId ? now : null,
+          })
+          .execute();
+        await clientActivity(
+          tx,
+          b.id,
+          id,
+          "client.created",
+          `client-created:${id}`,
+          id,
+          userId,
+        );
+        if (assignedUserId) {
+          await clientActivity(
+            tx,
+            b.id,
+            id,
+            "client.assigned",
+            `client-assign:${id}:${assignedUserId}`,
+            assignedUserId,
+            userId,
+          );
+        }
+      }
+
+      for (const tagId of tagIds) {
+        const tag = await tx
+          .selectFrom("client_tag")
+          .select("id")
+          .where("business_id", "=", b.id)
+          .where("id", "=", tagId)
+          .executeTakeFirst();
+        if (!tag) continue;
+        await tx
+          .insertInto("client_tag_link")
+          .values({
+            business_id: b.id,
+            client_id: id!,
+            tag_id: tagId,
+          })
+          .onConflict((oc) =>
+            oc.columns(["business_id", "client_id", "tag_id"]).doNothing(),
+          )
+          .execute();
+      }
+      for (const name of tagNames) {
+        const normalized = normalizeTagName(name);
+        let tag = await tx
+          .selectFrom("client_tag")
+          .select("id")
+          .where("business_id", "=", b.id)
+          .where("name_normalized", "=", normalized)
+          .executeTakeFirst();
+        if (!tag) {
+          tag = await tx
+            .insertInto("client_tag")
+            .values({
+              id: randomUUID(),
+              business_id: b.id,
+              name,
+              name_normalized: normalized,
+              color_key: "neutral",
+            })
+            .returning("id")
+            .executeTakeFirstOrThrow();
+        }
+        await tx
+          .insertInto("client_tag_link")
+          .values({
+            business_id: b.id,
+            client_id: id!,
+            tag_id: tag.id,
+          })
+          .onConflict((oc) =>
+            oc.columns(["business_id", "client_id", "tag_id"]).doNothing(),
+          )
+          .execute();
+      }
+
+      if (noteText) {
+        const note = await tx
+          .insertInto("client_note")
+          .values({
+            id: randomUUID(),
+            business_id: b.id,
+            client_id: id!,
+            actor_user_id: userId,
+            text: noteText,
+          })
+          .returning("id")
+          .executeTakeFirstOrThrow();
+        await clientActivity(
+          tx,
+          b.id,
+          id!,
+          "client.note_added",
+          `client-note:${note.id}`,
+          note.id,
+          userId,
+        );
+      }
+
+      return { id: id! };
     });
   }
   async note(userId: string, publicId: string, id: string, value: unknown) {
@@ -441,7 +623,7 @@ export class ClientService {
         .where("archived_at", "is", null)
         .executeTakeFirst();
       if (!c) throw new AppError(404, "CLIENT_NOT_FOUND", "Клиент не найден.");
-      return tx
+      const note = await tx
         .insertInto("client_note")
         .values({
           id: randomUUID(),
@@ -452,6 +634,16 @@ export class ClientService {
         })
         .returningAll()
         .executeTakeFirstOrThrow();
+      await clientActivity(
+        tx,
+        b.id,
+        id,
+        "client.note_added",
+        `client-note:${note.id}`,
+        note.id,
+        userId,
+      );
+      return note;
     });
   }
 
@@ -460,188 +652,7 @@ export class ClientService {
     publicId: string,
     raw: Record<string, unknown>,
   ) {
-    const sourceId =
-      typeof raw.source_client_id === "string" ? raw.source_client_id : "";
-    const targetId =
-      typeof raw.target_client_id === "string" ? raw.target_client_id : "";
-    requireUuid(sourceId);
-    requireUuid(targetId);
-    if (sourceId === targetId)
-      throw new AppError(
-        400,
-        "INVALID_MERGE",
-        "Выберите двух разных клиентов.",
-      );
-
-    return this.db.transaction().execute(async (tx) => {
-      const b = await requireBusiness(tx, userId, publicId, "clients.write");
-      await tx
-        .selectFrom("business")
-        .select("id")
-        .where("id", "=", b.id)
-        .forUpdate()
-        .execute();
-      await requireBusiness(tx, userId, publicId, "clients.write");
-
-      const source = await tx
-        .selectFrom("client")
-        .selectAll()
-        .where("business_id", "=", b.id)
-        .where("id", "=", sourceId)
-        .where("archived_at", "is", null)
-        .forUpdate()
-        .executeTakeFirst();
-      const target = await tx
-        .selectFrom("client")
-        .selectAll()
-        .where("business_id", "=", b.id)
-        .where("id", "=", targetId)
-        .where("archived_at", "is", null)
-        .forUpdate()
-        .executeTakeFirst();
-      if (!source || !target)
-        throw new AppError(
-          404,
-          "CLIENT_NOT_FOUND",
-          "Клиент не найден в этом бизнесе.",
-        );
-
-      const targetIdentities = await tx
-        .selectFrom("client_identity")
-        .select(["kind", "value"])
-        .where("business_id", "=", b.id)
-        .where("client_id", "=", targetId)
-        .execute();
-      const targetKeys = new Set(
-        targetIdentities.map((i) => `${i.kind}:${i.value}`),
-      );
-      const sourceIdentities = await tx
-        .selectFrom("client_identity")
-        .selectAll()
-        .where("business_id", "=", b.id)
-        .where("client_id", "=", sourceId)
-        .execute();
-
-      for (const identity of sourceIdentities) {
-        const key = `${identity.kind}:${identity.value}`;
-        if (targetKeys.has(key)) {
-          await tx
-            .deleteFrom("client_identity")
-            .where("business_id", "=", b.id)
-            .where("client_id", "=", sourceId)
-            .where("kind", "=", identity.kind)
-            .where("value", "=", identity.value)
-            .execute();
-        } else {
-          await tx
-            .updateTable("client_identity")
-            .set({ client_id: targetId })
-            .where("business_id", "=", b.id)
-            .where("client_id", "=", sourceId)
-            .where("kind", "=", identity.kind)
-            .where("value", "=", identity.value)
-            .execute();
-        }
-      }
-
-      await tx
-        .updateTable("lead")
-        .set({ client_id: targetId })
-        .where("business_id", "=", b.id)
-        .where("client_id", "=", sourceId)
-        .execute();
-      await tx
-        .updateTable("booking")
-        .set({ client_id: targetId })
-        .where("business_id", "=", b.id)
-        .where("client_id", "=", sourceId)
-        .execute();
-      await tx
-        .updateTable("order")
-        .set({ client_id: targetId })
-        .where("business_id", "=", b.id)
-        .where("client_id", "=", sourceId)
-        .execute();
-      await tx
-        .updateTable("cart")
-        .set({ client_id: targetId, updated_at: new Date() })
-        .where("business_id", "=", b.id)
-        .where("client_id", "=", sourceId)
-        .execute();
-      await tx
-        .updateTable("client_note")
-        .set({ client_id: targetId })
-        .where("business_id", "=", b.id)
-        .where("client_id", "=", sourceId)
-        .execute();
-      await tx
-        .updateTable("client_activity")
-        .set({ client_id: targetId })
-        .where("business_id", "=", b.id)
-        .where("client_id", "=", sourceId)
-        .execute();
-      await tx
-        .updateTable("communication_conversation")
-        .set({ client_id: targetId })
-        .where("business_id", "=", b.id)
-        .where("client_id", "=", sourceId)
-        .execute();
-      await tx
-        .updateTable("calendar_event")
-        .set({ related_client_id: targetId })
-        .where("business_id", "=", b.id)
-        .where("related_client_id", "=", sourceId)
-        .execute();
-
-      await tx
-        .updateTable("client")
-        .set({
-          name: target.name || source.name,
-          phone: target.phone ?? source.phone,
-          email: target.email ?? source.email,
-          first_seen_at:
-            source.first_seen_at < target.first_seen_at
-              ? source.first_seen_at
-              : target.first_seen_at,
-          last_seen_at:
-            source.last_seen_at > target.last_seen_at
-              ? source.last_seen_at
-              : target.last_seen_at,
-          updated_at: new Date(),
-        })
-        .where("business_id", "=", b.id)
-        .where("id", "=", targetId)
-        .execute();
-
-      const now = new Date();
-      await tx
-        .updateTable("client")
-        .set({
-          archived_at: now,
-          merged_into_id: targetId,
-          updated_at: now,
-        })
-        .where("business_id", "=", b.id)
-        .where("id", "=", sourceId)
-        .execute();
-
-      await clientActivity(
-        tx,
-        b.id,
-        targetId,
-        "client.merged",
-        `client-merge:${sourceId}:${targetId}`,
-        sourceId,
-        userId,
-      );
-      await audit(tx, b.id, userId, "client_merged", targetId, {
-        source_client_id: sourceId,
-        target_client_id: targetId,
-        source_name: source.name,
-        target_name: target.name,
-      });
-
-      return { target_client_id: targetId, source_client_id: sourceId };
-    });
+    const { mergeClients } = await import("./merge.ts");
+    return mergeClients(this.db, userId, publicId, raw);
   }
 }
