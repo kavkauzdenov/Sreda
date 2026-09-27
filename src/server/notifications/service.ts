@@ -274,6 +274,41 @@ export class NotificationService {
       .limit(100)
       .execute();
   }
+  async readUserNotification(userId: string, id: string) {
+    requireUuid(id);
+    const changed = await this.db
+      .updateTable("user_notification")
+      .set({ read_at: new Date() })
+      .where("user_id", "=", userId)
+      .where("id", "=", id)
+      .executeTakeFirst();
+    if (!changed || Number(changed.numUpdatedRows) !== 1) {
+      const exists = await this.db
+        .selectFrom("user_notification")
+        .select("id")
+        .where("user_id", "=", userId)
+        .where("id", "=", id)
+        .executeTakeFirst();
+      if (!exists)
+        throw new AppError(
+          404,
+          "NOTIFICATION_NOT_FOUND",
+          "Уведомление не найдено.",
+        );
+    }
+    return { ok: true };
+  }
+
+  async markAllUserNotificationsRead(userId: string) {
+    await this.db
+      .updateTable("user_notification")
+      .set({ read_at: new Date() })
+      .where("user_id", "=", userId)
+      .where("read_at", "is", null)
+      .execute();
+    return { ok: true };
+  }
+
   async resolveUserNotification(userId: string, id: string) {
     requireUuid(id);
     const now = new Date();

@@ -41,13 +41,19 @@ export async function PATCH(request: Request) {
     const user = await createApplication(runtime).requireUser(request.headers);
     requireOrigin(request, runtime.origin);
     const body = await readJson(request);
+    const service = new NotificationService(runtime.db);
+
+    if (body.all === true) {
+      return json(await service.markAllUserNotificationsRead(user.id));
+    }
+
     if (typeof body.id !== "string")
       throw new AppError(400, "INVALID_REQUEST", "Укажите уведомление.");
-    return json(
-      await new NotificationService(runtime.db).resolveUserNotification(
-        user.id,
-        body.id,
-      ),
-    );
+
+    if (body.read === true) {
+      return json(await service.readUserNotification(user.id, body.id));
+    }
+
+    return json(await service.resolveUserNotification(user.id, body.id));
   });
 }

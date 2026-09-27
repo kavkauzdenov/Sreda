@@ -5,7 +5,11 @@ import { Kysely, PGliteDialect } from "kysely";
 import { PGlite } from "@electric-sql/pglite";
 import { migrate } from "../src/server/db/migrate.ts";
 import { CommunicationService } from "../src/server/communications/service.ts";
-import { notify } from "../src/server/notifications/service.ts";
+import {
+  notify,
+  notifyUser,
+  NotificationService,
+} from "../src/server/notifications/service.ts";
 import {
   NotificationSettings,
   bindNotification,
@@ -614,4 +618,51 @@ test("bot customer path only queues client ACK, never staff notice to sender", a
   const staff = await outboxFor(connection, "10011");
   assert.ok(staff.some((row) => row.notification_id && /Новое обращение/.test(row.message || "")));
   assert.equal((await outboxFor(connection, customer)).filter((r) => r.notification_id).length, 0);
+});
+
+
+test("account notification read state is separate from resolution", async () => {
+  const user = await makeUser("InboxRead");
+  const firstKey = "user-read-" + randomUUID();
+  const secondKey = "user-read-" + randomUUID();
+
+  await db.transaction().execute(async (tx) => {
+    await notifyUser(tx, {
+      userId: user,
+      type: "invitation.received",
+      eventKey: firstKey,
+      title: "Первое уведомление",
+      targetPath: "/notifications",
+    });
+    await notifyUser(tx, {
+      userId: user,
+      type: "setup.abandoned",
+      eventKey: secondKey,
+      title: "Второе уведомление",
+      targetPath: "/notifications",
+    });
+  });
+
+  const service = new NotificationService(db);
+  const before = await service.listUserInbox(user);
+  const first = before.find((item) => item.event_key === firstKey);
+  const second = before.find((item) => item.event_key === secondKey);
+  assert.ok(first);
+  assert.ok(second);
+  assert.equal(first.read_at, null);
+  assert.equal(first.resolved_at, null);
+
+  await service.readUserNotification(user, first.id);
+  const afterOne = await service.listUserInbox(user);
+  const readFirst = afterOne.find((item) => item.id === first.id);
+  assert.ok(readFirst?.read_at);
+  assert.equal(readFirst?.resolved_at, null);
+
+  await service.markAllUserNotificationsRead(user);
+  const afterAll = await service.listUserInbox(user);
+  assert.equal(
+    afterAll.filter((item) => item.id === first.id || item.id === second.id)
+      .every((item) => item.read_at != null && item.resolved_at == null),
+    true,
+  );
 });
