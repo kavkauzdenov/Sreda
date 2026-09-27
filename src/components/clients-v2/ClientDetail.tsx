@@ -78,10 +78,6 @@ export function ClientDetail({
   }, [businessId, clientId, refreshKey]);
 
   useEffect(() => {
-    queueMicrotask(() => setTab("overview"));
-  }, [clientId]);
-
-  useEffect(() => {
     if (variant === "panel") return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {

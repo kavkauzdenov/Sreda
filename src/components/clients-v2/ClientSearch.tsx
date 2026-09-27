@@ -24,8 +24,7 @@ export function ClientSearch({
   }, [draft]);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => setDraft(value), 0);
-    return () => window.clearTimeout(timer);
+    queueMicrotask(() => setDraft(value));
   }, [value]);
 
   return (

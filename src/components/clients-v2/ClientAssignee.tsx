@@ -28,10 +28,6 @@ export function ClientAssignee({
   const [error, setError] = useState("");
 
   useEffect(() => {
-    queueMicrotask(() => setValue(assignedUser?.id ?? ""));
-  }, [assignedUser?.id]);
-
-  useEffect(() => {
     if (!canAssignOthers) return;
     let active = true;
     void getClientAssignees(businessId)

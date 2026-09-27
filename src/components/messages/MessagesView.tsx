@@ -85,11 +85,11 @@ function Inbox({
 }) {
   const [files, setFiles] = useState<FileItem[]>([]),
     [uploading, setUploading] = useState(false);
+  const search = useSearchParams();
   const [conversations, setConversations] = useState<Conversation[]>([]),
-    [selected, setSelected] = useState(() => {
-      if (typeof window === "undefined") return "";
-      return new URLSearchParams(window.location.search).get("conversation") || "";
-    }),
+    [selected, setSelected] = useState(
+      () => search.get("conversation") || "",
+    ),
     [messages, setMessages] = useState<Message[]>([]),
     [text, setText] = useState(""),
     [error, setError] = useState(""),
@@ -100,8 +100,6 @@ function Inbox({
     [page, setPage] = useState(0),
     [messagePage, setMessagePage] = useState(0);
   const requestKey = useRef("");
-  const search = useSearchParams();
-  void search;
   const base = `/api/v1/businesses/${businessId}/conversations`;
   const current = conversations.find((c) => c.id === selected);
   const listQuery =

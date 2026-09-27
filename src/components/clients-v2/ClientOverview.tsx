@@ -100,6 +100,7 @@ export function ClientOverview({
       <section className="client-overview__section">
         <h3>Ответственный</h3>
         <ClientAssignee
+          key={detail.assignedUser?.id ?? ""}
           businessId={businessId}
           clientId={detail.client.id}
           assignedUser={detail.assignedUser}
