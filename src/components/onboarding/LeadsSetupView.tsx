@@ -261,7 +261,7 @@ function LeadsWizard({
   return (
     <>
       <header className="setup-intro">
-        <SolutionIcon solution="leads" variant="hero" />
+        <SolutionIcon solution="leads" variant="feature" alt="" />
         <div>
           <span className="eyebrow">Готовое решение</span>
           <h1>Приём заявок</h1>

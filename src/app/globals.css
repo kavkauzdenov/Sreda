@@ -2831,13 +2831,33 @@ ul {
 .setup-intro {
   display: flex;
   align-items: center;
-  gap: 18px;
-  margin-bottom: 18px;
+  gap: 10px;
+  margin-bottom: 12px;
 }
+/* Legacy direct <img>; SolutionIcon uses .biznesoty-solution-icon */
 .setup-intro > img {
   width: 100px;
   height: 100px;
   flex-shrink: 0;
+  object-fit: contain;
+}
+.setup-intro .biznesoty-solution-icon,
+.setup-intro .biznesoty-solution-icon--feature {
+  flex: 0 0 auto;
+  align-self: center;
+  width: clamp(180px, 22vw, 320px);
+  max-width: min(320px, 38vw);
+  height: auto;
+  aspect-ratio: auto;
+  line-height: 0;
+}
+.setup-intro .biznesoty-solution-icon img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: 100%;
+  object-fit: contain;
+  object-position: center;
 }
 .setup-price {
   margin-left: auto;
@@ -3216,6 +3236,15 @@ ul {
   .setup-page {
     max-width: 760px;
   }
+  .setup-intro {
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  .setup-intro .biznesoty-solution-icon,
+  .setup-intro .biznesoty-solution-icon--feature {
+    width: clamp(140px, 24vw, 220px);
+    max-width: 220px;
+  }
 }
 @media (max-width: 767px) {
   .section-topline {
@@ -3289,27 +3318,35 @@ ul {
   }
   .setup-intro {
     display: grid;
-    grid-template-columns: 65px minmax(0, 1fr);
-    gap: var(--space-3);
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
     align-items: start;
+    justify-items: start;
   }
   .setup-intro > img {
-    width: 65px;
-    height: 65px;
+    width: 96px;
+    height: 96px;
+  }
+  .setup-intro .biznesoty-solution-icon,
+  .setup-intro .biznesoty-solution-icon--feature {
+    width: 96px;
+    max-width: 96px;
+    height: auto;
   }
   .setup-intro > div:not(.setup-price) {
     flex: 1;
     min-width: 0;
+    width: 100%;
   }
   .setup-intro p {
     font-size: 13px;
-    margin-top: 8px;
+    margin-top: 6px;
   }
   .setup-intro .eyebrow {
     font-size: 11px;
   }
   .setup-price {
-    grid-column: 2;
+    grid-column: 1;
     margin-left: 0;
     margin-top: 0;
     display: flex;
@@ -6809,6 +6846,11 @@ input[type="time"] {
   line-height: 0;
   width: 100%;
   height: 100%;
+}
+
+.biznesoty-solution-icon--feature {
+  width: auto;
+  height: auto;
 }
 
 .biznesoty-solution-icon img {
