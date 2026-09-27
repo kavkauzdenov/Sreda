@@ -47,9 +47,11 @@ function matchesFilters(
 export function CatalogView({
   businessId,
   businessMode,
+  onCatalogChanged,
 }: {
   businessId: string;
   businessMode: BusinessMode;
+  onCatalogChanged?: () => void;
 }) {
   const [categories, setCategories] = useState<ProductCategory[]>([]);
   const [products, setProducts] = useState<ProductListItem[]>([]);
@@ -108,6 +110,7 @@ export function CatalogView({
       setCategoryName("");
       setShowCategory(false);
       await reload();
+      onCatalogChanged?.();
       setNotice("Категория создана.");
     } catch (err) {
       setError(
@@ -139,6 +142,7 @@ export function CatalogView({
         active: !product.active,
       });
       await reload();
+      onCatalogChanged?.();
       setNotice(product.active ? "Товар скрыт." : "Товар активирован.");
     } catch (err) {
       setError(
@@ -374,6 +378,7 @@ export function CatalogView({
           }}
           onSaved={async () => {
             await reload();
+            onCatalogChanged?.();
             setCreatingProduct(false);
             setEditingProductId(null);
           }}

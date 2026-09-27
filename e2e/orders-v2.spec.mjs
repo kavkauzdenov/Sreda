@@ -648,6 +648,130 @@ test.describe("Orders V2 UI audit", () => {
     await expectNoBodyOverflow(page, "catalog");
   });
 
+  test("setup product count refreshes after creating active product", async ({
+    page,
+    browserName,
+  }) => {
+    test.setTimeout(180_000);
+    if (!(await boot(page))) return;
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    // Hide all active products so setup step 2 starts incomplete.
+    await page.evaluate(async () => {
+      const businesses = await fetch("/api/v1/businesses").then((r) => r.json());
+      const biz = Array.isArray(businesses) ? businesses[0] : null;
+      const businessId = biz?.id;
+      if (!businessId) return;
+      const products = await fetch(
+        `/api/v1/businesses/${encodeURIComponent(businessId)}/products`,
+      ).then((r) => r.json());
+      for (const p of Array.isArray(products) ? products : []) {
+        if (!p.active) continue;
+        await fetch(
+          `/api/v1/businesses/${encodeURIComponent(businessId)}/products/${encodeURIComponent(p.id)}`,
+          {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              name: p.name,
+              price: p.price,
+              description: p.description ?? "",
+              category_id: p.category_id,
+              currency: p.currency,
+              sku: p.sku,
+              use_variants: p.use_variants,
+              variant_prices_enabled: p.variant_prices_enabled ?? false,
+              track_inventory: p.track_inventory,
+              availability: p.availability,
+              stock_quantity: p.stock_quantity,
+              active: false,
+            }),
+          },
+        );
+      }
+    });
+
+    await page.goto(baseURL + "/orders", {
+      waitUntil: "domcontentloaded",
+      timeout: 60_000,
+    });
+
+    const setup = page.getByRole("region", { name: /настройка заказов|готовность заказов/i });
+    await expect(setup).toBeVisible({ timeout: 20_000 });
+    const openWizard = page.getByRole("button", {
+      name: /открыть мастер настройки/i,
+    });
+    if (await openWizard.isVisible().catch(() => false)) {
+      await openWizard.click();
+    }
+
+    // Jump to step 2 (Первый товар).
+    await page.getByRole("button", { name: /2\.\s*Первый товар/i }).click();
+    const count = page.getByTestId("orders-setup-product-count");
+    await expect(count).toContainText(/0/, { timeout: 15_000 });
+    const nextOnStep2 = page
+      .locator(".solution-setup-banner__actions")
+      .getByRole("button", { name: /^далее$/i });
+    await expect(nextOnStep2).toBeDisabled();
+
+    await page.getByRole("button", { name: /открыть каталог/i }).click();
+    await expect(page.getByRole("region", { name: /каталог/i })).toBeVisible({
+      timeout: 20_000,
+    });
+
+    await page.getByRole("button", { name: /\+ добавить/i }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible({ timeout: 15_000 });
+    await dialog
+      .getByRole("textbox", { name: /название/i })
+      .fill("E2E Setup First Product");
+
+    for (let i = 0; i < 6; i++) {
+      const createBtn = dialog.getByRole("button", {
+        name: /^(создать|сохранить)$/i,
+      });
+      if (await createBtn.isVisible().catch(() => false)) break;
+      const price = dialog.getByRole("textbox", { name: /базовая цена/i });
+      if (await price.isVisible().catch(() => false)) {
+        await price.fill("120");
+      }
+      const next = dialog.getByRole("button", { name: /^далее$/i });
+      if (await next.isVisible().catch(() => false)) {
+        await next.click();
+        await page.waitForTimeout(150);
+      } else break;
+    }
+
+    const savePromise = page.waitForResponse(
+      (r) =>
+        r.url().includes("/products") &&
+        (r.request().method() === "POST" || r.request().method() === "PATCH"),
+      { timeout: 60_000 },
+    );
+    await dialog.getByRole("button", { name: /^(создать|сохранить)$/i }).click();
+    expect((await savePromise).ok()).toBeTruthy();
+    await expect(page.getByText(/E2E Setup First Product/i).first()).toBeVisible({
+      timeout: 30_000,
+    });
+
+    // Setup panel stays mounted; product count must refresh without full reload.
+    await expect(page.getByTestId("orders-setup-product-count")).toContainText(
+      /1/,
+      { timeout: 15_000 },
+    );
+    await page.getByRole("button", { name: /2\.\s*Первый товар/i }).click();
+    await expect(
+      page
+        .locator(".solution-setup-banner__actions")
+        .getByRole("button", { name: /^далее$/i }),
+    ).toBeEnabled({ timeout: 10_000 });
+
+    await page.screenshot({
+      path: path.join(outDir, `orders_setup_product_refresh_${browserName}.png`),
+      fullPage: false,
+    });
+  });
+
   test("inventory stock adjustment + low stock", async ({ page, browserName }) => {
     test.setTimeout(150_000);
     if (!(await boot(page))) return;
@@ -710,6 +834,23 @@ test.describe("Orders V2 UI audit", () => {
     });
   });
 
+  test("settings channel runtime labels", async ({ page }) => {
+    test.setTimeout(90_000);
+    if (!(await boot(page))) return;
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openTab(page, /настройки/i);
+    await expect(
+      page.getByRole("heading", { name: /настройки заказов/i }),
+    ).toBeVisible({ timeout: 20_000 });
+    // Without connections: not connected. Labels must not claim «Подключено» alone as ready.
+    await expect(
+      page.getByTestId("settings-channel-status-telegram"),
+    ).toContainText(/не подключено|работает|не запущено|ошибка/i);
+    await expect(
+      page.getByTestId("settings-channel-status-vk"),
+    ).toContainText(/не подключено|работает|не запущено|ошибка/i);
+  });
+
   test("settings save + channel deep links", async ({ page, browserName }) => {
     test.setTimeout(120_000);
     if (!(await boot(page))) return;
@@ -724,7 +865,7 @@ test.describe("Orders V2 UI audit", () => {
     await expect(
       page
         .locator(".orders-channel-status a, .orders-settings a")
-        .filter({ hasText: /подключить/i })
+        .filter({ hasText: /подключить|запустить|открыть подключения/i })
         .first(),
     ).toHaveAttribute("href", /connections/);
 

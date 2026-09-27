@@ -168,6 +168,7 @@ function OrdersWorkspaceBody({
     () => searchParams.get("client") || null,
   );
   const [moreBusy, setMoreBusy] = useState(false);
+  const [catalogRevision, setCatalogRevision] = useState(0);
   const sequence = useRef(0);
 
   useEffect(() => {
@@ -318,6 +319,7 @@ function OrdersWorkspaceBody({
       <OrdersSetupPanel
         businessId={businessId}
         canEdit={canAssignOthers}
+        catalogRevision={catalogRevision}
         onModeChange={(mode) => setBusinessMode(mode)}
         onGoTab={(next) => {
           setSelected(null);
@@ -412,7 +414,11 @@ function OrdersWorkspaceBody({
       ) : null}
 
       {activeTab === "catalog" ? (
-        <CatalogView businessId={businessId} businessMode={businessMode} />
+        <CatalogView
+          businessId={businessId}
+          businessMode={businessMode}
+          onCatalogChanged={() => setCatalogRevision((v) => v + 1)}
+        />
       ) : null}
       {activeTab === "inventory" ? (
         <InventoryView businessId={businessId} />

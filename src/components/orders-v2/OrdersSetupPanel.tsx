@@ -3,6 +3,10 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { apiRequest } from "@/lib/apiClient";
+import {
+  channelDisplayStatus,
+  type ChannelConnectionLike,
+} from "@/lib/ordersChannelStatus";
 import type { BusinessMode, OrderSettings } from "@/components/orders-v2/types";
 import {
   getOrderSettings,
@@ -19,16 +23,40 @@ const STEPS = [
   { id: 6, title: "Готовность" },
 ] as const;
 
-type Conn = { platform: string; status: string };
+type Conn = ChannelConnectionLike & { platform: string };
+
+function ChannelRow({
+  title,
+  conn,
+}: {
+  title: string;
+  conn: Conn | undefined;
+}) {
+  const display = channelDisplayStatus(conn);
+  return (
+    <li>
+      <strong>{title}</strong>
+      <span data-testid={`channel-status-${conn?.platform ?? title.toLowerCase()}`}>
+        {display.label}
+      </span>
+      <Link className="button button--outline" href="/connections">
+        {display.cta}
+      </Link>
+    </li>
+  );
+}
 
 export function OrdersSetupPanel({
   businessId,
   canEdit,
+  catalogRevision = 0,
   onModeChange,
   onGoTab,
 }: {
   businessId: string;
   canEdit: boolean;
+  /** Bumped when catalog create/update/toggle happens so readiness refreshes. */
+  catalogRevision?: number;
   onModeChange?: (mode: BusinessMode) => void;
   onGoTab?: (tab: "catalog" | "settings" | "orders") => void;
 }) {
@@ -52,11 +80,12 @@ export function OrdersSetupPanel({
       .then(([s, products, conns]) => {
         if (!alive) return;
         setSettings(s);
-        setProductCount(products.length);
+        const activeCount = products.filter((p) => p.active).length;
+        setProductCount(activeCount);
         setConnections(Array.isArray(conns) ? conns : []);
         onModeChange?.(s.businessMode);
-        if (products.length > 0 && (s.pickupEnabled || s.deliveryEnabled)) {
-          // Already past first-run — keep banner compact unless user opens it.
+        // Initial readiness only — do not collapse wizard mid-setup on later refreshes.
+        if (activeCount > 0 && (s.pickupEnabled || s.deliveryEnabled)) {
           setDismissed(true);
         }
       })
@@ -71,6 +100,23 @@ export function OrdersSetupPanel({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [businessId]);
+
+  // Catalog create/update/toggle → refresh active product count without full reload.
+  useEffect(() => {
+    if (catalogRevision === 0) return;
+    let alive = true;
+    void listProducts(businessId)
+      .then((products) => {
+        if (!alive) return;
+        const activeCount = products.filter((p) => p.active).length;
+        setProductCount(activeCount);
+        if (activeCount === 0) setDismissed(false);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [businessId, catalogRevision]);
 
   async function patchSettings(patch: Partial<OrderSettings>) {
     if (!canEdit || !settings) return;
@@ -90,13 +136,11 @@ export function OrdersSetupPanel({
     }
   }
 
-  const telegramOk = connections.some(
-    (c) => c.platform === "telegram" && c.status === "connected",
-  );
-  const vkOk = connections.some(
-    (c) => c.platform === "vk" && c.status === "connected",
-  );
-  const channelOk = telegramOk || vkOk;
+  const telegram = connections.find((c) => c.platform === "telegram");
+  const vk = connections.find((c) => c.platform === "vk");
+  const telegramStatus = channelDisplayStatus(telegram);
+  const vkStatus = channelDisplayStatus(vk);
+  const channelOk = telegramStatus.ready || vkStatus.ready;
   const fulfillmentOk = Boolean(
     settings?.pickupEnabled || settings?.deliveryEnabled,
   );
@@ -109,7 +153,7 @@ export function OrdersSetupPanel({
         <p className="account-footnote">
           Приём заказов готов к работе.
           {!channelOk
-            ? " Каналы Telegram/VK можно подключить в «Подключениях»."
+            ? " Каналы Telegram/VK можно подключить и запустить в «Подключениях»."
             : ""}
         </p>
         <button
@@ -191,7 +235,7 @@ export function OrdersSetupPanel({
           <p className="setup-description">
             Добавьте хотя бы один товар или услугу в каталог.
           </p>
-          <p>
+          <p data-testid="orders-setup-product-count">
             Сейчас в каталоге: <strong>{productCount}</strong>
           </p>
           <div className="solution-setup-banner__actions">
@@ -255,23 +299,12 @@ export function OrdersSetupPanel({
       {step === 4 ? (
         <div className="setup-editor">
           <p className="setup-description">
-            Подключите каналы в общем разделе Connections — здесь только статус.
+            Подключите и запустите каналы в разделе Connections — здесь статус
+            runtime.
           </p>
           <ul className="orders-channel-status">
-            <li>
-              <strong>Telegram</strong>
-              <span>{telegramOk ? "Подключено" : "Не подключено"}</span>
-              <Link className="button button--outline" href="/connections">
-                Подключить
-              </Link>
-            </li>
-            <li>
-              <strong>VK</strong>
-              <span>{vkOk ? "Подключено" : "Не подключено"}</span>
-              <Link className="button button--outline" href="/connections">
-                Подключить
-              </Link>
-            </li>
+            <ChannelRow title="Telegram" conn={telegram} />
+            <ChannelRow title="VK" conn={vk} />
           </ul>
           <button
             type="button"
@@ -291,7 +324,7 @@ export function OrdersSetupPanel({
             <li>{productCount > 0 ? "✓" : "○"} Каталог</li>
             <li>{fulfillmentOk ? "✓" : "○"} Получение заказов</li>
             <li>
-              {channelOk ? "✓" : "○"} Канал (можно позже)
+              {channelOk ? "✓" : "○"} Канал запущен (можно позже)
             </li>
           </ul>
           <button

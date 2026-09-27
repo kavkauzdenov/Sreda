@@ -3,11 +3,12 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { apiRequest } from "@/lib/apiClient";
+import {
+  channelDisplayStatus,
+  type ChannelConnectionLike,
+} from "@/lib/ordersChannelStatus";
 
-type ConnectionRow = {
-  platform: string;
-  status: string;
-};
+type ConnectionRow = ChannelConnectionLike & { platform: string };
 
 export function OrderChannelSettings({ businessId }: { businessId: string }) {
   const [rows, setRows] = useState<ConnectionRow[]>([]);
@@ -32,38 +33,39 @@ export function OrderChannelSettings({ businessId }: { businessId: string }) {
     };
   }, [businessId]);
 
-  function statusOf(platform: string): string {
-    const hit = rows.find((r) => r.platform === platform);
-    if (!hit) return "Не подключено";
-    if (hit.status === "connected") return "Подключено";
-    return hit.status || "Не подключено";
+  function rowFor(platform: string) {
+    return rows.find((r) => r.platform === platform);
+  }
+
+  function renderChannel(platform: "telegram" | "vk", title: string) {
+    const conn = rowFor(platform);
+    const display = channelDisplayStatus(conn);
+    return (
+      <li>
+        <strong>{title}</strong>
+        <span data-testid={`settings-channel-status-${platform}`}>
+          {display.label}
+        </span>
+        <Link className="button button--outline" href="/connections">
+          {display.cta}
+        </Link>
+      </li>
+    );
   }
 
   return (
     <fieldset className="orders-settings__section">
       <legend>Каналы</legend>
       <p className="account-footnote">
-        Токены и подключение настраиваются в разделе «Подключения». Здесь только
-        статус.
+        Токены и запуск настраиваются в разделе «Подключения». Здесь статус
+        подключения и runtime.
       </p>
       {loading ? (
         <p className="account-footnote">Проверяем каналы…</p>
       ) : (
         <ul className="orders-channel-status">
-          <li>
-            <strong>Telegram</strong>
-            <span>{statusOf("telegram")}</span>
-            <Link className="button button--outline" href="/connections">
-              Подключить
-            </Link>
-          </li>
-          <li>
-            <strong>VK</strong>
-            <span>{statusOf("vk")}</span>
-            <Link className="button button--outline" href="/connections">
-              Подключить
-            </Link>
-          </li>
+          {renderChannel("telegram", "Telegram")}
+          {renderChannel("vk", "VK")}
         </ul>
       )}
       <p className="account-footnote">

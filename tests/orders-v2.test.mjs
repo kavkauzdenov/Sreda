@@ -1241,6 +1241,48 @@ test("orders v2: settings reject string booleans", async () => {
   assert.equal(ok.deliveryEnabled, false);
 });
 
+test("orders v2: channelDisplayStatus distinguishes runtime", async () => {
+  const { channelDisplayStatus, isChannelRuntimeReady } = await import(
+    "../src/lib/ordersChannelStatus.ts"
+  );
+  assert.equal(channelDisplayStatus(undefined).label, "Не подключено");
+  assert.equal(channelDisplayStatus({ status: "disconnected" }).ready, false);
+
+  const pending = channelDisplayStatus({
+    status: "connected",
+    runtimeStatus: "pending",
+  });
+  assert.equal(pending.label, "Подключено, не запущено");
+  assert.equal(pending.ready, false);
+  assert.match(pending.cta, /Запустить|Настроить/);
+
+  const nullRuntime = channelDisplayStatus({
+    status: "connected",
+    runtimeStatus: null,
+  });
+  assert.equal(nullRuntime.label, "Подключено, не запущено");
+  assert.equal(nullRuntime.ready, false);
+
+  const errored = channelDisplayStatus({
+    status: "connected",
+    runtimeStatus: "error",
+  });
+  assert.equal(errored.label, "Ошибка запуска");
+  assert.equal(errored.ready, false);
+
+  const ready = channelDisplayStatus({
+    status: "connected",
+    runtimeStatus: "ready",
+  });
+  assert.equal(ready.label, "Работает");
+  assert.equal(ready.ready, true);
+  assert.equal(isChannelRuntimeReady({ status: "connected", runtimeStatus: "ready" }), true);
+  assert.equal(
+    isChannelRuntimeReady({ status: "connected", runtimeStatus: "pending" }),
+    false,
+  );
+});
+
 test("orders v2: low_stock_threshold create/edit + inventory low state", async () => {
   const f = await fixture();
   const p = await f.catalog.saveProduct(f.uid, f.publicId, {
