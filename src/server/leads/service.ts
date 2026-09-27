@@ -550,6 +550,131 @@ export class LeadService {
       return this.toLead(lead, publicId);
     });
   }
+  async assign(
+    userId: string,
+    publicId: string,
+    leadId: string,
+    assigneeId: unknown,
+  ) {
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        leadId,
+      )
+    )
+      throw new AppError(404, "LEAD_NOT_FOUND", "Заявка не найдена.");
+    if (
+      typeof assigneeId !== "string" ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        assigneeId,
+      )
+    )
+      throw new AppError(400, "INVALID_ASSIGNEE", "Выберите сотрудника.");
+
+    return this.db.transaction().execute(async (tx) => {
+      const business = await requireBusiness(tx, userId, publicId, "leads.write");
+      if (business.role !== "owner" && business.role !== "admin")
+        throw new AppError(
+          403,
+          "FORBIDDEN",
+          "Передавать заявки может владелец или администратор.",
+        );
+
+      await tx
+        .selectFrom("business")
+        .select("id")
+        .where("id", "=", business.id)
+        .forUpdate()
+        .execute();
+
+      const target = await tx
+        .selectFrom("business_member as member")
+        .innerJoin("user", "user.id", "member.user_id")
+        .select(["user.id", "user.name"])
+        .where("member.business_id", "=", business.id)
+        .where("member.user_id", "=", assigneeId)
+        .where("member.status", "=", "active")
+        .where("member.role", "in", ["owner", "admin", "operator"])
+        .executeTakeFirst();
+      if (!target)
+        throw new AppError(
+          400,
+          "INVALID_ASSIGNEE",
+          "Сотрудник недоступен.",
+        );
+
+      const current = await tx
+        .selectFrom("lead")
+        .selectAll()
+        .where("business_id", "=", business.id)
+        .where("id", "=", leadId)
+        .forUpdate()
+        .executeTakeFirst();
+      if (!current)
+        throw new AppError(404, "LEAD_NOT_FOUND", "Заявка не найдена.");
+      if (["completed", "rejected", "closed"].includes(current.status))
+        throw new AppError(
+          409,
+          "LEAD_CLOSED",
+          "Завершённую заявку нельзя передать.",
+        );
+      if (
+        current.processing_by === assigneeId &&
+        current.status !== "new"
+      )
+        return this.toLead(current, publicId);
+
+      const nextStatus: LeadStatus =
+        current.status === "new" ? "processing" : current.status;
+      const row = await tx
+        .updateTable("lead")
+        .set({
+          processing_by: assigneeId,
+          processing_at: current.processing_at ?? new Date(),
+          status: nextStatus,
+          updated_at: new Date(),
+        })
+        .where("business_id", "=", business.id)
+        .where("id", "=", leadId)
+        .returningAll()
+        .executeTakeFirstOrThrow();
+
+      await recordStatusHistory(
+        tx,
+        business.id,
+        leadId,
+        current.status,
+        nextStatus,
+        userId,
+        current.status === nextStatus
+          ? `Передано сотруднику: ${target.name}`
+          : `Назначено сотруднику: ${target.name}`,
+      );
+      await tx
+        .insertInto("business_audit_log")
+        .values({
+          id: randomUUID(),
+          business_id: business.id,
+          actor_user_id: userId,
+          action: "lead_taken",
+          target_user_id: assigneeId,
+          details: leadId,
+        })
+        .execute();
+      if (row.client_id)
+        await clientActivity(
+          tx,
+          business.id,
+          row.client_id,
+          "lead.assigned",
+          randomUUID(),
+          leadId,
+          userId,
+        );
+
+      return this.toLead(row, publicId);
+    });
+  }
+
   async updateStatus(
     userId: string,
     businessId: string,
