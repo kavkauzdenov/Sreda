@@ -69,4 +69,22 @@ export type ClientTables = {
     created_at: Generated<Date>;
     updated_at: Generated<Date>;
   };
+  notification: {
+    id: string;
+    business_id: string;
+    type: string;
+    title: string;
+    target_path: string;
+    event_key: string;
+    created_at: Generated<Date>;
+  };
+  notification_recipient: {
+    telegram_queued: Generated<boolean>;
+    vk_queued: Generated<boolean>;
+    business_id: string;
+    notification_id: string;
+    user_id: string;
+    read_at: Date | null;
+    resolved_at: Date | null;
+  };
 };
