@@ -111,9 +111,12 @@ export function NotificationBell() {
   }, [currentBusiness?.id]);
 
   useEffect(() => {
-    void refresh();
-    const timer = setInterval(() => void refresh(), 10000);
-    return () => clearInterval(timer);
+    const initial = window.setTimeout(() => void refresh(), 0);
+    const timer = window.setInterval(() => void refresh(), 10000);
+    return () => {
+      window.clearTimeout(initial);
+      window.clearInterval(timer);
+    };
   }, [refresh]);
 
   useEffect(() => {
