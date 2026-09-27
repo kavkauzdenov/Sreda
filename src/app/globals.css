@@ -3921,6 +3921,8 @@ ul {
   display: grid;
   gap: 24px;
   align-items: start;
+  min-width: 0;
+  max-width: 100%;
 }
 .clients-page .button,
 .clients-page button,
@@ -3940,6 +3942,8 @@ ul {
 .clients-list {
   display: grid;
   gap: 12px;
+  min-width: 0;
+  max-width: 100%;
 }
 .clients-list__table {
   width: 100%;
@@ -4047,9 +4051,19 @@ ul {
   margin: 0;
   padding: 0;
   gap: 10px;
+  min-width: 0;
+  max-width: 100%;
+  width: 100%;
+}
+.clients-mobile-cards > li {
+  min-width: 0;
+  max-width: 100%;
 }
 .client-mobile-card {
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
   display: grid;
   gap: 8px;
   text-align: left;
@@ -4074,14 +4088,27 @@ ul {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
+  max-width: 100%;
+}
+.client-mobile-card__top .clients-list__client {
+  flex: 1 1 0;
+  min-width: 0;
 }
 .client-mobile-card__meta {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+  min-width: 0;
+  max-width: 100%;
   color: var(--text-secondary);
   font-size: 0.85rem;
+}
+.client-mobile-card__meta time,
+.client-mobile-card__meta > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .client-detail {
   display: grid;
