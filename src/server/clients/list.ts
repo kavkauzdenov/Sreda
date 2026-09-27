@@ -134,7 +134,7 @@ export async function listClientsV2(
           .select("i.client_id")
           .whereRef("i.client_id", "=", "c.id")
           .whereRef("i.business_id", "=", "c.business_id")
-          .where("i.kind", "=", filters.channel!),
+          .where("i.kind", "=", filters.channel as "telegram" | "vk" | "whatsapp" | "instagram"),
       ),
     );
   }

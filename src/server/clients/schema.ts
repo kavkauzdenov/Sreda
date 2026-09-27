@@ -69,18 +69,4 @@ export type ClientTables = {
     created_at: Generated<Date>;
     updated_at: Generated<Date>;
   };
-  notification: {
-    id: string;
-    business_id: string;
-    type: string;
-    title: string;
-    body: string;
-    event_key: string;
-    created_at: Generated<Date>;
-  };
-  notification_recipient: {
-    notification_id: string;
-    user_id: string;
-    read_at: Date | null;
-  };
 };
