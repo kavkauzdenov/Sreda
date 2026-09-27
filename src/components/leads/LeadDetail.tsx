@@ -16,6 +16,12 @@ import {
 } from "@/lib/leadStatus";
 import type { Lead, LeadStatus } from "@/types";
 
+type LeadAssignee = {
+  id: string;
+  name: string;
+  role: "owner" | "admin" | "operator";
+};
+
 export type LeadDetailData = Lead & {
   waitLabel?: string | null;
   overdue?: boolean;
@@ -73,6 +79,7 @@ export function LeadDetail({
   onClose,
   onUpdated,
   onOpenLead,
+  canAssign = false,
   variant = "panel",
 }: {
   businessId: string;
@@ -80,6 +87,7 @@ export function LeadDetail({
   onClose: () => void;
   onUpdated?: (lead: Lead) => void;
   onOpenLead?: (id: string) => void;
+  canAssign?: boolean;
   variant?: "panel" | "dialog";
 }) {
   const [detail, setDetail] = useState<LeadDetailData | null>(null);
@@ -89,6 +97,8 @@ export function LeadDetail({
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<LeadStatus>("new");
   const [loading, setLoading] = useState(true);
+  const [assignees, setAssignees] = useState<LeadAssignee[]>([]);
+  const [selectedAssignee, setSelectedAssignee] = useState("");
   const dialogRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -131,6 +141,26 @@ export function LeadDetail({
   }, [variant, onClose]);
 
   useEffect(() => {
+    if (!canAssign || isDemoMode) {
+      setAssignees([]);
+      return;
+    }
+    let active = true;
+    void apiRequest<LeadAssignee[]>(
+      `/api/v1/businesses/${encodeURIComponent(businessId)}/leads?view=assignees`,
+    )
+      .then((rows) => {
+        if (active) setAssignees(rows);
+      })
+      .catch(() => {
+        if (active) setAssignees([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [businessId, canAssign]);
+
+  useEffect(() => {
     let active = true;
     void apiRequest<LeadDetailData>(
       `/api/v1/businesses/${encodeURIComponent(businessId)}/leads/${encodeURIComponent(leadId)}`,
@@ -139,6 +169,7 @@ export function LeadDetail({
         if (!active) return;
         setDetail(data);
         setStatus(data.status);
+        setSelectedAssignee(data.processingBy ?? "");
         setError("");
         setActionError("");
         setNotice("");
@@ -194,6 +225,52 @@ export function LeadDetail({
             : "Не удалось сохранить статус. Попробуйте ещё раз.",
         );
       }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function assignLead() {
+    if (
+      !detail ||
+      !canAssign ||
+      !selectedAssignee ||
+      busy ||
+      isDemoMode
+    )
+      return;
+    setBusy(true);
+    setActionError("");
+    setNotice("");
+    try {
+      const updated = await apiRequest<Lead>(
+        `/api/v1/businesses/${encodeURIComponent(businessId)}/leads/${encodeURIComponent(leadId)}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            action: "assign",
+            assigneeId: selectedAssignee,
+          }),
+        },
+      );
+      onUpdated?.(updated);
+      const fresh = await apiRequest<LeadDetailData>(
+        `/api/v1/businesses/${encodeURIComponent(businessId)}/leads/${encodeURIComponent(leadId)}`,
+      );
+      setDetail(fresh);
+      setStatus(fresh.status);
+      setSelectedAssignee(fresh.processingBy ?? "");
+      setNotice(
+        detail.processingBy
+          ? "Заявка передана сотруднику."
+          : "Ответственный назначен.",
+      );
+    } catch (e) {
+      setActionError(
+        e instanceof Error
+          ? e.message
+          : "Не удалось назначить сотрудника.",
+      );
     } finally {
       setBusy(false);
     }
@@ -350,6 +427,40 @@ export function LeadDetail({
 
           <div className="lead-detail__section">
             <h3>Работа с заявкой</h3>
+            {canAssign &&
+            !["completed", "rejected", "closed"].includes(detail.status) ? (
+              <div className="account-card">
+                <label className="field">
+                  <span className="field__label">Ответственный</span>
+                  <select
+                    className="field__control"
+                    value={selectedAssignee}
+                    disabled={busy || isDemoMode}
+                    onChange={(e) => setSelectedAssignee(e.target.value)}
+                  >
+                    <option value="">Выберите сотрудника</option>
+                    {assignees.map((assignee) => (
+                      <option key={assignee.id} value={assignee.id}>
+                        {assignee.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  className="button button--outline"
+                  disabled={
+                    busy ||
+                    isDemoMode ||
+                    !selectedAssignee ||
+                    selectedAssignee === detail.processingBy
+                  }
+                  onClick={() => void assignLead()}
+                >
+                  {detail.processingBy ? "Передать" : "Назначить"}
+                </button>
+              </div>
+            ) : null}
             {canTake ? (
               <button
                 type="button"
@@ -420,9 +531,11 @@ export function LeadDetail({
                 {detail.history.map((item) => (
                   <li key={item.id}>
                     <strong>
-                      {item.fromStatus
-                        ? `${leadStatusLabel(item.fromStatus)} → ${leadStatusLabel(item.toStatus)}`
-                        : leadStatusLabel(item.toStatus)}
+                      {item.fromStatus === item.toStatus && item.note
+                        ? item.note
+                        : item.fromStatus
+                          ? `${leadStatusLabel(item.fromStatus)} → ${leadStatusLabel(item.toStatus)}`
+                          : leadStatusLabel(item.toStatus)}
                     </strong>
                     <small>
                       {item.actorName ? `${item.actorName} · ` : ""}
