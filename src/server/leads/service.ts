@@ -114,6 +114,28 @@ export class LeadService {
       throw new AppError(404, "BUSINESS_NOT_FOUND", "Бизнес не найден.");
     return row.id;
   }
+  async assignees(userId: string, publicId: string) {
+    const business = await requireBusiness(
+      this.db,
+      userId,
+      publicId,
+      "leads.write",
+    );
+    return this.db
+      .selectFrom("business_member as member")
+      .innerJoin("user", "user.id", "member.user_id")
+      .select([
+        "user.id",
+        "user.name",
+        "member.role",
+      ])
+      .where("member.business_id", "=", business.id)
+      .where("member.status", "=", "active")
+      .orderBy("user.name")
+      .orderBy("user.id")
+      .execute();
+  }
+
   async list(
     userId: string,
     businessId: string,
@@ -207,32 +229,54 @@ export class LeadService {
         throw new AppError(400, "INVALID_ASSIGNEE", "Проверьте ответственного.");
       query = query.where("lead.processing_by", "=", filters.processingBy);
     }
-    for (const [key, op] of [
-      ["from", ">="],
-      ["until", "<"],
-    ] as const) {
-      const value = filters[key];
-      if (value) {
-        if (!Number.isFinite(Date.parse(value)))
-          throw new AppError(400, "INVALID_DATE", "Проверьте период.");
-        const tz = (
-          await this.db
-            .selectFrom("business")
-            .select("timezone")
-            .where("id", "=", businessId)
-            .executeTakeFirstOrThrow()
-        ).timezone;
-        const date = /^\d{4}-\d{2}-\d{2}$/.test(value)
-          ? localInstants(value, 0, tz)[0]
-          : new Date(value);
-        if (!date)
-          throw new AppError(
-            400,
-            "INVALID_DATE",
-            "Эта дата недоступна в часовом поясе бизнеса.",
-          );
-        query = query.where("lead.created_at", op, date);
+    const periodTimezone =
+      filters.from || filters.until
+        ? (
+            await this.db
+              .selectFrom("business")
+              .select("timezone")
+              .where("id", "=", businessId)
+              .executeTakeFirstOrThrow()
+          ).timezone
+        : null;
+
+    if (filters.from) {
+      const value = filters.from;
+      if (!Number.isFinite(Date.parse(value)))
+        throw new AppError(400, "INVALID_DATE", "Проверьте период.");
+      const date = /^\d{4}-\d{2}-\d{2}$/.test(value)
+        ? localInstants(value, 0, periodTimezone!)[0]
+        : new Date(value);
+      if (!date)
+        throw new AppError(
+          400,
+          "INVALID_DATE",
+          "Эта дата недоступна в часовом поясе бизнеса.",
+        );
+      query = query.where("lead.created_at", ">=", date);
+    }
+
+    if (filters.until) {
+      const value = filters.until;
+      if (!Number.isFinite(Date.parse(value)))
+        throw new AppError(400, "INVALID_DATE", "Проверьте период.");
+      let date: Date | undefined;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+        const noonUtc = new Date(value + "T12:00:00Z");
+        noonUtc.setUTCDate(noonUtc.getUTCDate() + 1);
+        const nextLocalDate = noonUtc.toISOString().slice(0, 10);
+        date = localInstants(nextLocalDate, 0, periodTimezone!)[0];
+      } else {
+        date = new Date(value);
       }
+      if (!date)
+        throw new AppError(
+          400,
+          "INVALID_DATE",
+          "Эта дата недоступна в часовом поясе бизнеса.",
+        );
+      // A date-only «По дату» filter is inclusive: < local midnight of next day.
+      query = query.where("lead.created_at", "<", date);
     }
     if (status) query = query.where("lead.status", "=", status) as typeof query;
     const rows = await query.execute();
