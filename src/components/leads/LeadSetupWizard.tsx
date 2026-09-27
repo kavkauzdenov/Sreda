@@ -130,47 +130,29 @@ function WizardBody({
   const [revision, setRevision] = useState(0);
   const [failure, setFailure] = useState("");
   const [fields, setFields] = useState<LeadFormField[]>([]);
-  const [staffTelegramAvailable, setStaffTelegramAvailable] = useState(false);
 
   useEffect(() => {
     if (isDemoMode) return;
     let cancelled = false;
-    void apiRequest<{ draft: LeadSetupV2; revision: number }>(
-      `/api/v1/businesses/${encodeURIComponent(business.id)}/lead-setup`,
-    )
-      .then((result) => {
+    void Promise.all([
+      apiRequest<{ draft: LeadSetupV2; revision: number }>(
+        `/api/v1/businesses/${encodeURIComponent(business.id)}/lead-setup`,
+      ),
+      apiRequest<LeadFormField[]>(
+        `/api/v1/businesses/${encodeURIComponent(business.id)}/lead-form-fields`,
+      ),
+    ])
+      .then(([result, formFields]) => {
         if (cancelled) return;
         setDraft(result.draft?.version === 2 ? result.draft : newLeadSetupV2());
         setRevision(result.revision);
+        setFields(formFields.filter((field) => field.active !== false));
       })
       .catch((e: unknown) => {
         if (!cancelled)
           setFailure(
             e instanceof Error ? e.message : "Не удалось загрузить настройку.",
           );
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [business.id]);
-
-  useEffect(() => {
-    if (isDemoMode) return;
-    let cancelled = false;
-    void apiRequest<{ items?: { platform: string; status: string }[] }>(
-      `/api/v1/businesses/${encodeURIComponent(business.id)}/channel-admin`,
-    )
-      .then((data) => {
-        if (cancelled) return;
-        const items = data.items ?? [];
-        setStaffTelegramAvailable(
-          items.some(
-            (item) => item.platform === "telegram" && item.status === "active",
-          ),
-        );
-      })
-      .catch(() => {
-        if (!cancelled) setStaffTelegramAvailable(false);
       });
     return () => {
       cancelled = true;
@@ -200,7 +182,6 @@ function WizardBody({
       initialRevision={revision}
       fields={fields}
       onFieldsChange={setFields}
-      staffTelegramAvailable={staffTelegramAvailable}
     />
   );
 }
@@ -212,7 +193,6 @@ function WizardSteps({
   initialRevision,
   fields,
   onFieldsChange,
-  staffTelegramAvailable,
 }: {
   business: Business;
   price: number;
@@ -220,7 +200,6 @@ function WizardSteps({
   initialRevision: number;
   fields: LeadFormField[];
   onFieldsChange: (fields: LeadFormField[]) => void;
-  staffTelegramAvailable: boolean;
 }) {
   const [draft, setDraft] = useState<LeadSetupV2>(initialDraft);
   const [revision, setRevision] = useState(initialRevision);
@@ -311,10 +290,8 @@ function WizardSteps({
       // Email not saved — infra not exposed to client.
       notifications: {
         ...draft.notifications,
+        inApp: true,
         email: false,
-        staffTelegram: staffTelegramAvailable
-          ? draft.notifications.staffTelegram
-          : false,
       },
       processing: {
         ...draft.processing,
@@ -327,7 +304,11 @@ function WizardSteps({
 
   async function goBack() {
     if (draft.setupStep <= 0) return;
-    await save({ ...draft, setupStep: draft.setupStep - 1 });
+    await save({
+      ...draft,
+      completed: false,
+      setupStep: draft.setupStep - 1,
+    });
   }
 
   function toggleChannel(channel: LeadChannel) {
@@ -346,7 +327,7 @@ function WizardSteps({
       ...draft,
       completed: true,
       setupStep: 6,
-      notifications: { ...draft.notifications, email: false },
+      notifications: { ...draft.notifications, inApp: true, email: false },
       processing: { ...draft.processing, autoAssign: false },
       defaultStatus: "new",
     };
@@ -604,53 +585,36 @@ function WizardSteps({
                 <p className="setup-description">
                   Куда приходят уведомления о новых заявках.
                 </p>
+                <div className="detail-facts">
+                  <span>В приложении</span>
+                  <strong>Всегда включено</strong>
+                </div>
                 <label className="capability-row">
                   <input
                     type="checkbox"
-                    checked={draft.notifications.inApp}
+                    checked={draft.notifications.staffTelegram}
                     onChange={(e) =>
                       setDraft({
                         ...draft,
                         notifications: {
                           ...draft.notifications,
-                          inApp: e.target.checked,
+                          staffTelegram: e.target.checked,
                         },
                       })
                     }
                   />
                   <span>
-                    <strong>В приложении</strong>
-                    <small>Уведомления внутри БизнеСот.</small>
+                    <strong>В личный Telegram сотрудников</strong>
+                    <small>
+                      Получат сотрудники, которые подключили Telegram для
+                      служебных уведомлений.
+                    </small>
                   </span>
                 </label>
-                {staffTelegramAvailable ? (
-                  <label className="capability-row">
-                    <input
-                      type="checkbox"
-                      checked={draft.notifications.staffTelegram}
-                      onChange={(e) =>
-                        setDraft({
-                          ...draft,
-                          notifications: {
-                            ...draft.notifications,
-                            staffTelegram: e.target.checked,
-                          },
-                        })
-                      }
-                    />
-                    <span>
-                      <strong>В личный Telegram сотрудников</strong>
-                      <small>
-                        Для сотрудников с привязанным Telegram в настройках.
-                      </small>
-                    </span>
-                  </label>
-                ) : (
-                  <p className="field-hint">
-                    Уведомления в Telegram станут доступны после привязки
-                    личного Telegram в настройках аккаунта.
-                  </p>
-                )}
+                <p className="field-hint">
+                  Привязка Telegram сотрудников настраивается отдельно в
+                  настройках уведомлений.
+                </p>
               </>
             )}
 
