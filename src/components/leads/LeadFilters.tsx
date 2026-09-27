@@ -2,6 +2,7 @@
 
 import { useEffect, useEffectEvent, useState } from "react";
 import type { LeadStatus } from "@/types";
+import { apiRequest } from "@/lib/apiClient";
 import { LEAD_STATUS_FILTER_OPTIONS } from "@/lib/leadStatus";
 
 export type LeadFilterValues = {
@@ -10,14 +11,23 @@ export type LeadFilterValues = {
   source: string;
   from: string;
   until: string;
+  processingBy: string;
+};
+
+type LeadAssignee = {
+  id: string;
+  name: string;
+  role: "owner" | "admin" | "operator";
 };
 
 export function LeadFilters({
+  businessId,
   value,
   onChange,
   onRefresh,
   disabled,
 }: {
+  businessId: string;
   value: LeadFilterValues;
   onChange: (next: LeadFilterValues) => void;
   onRefresh?: () => void;
@@ -25,6 +35,23 @@ export function LeadFilters({
 }) {
   const [open, setOpen] = useState(false);
   const [searchDraft, setSearchDraft] = useState(value.search);
+  const [assignees, setAssignees] = useState<LeadAssignee[]>([]);
+
+  useEffect(() => {
+    let active = true;
+    void apiRequest<LeadAssignee[]>(
+      `/api/v1/businesses/${encodeURIComponent(businessId)}/leads?view=assignees`,
+    )
+      .then((rows) => {
+        if (active) setAssignees(rows);
+      })
+      .catch(() => {
+        if (active) setAssignees([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [businessId]);
   const commitSearch = useEffectEvent((draft: string) => {
     if (draft === value.search) return;
     onChange({ ...value, search: draft });
@@ -103,6 +130,24 @@ export function LeadFilters({
             <option value="">Все каналы</option>
             <option value="telegram">Telegram</option>
             <option value="vk">ВКонтакте</option>
+          </select>
+        </label>
+        <label className="field">
+          <span className="field__label">Ответственный</span>
+          <select
+            className="field__control"
+            value={value.processingBy}
+            disabled={disabled}
+            onChange={(e) =>
+              onChange({ ...value, processingBy: e.target.value })
+            }
+          >
+            <option value="">Все сотрудники</option>
+            {assignees.map((assignee) => (
+              <option key={assignee.id} value={assignee.id}>
+                {assignee.name}
+              </option>
+            ))}
           </select>
         </label>
         <label className="field">
