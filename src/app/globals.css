@@ -3719,6 +3719,23 @@ ul {
   align-content: start;
 }
 .lead-form-builder { display: grid; gap: 16px; }
+.lead-form-fields-list li[draggable="true"] {
+  cursor: grab;
+}
+.lead-form-fields-list li[draggable="true"]:active {
+  cursor: grabbing;
+}
+.lead-form-fields-list li.is-dragging {
+  opacity: 0.58;
+}
+.lead-form-builder__drag-handle {
+  display: inline-flex;
+  margin-right: 8px;
+  color: var(--text-secondary);
+  letter-spacing: -2px;
+  user-select: none;
+}
+
 .lead-form-builder__row-actions,
 .lead-form-builder__confirm-actions {
   display: flex;
