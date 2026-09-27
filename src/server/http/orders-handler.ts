@@ -4,6 +4,18 @@ import { AppError, json, readJson, requireOrigin, respond } from "./errors";
 import { limit } from "./limits";
 import { CatalogService, OrderService } from "../orders/service";
 import type { CartPlatform } from "../orders/schema";
+import {
+  getOrderSummary,
+  listOrdersV2,
+  parseOrderListFilters,
+} from "../orders/list";
+import { assignOrder, claimOrder } from "../orders/assignment";
+import {
+  getOrderSettingsV2,
+  saveOrderSettingsV2,
+} from "../orders/settings";
+import { adjustInventory, listInventory } from "../orders/inventory";
+import { listAssignees } from "../clients/tags";
 
 function cartIdentity(body: Record<string, unknown>, search: URLSearchParams) {
   const platform = String(
@@ -106,9 +118,7 @@ export function ordersHandler(
 
     if (resource === "cart") {
       const body =
-        request.method === "GET"
-          ? {}
-          : await readJson(request, 20000);
+        request.method === "GET" ? {} : await readJson(request, 20000);
       const { platform, externalUserId } = cartIdentity(body, search);
       const business = await runtime.db
         .selectFrom("business as b")
@@ -173,17 +183,88 @@ export function ordersHandler(
       throw new AppError(405, "METHOD_NOT_ALLOWED", "Действие недоступно.");
     }
 
-    if (request.method === "GET")
+    const view = search.get("view") ?? "";
+
+    if (view === "settings") {
+      if (request.method === "GET")
+        return json(await getOrderSettingsV2(runtime.db, user.id, publicId));
+      if (request.method === "PATCH" || request.method === "PUT")
+        return json(
+          await saveOrderSettingsV2(
+            runtime.db,
+            user.id,
+            publicId,
+            await readJson(request, 20000),
+          ),
+        );
+      throw new AppError(405, "METHOD_NOT_ALLOWED", "Действие недоступно.");
+    }
+
+    if (view === "inventory") {
+      if (request.method === "GET")
+        return json(
+          await listInventory(runtime.db, user.id, publicId, {
+            search: search.get("search") ?? search.get("q") ?? undefined,
+            state: search.get("state") ?? undefined,
+          }),
+        );
+      if (request.method === "POST" || request.method === "PATCH")
+        return json(
+          await adjustInventory(
+            runtime.db,
+            user.id,
+            publicId,
+            await readJson(request, 8000),
+          ),
+        );
+      throw new AppError(405, "METHOD_NOT_ALLOWED", "Действие недоступно.");
+    }
+
+    if (view === "assignees" && request.method === "GET")
+      return json(await listAssignees(runtime.db, user.id, publicId));
+
+    if (request.method === "GET") {
+      if (resourceId)
+        return json(await orders.get(user.id, publicId, resourceId));
+      if (view === "summary")
+        return json(await getOrderSummary(runtime.db, user.id, publicId));
+      if (view === "v2")
+        return json(
+          await listOrdersV2(
+            runtime.db,
+            user.id,
+            publicId,
+            parseOrderListFilters(search),
+          ),
+        );
       return json(
-        resourceId
-          ? await orders.get(user.id, publicId, resourceId)
-          : await orders.list(
-              user.id,
-              publicId,
-              search.get("status") ?? undefined,
-              Number(search.get("page") ?? 0),
-            ),
+        await orders.list(
+          user.id,
+          publicId,
+          search.get("status") ?? undefined,
+          Number(search.get("page") ?? 0),
+        ),
       );
+    }
+
+    if (request.method === "POST" && resourceId) {
+      const body = await readJson(request, 8000);
+      const action = String(body.action ?? "");
+      if (action === "claim")
+        return json(await claimOrder(runtime.db, user.id, publicId, resourceId));
+      if (action === "assign")
+        return json(
+          await assignOrder(
+            runtime.db,
+            user.id,
+            publicId,
+            resourceId,
+            body.assignedUserId ?? body.assigned_user_id,
+          ),
+        );
+      throw new AppError(400, "INVALID_ACTION", "Неизвестное действие.");
+    }
+
     if (request.method === "POST" && !resourceId)
       return json(
         await orders.checkoutForBusiness(
@@ -193,6 +274,7 @@ export function ordersHandler(
         ),
         201,
       );
+
     if (request.method === "PATCH" && resourceId)
       return json(
         await orders.transitionStatus(
@@ -202,6 +284,7 @@ export function ordersHandler(
           await readJson(request),
         ),
       );
+
     throw new AppError(405, "METHOD_NOT_ALLOWED", "Действие недоступно.");
   });
 }

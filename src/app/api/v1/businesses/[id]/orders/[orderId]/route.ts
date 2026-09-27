@@ -7,6 +7,13 @@ export async function GET(
   const p = await params;
   return ordersHandler(request, p.id, "orders", p.orderId);
 }
+export async function POST(
+  request: Request,
+  { params }: { params: Promise<{ id: string; orderId: string }> },
+) {
+  const p = await params;
+  return ordersHandler(request, p.id, "orders", p.orderId);
+}
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string; orderId: string }> },

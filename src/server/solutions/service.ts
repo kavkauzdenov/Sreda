@@ -769,7 +769,8 @@ export class SolutionService {
           (r?.status === "ready" && !alive(c.platform)),
       });
     }
-    const [productCount, serviceCount, targetCount] = await Promise.all([
+    const [productCount, serviceCount, targetCount, orderFulfillment] =
+      await Promise.all([
       this.db
         .selectFrom("product")
         .select(({ fn }) => fn.countAll<number>().as("n"))
@@ -790,6 +791,11 @@ export class SolutionService {
         .where("business_id", "=", id)
         .executeTakeFirst()
         .then((row) => Number(row?.n ?? 0)),
+      this.db
+        .selectFrom("order_settings")
+        .select(["pickup_enabled", "delivery_enabled"])
+        .where("business_id", "=", id)
+        .executeTakeFirst(),
     ]);
     const connectedChannels = [...states.keys()];
     return SOLUTIONS.filter((solution) =>
@@ -863,6 +869,14 @@ export class SolutionService {
         } else if (solution.code === "orders" && productCount === 0) {
           readinessIncomplete = true;
           note = "Добавьте первый товар в каталог.";
+        } else if (
+          solution.code === "orders" &&
+          orderFulfillment &&
+          !orderFulfillment.pickup_enabled &&
+          !orderFulfillment.delivery_enabled
+        ) {
+          readinessIncomplete = true;
+          note = "Включите доставку или самовывоз в настройках заказов.";
         } else if (solution.code === "booking" && serviceCount === 0) {
           readinessIncomplete = true;
           note = "Создайте услугу и настройте расписание.";
