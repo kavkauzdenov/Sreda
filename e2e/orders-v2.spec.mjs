@@ -341,9 +341,10 @@ test.describe("Orders V2 UI audit", () => {
       await accept.click();
       const patchRes = await patchPromise;
       expect(patchRes.ok()).toBeTruthy();
-      await expect(page.getByText(/принят/i).first()).toBeVisible({
-        timeout: 15_000,
-      });
+      // Next pipeline action after accepted → assembling (avoid matching hidden <option>Принят</option>).
+      await expect(
+        page.getByRole("button", { name: /перевести в «сборка»/i }).first(),
+      ).toBeVisible({ timeout: 15_000 });
     }
 
     await page.screenshot({
@@ -404,7 +405,9 @@ test.describe("Orders V2 UI audit", () => {
 
     await page.setViewportSize({ width: 1440, height: 900 });
     await openTab(page, /склад/i);
-    await expect(page.getByRole("region", { name: /склад/i })).toBeVisible({
+    await expect(
+      page.getByRole("region", { name: "Склад", exact: true }),
+    ).toBeVisible({
       timeout: 20_000,
     });
     await page.screenshot({
@@ -466,7 +469,9 @@ test.describe("Orders V2 UI audit", () => {
       waitUntil: "domcontentloaded",
       timeout: 60_000,
     });
-    await expect(page.getByRole("region", { name: /склад/i })).toBeVisible({
+    await expect(
+      page.getByRole("region", { name: "Склад", exact: true }),
+    ).toBeVisible({
       timeout: 20_000,
     });
 
