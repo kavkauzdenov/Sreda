@@ -15,10 +15,13 @@ export async function GET(
       p.id,
       p.attachmentId,
     );
+    const inline =
+      new URL(request.url).searchParams.get("inline") === "1" &&
+      file.type === "image";
     return new Response(new Uint8Array(file.bytes), {
       headers: {
         "Content-Type": file.mime,
-        "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(file.filename)}`,
+        "Content-Disposition": `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(file.filename)}`,
         "X-Content-Type-Options": "nosniff",
         "Cache-Control": "private, no-store",
       },

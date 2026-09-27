@@ -423,13 +423,38 @@ test("long replies and full lead review are split without losing Unicode text or
         fieldOptions: Object.fromEntries(
           fields.map((f) => [
             f,
-            { label: "Вопрос".repeat(25), required: true },
+            { label: "Вопрос " + f, required: true },
           ]),
         ),
       }),
     })
     .where("business_id", "=", f.b.id)
     .execute();
+  // Project fields into lead_form_field (V2 SoT) for the bot flow.
+  const { syncLeadFormFields } = await import(
+    "../src/server/leads/forms.ts"
+  );
+  const { parseLeadSetupDraft } = await import(
+    "../src/lib/leadSetupDraft.ts"
+  );
+  await syncLeadFormFields(
+    db,
+    f.b.id,
+    parseLeadSetupDraft(
+      JSON.stringify({
+        version: 1,
+        step: 3,
+        channels: ["telegram"],
+        fields,
+        fieldOptions: Object.fromEntries(
+          fields.map((f) => [
+            f,
+            { label: "Вопрос " + f, required: true },
+          ]),
+        ),
+      }),
+    ),
+  );
   let event = 1;
   const send = (text) =>
     db.transaction().execute((tx) =>
@@ -444,7 +469,7 @@ test("long replies and full lead review are split without losing Unicode text or
     );
   await send("Оставить заявку");
   await send("Анна");
-  // Validated setup sorts email/message/name/phone/service/comment, with name asked first.
+  // Form SoT order: name first, then remaining LEAD_FIELDS order.
   for (const answer of [
     "mail@example.com",
     "Т".repeat(900),

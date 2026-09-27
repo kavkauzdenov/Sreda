@@ -1,8 +1,8 @@
 import type { Kysely, Transaction } from "kysely";
 import type { Database } from "../db/schema.ts";
+import { ensureLeadSetupV2 } from "../leads/setup.ts";
 import { normalizeSolutionCode } from "./catalog.ts";
-import { validateSetup } from "./service.ts";
-import type { LeadSetupDraft } from "../../lib/leadSetupDraft.ts";
+import { isLeadCustomerReady } from "../leads/readiness.ts";
 
 export type CustomerActionCode =
   | "leads"
@@ -76,15 +76,6 @@ export async function getAvailableCustomerActions(
     enabled.map((row) => normalizeSolutionCode(row.solution_code)),
   );
 
-  const setupRow = await db
-    .selectFrom("lead_setup")
-    .select("draft")
-    .where("business_id", "=", businessId)
-    .executeTakeFirst();
-  const leadDraft = setupRow
-    ? (validateSetup(JSON.parse(setupRow.draft)) as LeadSetupDraft | undefined)
-    : undefined;
-
   const platformConnected = await db
     .selectFrom("business_connection")
     .select("id")
@@ -113,14 +104,14 @@ export async function getAvailableCustomerActions(
   const actions: CustomerAction[] = [];
   let leadTitle: string | null = null;
 
-  if (
-    codes.has("leads") &&
-    leadDraft?.step === 3 &&
-    leadDraft.channels.includes(platform) &&
-    platformConnected
-  ) {
-    leadTitle = leadDraft.title?.trim() || "Оставить заявку";
-    actions.push({ code: "leads", labels: [leadTitle] });
+  if (codes.has("leads")) {
+    // Idempotent v1→v2 + field projection so menu and bot share one SoT.
+    await ensureLeadSetupV2(db, businessId);
+    const leadReady = await isLeadCustomerReady(db, businessId, platform);
+    if (leadReady.ready) {
+      leadTitle = leadReady.buttonLabel?.trim() || "Оставить заявку";
+      actions.push({ code: "leads", labels: [leadTitle] });
+    }
   }
 
   if (codes.has("orders") && productCount > 0) {

@@ -1,25 +1,24 @@
 "use client";
+
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useBusinessContext } from "@/hooks/useBusinessContext";
 import { BusinessSwitcher } from "@/components/dashboard/BusinessSwitcher";
-import { DetailDialog } from "@/components/dashboard/DetailDialog";
 import { LoadingPanel } from "@/components/dashboard/LoadingPanel";
 import { PlatformBadge } from "@/components/ui/PlatformBadge";
-import { getLeadPage, updateLeadStatus } from "@/services/leads.service";
+import { LeadFilters, type LeadFilterValues } from "@/components/leads/LeadFilters";
+import { LeadDetail } from "@/components/leads/LeadDetail";
+import { LeadStatusBadge } from "@/components/leads/LeadStatusBadge";
+import {
+  LeadSummaryCards,
+  type LeadPeriod,
+} from "@/components/leads/LeadSummaryCards";
+import { getLeadPage } from "@/services/leads.service";
 import { isDemoMode } from "@/lib/dataMode";
 import { formatRelativeDateTime } from "@/lib/format";
-import { ClientError } from "@/lib/apiClient";
-import { LeadFormFieldsPanel } from "@/components/leads/LeadFormFieldsPanel";
 import { EmptyStateCta } from "@/components/solutions/SolutionSetupBanner";
-import type { Lead, LeadStatus } from "@/types";
-const labels: Record<LeadStatus, string> = {
-  new: "Новая",
-  processing: "В работе",
-  waiting_customer: "Ждём клиента",
-  completed: "Завершена",
-  rejected: "Отклонена",
-  closed: "Закрыта",
-};
+import type { Lead } from "@/types";
+
 export function LeadsView() {
   const {
     businesses,
@@ -29,6 +28,9 @@ export function LeadsView() {
     error,
     refreshBusinesses,
   } = useBusinessContext();
+  const canSetup =
+    currentBusiness?.role === "owner" || currentBusiness?.role === "admin";
+
   return (
     <div className="leads-page">
       <header className="leads-page__heading">
@@ -37,11 +39,21 @@ export function LeadsView() {
           <h1>Заявки</h1>
           <p>Все обращения вашего бизнеса в одном месте.</p>
         </div>
-        <BusinessSwitcher
-          businesses={businesses}
-          currentBusiness={currentBusiness}
-          onSelect={setCurrentBusinessId}
-        />
+        <div className="leads-page__heading-actions">
+          {canSetup ? (
+            <Link
+              href="/solutions/leads/setup"
+              className="button button--outline"
+            >
+              Настроить форму
+            </Link>
+          ) : null}
+          <BusinessSwitcher
+            businesses={businesses}
+            currentBusiness={currentBusiness}
+            onSelect={setCurrentBusinessId}
+          />
+        </div>
       </header>
       {error ? (
         <section className="panel">
@@ -58,36 +70,39 @@ export function LeadsView() {
       ) : isLoading ? (
         <LoadingPanel label="Загружаем бизнес" />
       ) : currentBusiness ? (
-        <>
-          <LeadList
-            key={`${currentBusiness.id}:${currentBusiness.role}`}
-            businessId={currentBusiness.id}
-          />
-          {!isDemoMode && (
-            <LeadFormFieldsPanel
-              key={`fields:${currentBusiness.id}:${currentBusiness.role}`}
-              businessId={currentBusiness.id}
-              canEdit={
-                currentBusiness.role === "owner" ||
-                currentBusiness.role === "admin"
-              }
-            />
-          )}
-        </>
+        <LeadWorkspace
+          key={`${currentBusiness.id}:${currentBusiness.role}`}
+          businessId={currentBusiness.id}
+          canAssign={
+            currentBusiness.role === "owner" ||
+            currentBusiness.role === "admin"
+          }
+        />
       ) : (
         <p>Выберите бизнес.</p>
       )}
     </div>
   );
 }
-function LeadList({ businessId }: { businessId: string }) {
-  const [filter, setFilter] = useState<LeadStatus | "all">("all");
-  const [search, setSearch] = useState(""),
-    [source, setSource] = useState(""),
-    [from, setFrom] = useState(""),
-    [until, setUntil] = useState("");
+
+function LeadWorkspace({
+  businessId,
+  canAssign,
+}: {
+  businessId: string;
+  canAssign: boolean;
+}) {
+  const [period, setPeriod] = useState<LeadPeriod>(7);
+  const [filters, setFilters] = useState<LeadFilterValues>({
+    status: "all",
+    search: "",
+    source: "",
+    from: "",
+    until: "",
+    processingBy: "",
+  });
   const [attempt, setAttempt] = useState(0);
-  const key = `${filter}:${attempt}:${search}:${source}:${from}:${until}`;
+  const key = `${filters.status}:${attempt}:${filters.search}:${filters.source}:${filters.processingBy}:${filters.from}:${filters.until}`;
   const [page, setPage] = useState<{
     key: string;
     rows: Lead[];
@@ -99,19 +114,30 @@ function LeadList({ businessId }: { businessId: string }) {
     message: string;
   } | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
-  const [status, setStatus] = useState<LeadStatus>("new");
-  const [busy, setBusy] = useState(false);
   const [moreBusy, setMoreBusy] = useState(false);
-  const [actionError, setActionError] = useState("");
-  const [notice, setNotice] = useState("");
+  const [isMobile, setIsMobile] = useState(false);
   const sequence = useRef(0);
+
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 900px)");
+    const sync = () => setIsMobile(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+
   useEffect(() => {
     const version = ++sequence.current;
     void getLeadPage(
       businessId,
-      filter === "all" ? undefined : filter,
+      filters.status === "all" ? undefined : filters.status,
       undefined,
-      { search, source, from, until },
+      {
+        search: filters.search,
+        source: filters.source,
+        from: filters.from,
+        until: filters.until,
+      },
     )
       .then((rows) => {
         if (sequence.current !== version) return;
@@ -135,28 +161,32 @@ function LeadList({ businessId }: { businessId: string }) {
     return () => {
       sequence.current = version + 1;
     };
-  }, [businessId, filter, key, search, source, from, until]);
+  }, [businessId, filters, key]);
+
   const error = failure?.key === key ? failure.message : null;
   const current = page?.key === key && !error ? page : null;
-  const item = current?.rows.find((row) => row.id === selected);
+
   function refresh() {
     setSelected(null);
-    setNotice("");
-    setActionError("");
     setMoreBusy(false);
     setAttempt((value) => value + 1);
   }
+
   async function more() {
     if (!current || moreBusy) return;
     const version = sequence.current;
     setMoreBusy(true);
-    setActionError("");
     try {
       const rows = await getLeadPage(
         businessId,
-        filter === "all" ? undefined : filter,
+        filters.status === "all" ? undefined : filters.status,
         current.cursor,
-        { search, source, from, until },
+        {
+          search: filters.search,
+          source: filters.source,
+          from: filters.from,
+          until: filters.until,
+        },
       );
       if (version !== sequence.current) return;
       const last = rows.at(-1);
@@ -182,125 +212,46 @@ function LeadList({ businessId }: { businessId: string }) {
       if (version === sequence.current) setMoreBusy(false);
     }
   }
-  async function save() {
-    if (!item || busy || moreBusy) return;
-    const version = sequence.current;
-    setBusy(true);
-    setActionError("");
-    setNotice("");
-    try {
-      const updated = await updateLeadStatus(businessId, item.id, status);
-      if (version !== sequence.current) return;
-      setPage((old) =>
-        old?.key === key
-          ? {
-              ...old,
-              rows: old.rows
-                .map((row) => (row.id === updated.id ? updated : row))
-                .filter((row) => filter === "all" || row.status === filter),
-            }
-          : old,
-      );
-      setSelected(null);
-      setNotice("Статус заявки сохранён.");
-    } catch (e) {
-      if (version !== sequence.current) return;
-      if (e instanceof ClientError && [401, 403, 404].includes(e.status)) {
-        setSelected(null);
-        setFailure({ key, message: e.message });
-      } else
-        setActionError(
-          e instanceof Error
-            ? e.message
-            : "Не удалось сохранить статус. Попробуйте ещё раз.",
-        );
-    } finally {
-      setBusy(false);
-    }
+
+  function onLeadUpdated(updated: Lead) {
+    setPage((old) =>
+      old?.key === key
+        ? {
+            ...old,
+            rows: old.rows
+              .map((row) => (row.id === updated.id ? { ...row, ...updated } : row))
+              .filter(
+                (row) =>
+                  filters.status === "all" || row.status === filters.status,
+              ),
+          }
+        : old,
+    );
   }
+
   return (
     <>
-      <section className="panel filter-grid leads-toolbar" aria-label="Фильтры заявок">
-        <label className="field filter-grid__search">
-          <span className="field__label">Поиск</span>
-          <input
-            className="field__control"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Имя или телефон"
-          />
-        </label>
-        <label className="field">
-          <span className="field__label">Источник</span>
-          <select className="field__control" value={source} onChange={(e) => setSource(e.target.value)}>
-            <option value="">Все</option>
-            <option value="telegram">Telegram</option>
-            <option value="vk">VK</option>
-          </select>
-        </label>
-        <label className="field" htmlFor="lead-filter">
-          <span className="field__label">Статус</span>
-          <select
-            className="field__control"
-            id="lead-filter"
-            value={filter}
-            disabled={busy || moreBusy}
-            onChange={(e) => {
-              setSelected(null);
-              setNotice("");
-              setActionError("");
-              setFilter(e.target.value as LeadStatus | "all");
-            }}
-          >
-            <option value="all">Все заявки</option>
-            <option value="new">Новые</option>
-            <option value="processing">В работе</option>
-            <option value="waiting_customer">Ждём клиента</option>
-            <option value="completed">Завершённые</option>
-            <option value="rejected">Отклонённые</option>
-            <option value="closed">Закрытые</option>
-          </select>
-        </label>
-        <label className="field">
-          <span className="field__label">С даты</span>
-          <input
-            className="field__control"
-            type="date"
-            value={from}
-            onChange={(e) => setFrom(e.target.value)}
-          />
-        </label>
-        <label className="field">
-          <span className="field__label">До даты</span>
-          <input
-            className="field__control"
-            type="date"
-            value={until}
-            onChange={(e) => setUntil(e.target.value)}
-          />
-          <span className="field-hint">Не включая выбранный день</span>
-        </label>
-        <div className="filter-grid__action">
-          <button
-            className="button button--outline"
-            disabled={busy || moreBusy}
-            onClick={refresh}
-          >
-            Обновить
-          </button>
-        </div>
-      </section>
-      {isDemoMode && (
+      <LeadSummaryCards
+        businessId={businessId}
+        period={period}
+        onPeriodChange={setPeriod}
+      />
+      <LeadFilters
+        businessId={businessId}
+        value={filters}
+        onChange={(next) => {
+          setSelected(null);
+          setFilters(next);
+        }}
+        onRefresh={refresh}
+        disabled={moreBusy}
+      />
+      {isDemoMode ? (
         <p className="account-footnote">
           Демонстрационные данные. Изменение статуса доступно в рабочем
           аккаунте.
         </p>
-      )}
-      {notice && (
-        <p className="account-notice" role="status">
-          {notice}
-        </p>
-      )}
+      ) : null}
       {error ? (
         <section className="panel">
           <p className="account-error" role="alert">
@@ -313,148 +264,104 @@ function LeadList({ businessId }: { businessId: string }) {
       ) : !current ? (
         <LoadingPanel label="Загружаем заявки" />
       ) : (
-        <section className="panel">
-          <p className="account-footnote">
-            Загружено заявок: {current.rows.length}
-          </p>
-          {current.rows.length ? (
-            <ul className="leads-records">
-              {current.rows.map((row) => (
-                <li key={row.id}>
-                  <button
-                    className="leads-record"
-                    disabled={busy}
-                    onClick={() => {
-                      setSelected(row.id);
-                      setStatus(row.status);
-                      setActionError("");
-                    }}
-                  >
-                    <span className="leads-record__content">
-                      <strong>{row.name}</strong>
-                      <span>{row.phone}</span>
-                      {row.processingName && (
-                        <small>В работе · {row.processingName}</small>
-                      )}
-                      <span>{row.message || "Без сообщения"}</span>
-                    </span>
-                    <span className="leads-record__meta">
-                      <PlatformBadge platform={row.source} />
-                      <span
-                        className={`status-chip status-chip--${row.status}`}
-                      >
-                        {labels[row.status]}
-                      </span>
-                      <time dateTime={row.createdAt}>
-                        {formatRelativeDateTime(row.createdAt)}
-                      </time>
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <div className="empty-state empty-state--compact">
-              {filter === "all" ? (
-                <EmptyStateCta
-                  title="Заявок пока нет"
-                  description="Настройте форму заявки и подключите Telegram или VK — обращения появятся здесь."
-                  href="/solutions/leads/setup"
-                  action="Настроить приём заявок"
-                />
-              ) : (
-                <p>Заявок с таким статусом пока нет.</p>
-              )}
-            </div>
-          )}
-          {current.more && (
-            <button
-              className="button button--outline"
-              disabled={moreBusy || busy}
-              onClick={() => void more()}
-            >
-              {moreBusy ? "Загружаем…" : "Показать ещё"}
-            </button>
-          )}
-        </section>
-      )}
-      {item && (
-        <DetailDialog title="Заявка клиента" onClose={() => setSelected(null)}>
-          <div className="detail-facts">
-            <span>Клиент</span>
-            <strong>{item.name}</strong>
-          </div>
-          <div className="detail-facts">
-            <span>Площадка</span>
-            <PlatformBadge platform={item.source} />
-          </div>
-          {item.phone && (
-            <div className="detail-facts">
-              <span>Телефон</span>
-              <strong>{item.phone}</strong>
-            </div>
-          )}
-          {item.processingName && <p>Ответственный: {item.processingName}</p>}
-          {item.answers &&
-            Object.entries(item.answers).map(([key, value]) => (
-              <div className="detail-facts" key={key}>
-                <span>
-                  {(
-                    {
-                      name: "Имя",
-                      phone: "Телефон",
-                      email: "Email",
-                      service: "Услуга",
-                      message: "Сообщение",
-                      comment: "Комментарий",
-                    } as Record<string, string>
-                  )[key] ?? key}
-                </span>
-                <strong>{value || "—"}</strong>
-              </div>
-            ))}
-          <p className="message-preview">
-            {item.message || "Клиент не оставил сообщение."}
-          </p>
-          <p className="account-footnote">
-            {formatRelativeDateTime(item.createdAt)}
-          </p>
-          <form
-            className="account-card"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void save();
-            }}
-          >
-            <fieldset disabled={busy || moreBusy || isDemoMode}>
-              <label htmlFor="lead-status">Статус заявки</label>
-              <select
-                id="lead-status"
-                value={status}
-                onChange={(e) => setStatus(e.target.value as LeadStatus)}
-              >
-                {Object.entries(labels).map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-              <button
-                className="button button--primary"
-                disabled={status === item.status}
-                type="submit"
-              >
-                {busy ? "Сохраняем…" : "Сохранить статус"}
-              </button>
-            </fieldset>
-          </form>
-          {actionError && (
-            <p className="account-error" role="alert">
-              {actionError}
+        <div
+          className={
+            "leads-workspace" + (selected && !isMobile ? " has-detail" : "")
+          }
+        >
+          <section className="panel leads-workspace__list">
+            <p className="account-footnote">
+              Загружено заявок: {current.rows.length}
             </p>
-          )}
-        </DetailDialog>
+            {current.rows.length ? (
+              <ul className="leads-records">
+                {current.rows.map((row) => (
+                  <li key={row.id}>
+                    <button
+                      type="button"
+                      className={
+                        "leads-record" +
+                        (selected === row.id ? " is-selected" : "")
+                      }
+                      aria-pressed={selected === row.id}
+                      onClick={() => setSelected(row.id)}
+                    >
+                      <span className="leads-record__content">
+                        <strong>{row.name}</strong>
+                        <span>{row.phone}</span>
+                        {row.processingName ? (
+                          <small>В работе · {row.processingName}</small>
+                        ) : null}
+                        <span>{row.message || "Без сообщения"}</span>
+                      </span>
+                      <span className="leads-record__meta">
+                        <PlatformBadge platform={row.source} />
+                        <LeadStatusBadge status={row.status} />
+                        <time dateTime={row.createdAt}>
+                          {formatRelativeDateTime(row.createdAt)}
+                        </time>
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <div className="empty-state empty-state--compact">
+                {filters.status === "all" &&
+                !filters.search &&
+                !filters.source ? (
+                  <EmptyStateCta
+                    title="Заявок пока нет"
+                    description="Настройте форму заявки и подключите Telegram или VK — обращения появятся здесь."
+                    href="/solutions/leads/setup"
+                    action="Настроить приём заявок"
+                  />
+                ) : (
+                  <p>Заявок по выбранным фильтрам пока нет.</p>
+                )}
+              </div>
+            )}
+            {current.more ? (
+              <button
+                type="button"
+                className="button button--outline"
+                disabled={moreBusy}
+                onClick={() => void more()}
+              >
+                {moreBusy ? "Загружаем…" : "Показать ещё"}
+              </button>
+            ) : null}
+          </section>
+
+          {selected && !isMobile ? (
+            <LeadDetail
+              key={selected}
+              businessId={businessId}
+              leadId={selected}
+              onClose={() => setSelected(null)}
+              onUpdated={onLeadUpdated}
+              onOpenLead={setSelected}
+              canAssign={canAssign}
+              variant="panel"
+            />
+          ) : null}
+        </div>
       )}
+
+      {selected && isMobile ? (
+        <div className="lead-detail-overlay">
+          <LeadDetail
+            key={selected}
+            businessId={businessId}
+            leadId={selected}
+            onClose={() => setSelected(null)}
+            onUpdated={onLeadUpdated}
+            onOpenLead={setSelected}
+            canAssign={canAssign}
+            variant="dialog"
+          />
+        </div>
+      ) : null}
     </>
   );
 }

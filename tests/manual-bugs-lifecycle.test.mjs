@@ -305,6 +305,12 @@ test("tenant isolation: business A lead resolve does not touch B", async () => {
     a.owner.id,
     a.business.public_id,
     leadA.id,
+    "processing",
+  );
+  await a.leads.updateStatus(
+    a.owner.id,
+    a.business.public_id,
+    leadA.id,
     "completed",
   );
 

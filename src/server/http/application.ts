@@ -94,6 +94,19 @@ export function createApplication(options: {
         const user = await requireUser(request.headers);
         if (request.method === "GET") {
           const params = new URL(request.url).searchParams;
+          if (params.get("view") === "assignees") {
+            return json(await options.leads.assignees(user.id, businessId));
+          }
+          if (params.get("summary") === "1" || params.get("view") === "summary") {
+            const days = Number(params.get("days") || 7);
+            const periodDays = ([1, 7, 30].includes(days) ? days : 7) as
+              | 1
+              | 7
+              | 30;
+            return json(
+              await options.leads.summary(user.id, businessId, periodDays),
+            );
+          }
           return json(
             await options.leads.list(
               user.id,
@@ -105,6 +118,7 @@ export function createApplication(options: {
                 source: params.get("source") || undefined,
                 from: params.get("from") || undefined,
                 until: params.get("until") || undefined,
+                processingBy: params.get("processingBy") || undefined,
               },
             ),
           );
@@ -124,16 +138,32 @@ export function createApplication(options: {
       }),
     leadStatus: (request: Request, businessId: string, leadId: string) =>
       respond(request, async () => {
-        if (!options.leads || request.method !== "PATCH")
+        if (!options.leads)
+          throw new AppError(404, "NOT_FOUND", "Страница не найдена.");
+        const user = await requireUser(request.headers);
+        if (request.method === "GET") {
+          return json(await options.leads.get(user.id, businessId, leadId));
+        }
+        if (request.method !== "PATCH")
           throw new AppError(404, "NOT_FOUND", "Страница не найдена.");
         requireOrigin(request, options.origin);
-        const user = await requireUser(request.headers);
+        const body = await readJson(request);
+        if (body.action === "assign") {
+          return json(
+            await options.leads.assign(
+              user.id,
+              businessId,
+              leadId,
+              body.assigneeId,
+            ),
+          );
+        }
         return json(
           await options.leads.updateStatus(
             user.id,
             businessId,
             leadId,
-            (await readJson(request)).status,
+            body.status,
           ),
         );
       }),

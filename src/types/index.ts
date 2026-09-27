@@ -87,7 +87,7 @@ export interface Lead {
   processingBy?: string | null;
   processingName?: string;
   processingAt?: string;
-  answers?: Record<string, string>;
+  answers?: Record<string, unknown>;
   updatedAt?: string;
   clientId?: string | null;
   id: string;

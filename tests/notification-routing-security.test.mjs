@@ -15,6 +15,7 @@ import {
   queueNotification,
 } from "../src/server/notifications/worker.ts";
 import { routeBot } from "../src/server/bot/router.ts";
+import { newLeadSetupV2 } from "../src/lib/leadSetupV2.ts";
 
 const db = new Kysely({ dialect: new PGliteDialect({ pglite: new PGlite() }) });
 before(() => migrate(db, new URL("../migrations", import.meta.url).pathname));
@@ -232,6 +233,72 @@ test("CASE2 verified owner binding receives business notification", async () => 
     ),
     true,
   );
+});
+
+test("Leads V2 staff Telegram switch controls lead.created delivery", async () => {
+  const owner = await makeUser("LeadNotifyOwner");
+  const business = await makeBusiness(owner, "Lead Notify");
+  const connection = await connectTelegram(business.id);
+  await staffBindSimple(business.id, owner, connection, "10102");
+
+  const disabled = {
+    ...newLeadSetupV2(),
+    notifications: {
+      ...newLeadSetupV2().notifications,
+      staffTelegram: false,
+    },
+  };
+  await db
+    .insertInto("lead_setup")
+    .values({
+      business_id: business.id,
+      draft: JSON.stringify(disabled),
+      revision: 1,
+    })
+    .execute();
+
+  await db.transaction().execute((tx) =>
+    notify(
+      tx,
+      business.id,
+      "lead.created",
+      "lead-off-" + randomUUID(),
+      "Новая заявка",
+      "/leads",
+    ),
+  );
+  await drainNotifications();
+  assert.equal((await outboxFor(connection, "10102")).length, 0);
+
+  const enabled = {
+    ...disabled,
+    notifications: {
+      ...disabled.notifications,
+      staffTelegram: true,
+    },
+  };
+  await db
+    .updateTable("lead_setup")
+    .set({
+      draft: JSON.stringify(enabled),
+      revision: 2,
+      updated_at: new Date(),
+    })
+    .where("business_id", "=", business.id)
+    .execute();
+
+  await db.transaction().execute((tx) =>
+    notify(
+      tx,
+      business.id,
+      "lead.created",
+      "lead-on-" + randomUUID(),
+      "Новая заявка",
+      "/leads",
+    ),
+  );
+  await drainNotifications();
+  assert.equal((await outboxFor(connection, "10102")).length, 1);
 });
 
 test("CASE3 interaction alone does not authorize staff notifications", async () => {

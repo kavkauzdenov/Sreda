@@ -3,11 +3,20 @@ import type { Kysely } from "kysely";
 import type { Database } from "../db/schema.ts";
 import { AppError } from "../http/errors.ts";
 import {
-  newLeadSetupDraft,
   LEAD_FIELDS,
   type LeadSetupDraft,
 } from "../../lib/leadSetupDraft.ts";
 import { syncLeadFormFields } from "../leads/forms.ts";
+import {
+  ensureLeadSetupV2,
+  parseLeadSetupV2,
+  saveLeadSetupV2,
+  validateLeadSetupV2,
+} from "../leads/setup.ts";
+import {
+  getLeadReadiness,
+  leadSolutionCardState,
+} from "../leads/readiness.ts";
 import {
   ACTIVATABLE_SOLUTIONS,
   SOLUTIONS,
@@ -169,97 +178,156 @@ export class SolutionService {
   }
   async get(userId: string, publicId: string) {
     const id = await this.business(userId, publicId);
-    const row = await this.db
-      .selectFrom("lead_setup")
-      .selectAll()
-      .where("business_id", "=", id)
-      .executeTakeFirst();
+    const { setup, revision } = await ensureLeadSetupV2(this.db, id);
     return {
-      draft: row ? validateSetup(JSON.parse(row.draft)) : newLeadSetupDraft(),
-      revision: row?.revision ?? 0,
+      draft: setup,
+      revision,
+      version: 2 as const,
     };
   }
   async save(userId: string, publicId: string, body: Record<string, unknown>) {
-    const draft = validateSetup(body.draft);
     if (!Number.isInteger(body.revision) || Number(body.revision) < 0)
       throw new AppError(400, "INVALID_REVISION", "Обновите настройку.");
-    return this.db.transaction().execute(async (tx) => {
-      const id = await new SolutionService(tx).business(userId, publicId, true);
-      await tx
-        .selectFrom("business")
-        .select("id")
-        .where("id", "=", id)
-        .forUpdate()
-        .execute();
-      await new SolutionService(tx).business(userId, publicId, true);
-      const current = await tx
-        .selectFrom("lead_setup")
-        .selectAll()
-        .where("business_id", "=", id)
-        .executeTakeFirst();
-      if ((current?.revision ?? 0) !== body.revision)
+
+    const rawDraft = body.draft;
+    const isV2 =
+      rawDraft &&
+      typeof rawDraft === "object" &&
+      (rawDraft as { version?: unknown }).version === 2;
+
+    // Legacy v1 posts: convert then save as V2 (fields synced once if empty).
+    if (!isV2) {
+      const draft = validateSetup(rawDraft);
+      const v2 = parseLeadSetupV2({
+        ...draft,
+        version: 1,
+      });
+      // Preserve the legacy V1 contract: step 3 means configuration is saved.
+      // Customer availability is still gated by connection/runtime readiness.
+      if (draft.step === 3) {
+        v2.completed = true;
+        v2.setupStep = 6;
+      } else {
+        v2.setupStep = Math.min(draft.step, 6);
+        v2.completed = false;
+      }
+
+      const saved = await saveLeadSetupV2(this.db, userId, publicId, {
+        draft: v2,
+        revision: Number(body.revision),
+        convertLegacyFields: true,
+      });
+
+      if (body.syncFields !== false) {
+        await this.db.transaction().execute(async (tx) => {
+          const id = await new SolutionService(tx).business(
+            userId,
+            publicId,
+            true,
+          );
+          await syncLeadFormFields(tx, id, draft);
+        });
+      }
+
+      if (draft.step === 3) {
+        await this.activateLeadsEntitlement(userId, publicId);
+      }
+
+      await this.db.transaction().execute(async (tx) => {
+        const id = await new SolutionService(tx).business(userId, publicId, true);
+        await audit(tx, id, userId, "settings_changed", id, {
+          solution: "leads",
+          revision: saved.revision,
+        });
+        const svc = new SolutionService(tx);
+        if (draft.step < 3)
+          await svc.touchSetupDraft(id, "leads", { step: draft.step });
+        else await svc.completeSetupDraft(id, "leads");
+      });
+      return { draft: saved.draft, revision: saved.revision, version: 2 as const };
+    }
+
+    const setup = validateLeadSetupV2(rawDraft);
+
+    // Never persist completed=true before launch prerequisites are valid.
+    // Readiness is evaluated against the candidate setup, not the previous draft.
+    if (setup.completed) {
+      const id = await this.business(userId, publicId, true);
+      const readiness = await getLeadReadiness(this.db, id, setup);
+      if (!readiness.ready) {
         throw new AppError(
-          409,
-          "SETUP_CONFLICT",
-          "Настройка изменена в другой вкладке. Обновите страницу перед сохранением.",
+          400,
+          "NOT_READY",
+          readiness.checks.find((check) => !check.ok)?.message ||
+            "Завершите настройку перед запуском.",
         );
-      const revision = Number(body.revision) + 1;
-      await tx
-        .insertInto("lead_setup")
-        .values({
-          business_id: id,
-          draft: JSON.stringify(draft),
-          revision,
-          updated_at: new Date(),
-        })
-        .onConflict((oc) =>
-          oc
-            .column("business_id")
-            .doUpdateSet({
-              draft: JSON.stringify(draft),
-              revision,
-              updated_at: new Date(),
-            }),
-        )
-        .execute();
-      if (draft.step === 3)
-        await (async () => {
-          await assertCanGrantEntitlement({
-            businessId: id,
-            solutionCode: "leads",
-          });
-          await tx
-            .insertInto("business_solution")
-            .values({
-              business_id: id,
-              solution_code: "leads",
-              status: "active",
-              starts_at: new Date(),
-              expires_at: null,
-            })
-            .onConflict((oc) =>
-              oc
-                .columns(["business_id", "solution_code"])
-                .doUpdateSet({
-                  status: "active",
-                  expires_at: null,
-                  disabled_at: null,
-                  paused_at: null,
-                  updated_at: new Date(),
-                }),
-            )
-            .execute();
-        })();
-      if (body.syncFields !== false) await syncLeadFormFields(tx, id, draft);
+      }
+      await assertCanGrantEntitlement({
+        businessId: id,
+        solutionCode: "leads",
+      });
+    }
+
+    const saved = await saveLeadSetupV2(this.db, userId, publicId, {
+      draft: setup,
+      revision: Number(body.revision),
+    });
+
+    if (setup.completed) {
+      await this.activateLeadsEntitlement(userId, publicId);
+    }
+
+    await this.db.transaction().execute(async (tx) => {
+      const id = await new SolutionService(tx).business(userId, publicId, true);
       await audit(tx, id, userId, "settings_changed", id, {
         solution: "leads",
-        revision,
+        revision: saved.revision,
       });
       const svc = new SolutionService(tx);
-      if (draft.step < 3)
-        await svc.touchSetupDraft(id, "leads", { step: draft.step });
-      else if (draft.step === 3) await svc.completeSetupDraft(id, "leads");
-      return { draft, revision };
+      if (!setup.completed)
+        await svc.touchSetupDraft(id, "leads", { step: setup.setupStep });
+      else await svc.completeSetupDraft(id, "leads");
+    });
+
+    return { draft: saved.draft, revision: saved.revision, version: 2 as const };
+  }
+
+  private async activateLeadsEntitlement(userId: string, publicId: string) {
+    await this.db.transaction().execute(async (tx) => {
+      const id = await new SolutionService(tx).business(userId, publicId, true);
+      await assertCanGrantEntitlement({
+        businessId: id,
+        solutionCode: "leads",
+      });
+      await tx
+        .insertInto("business_solution")
+        .values({
+          business_id: id,
+          solution_code: "leads",
+          status: "active",
+          starts_at: new Date(),
+          expires_at: null,
+        })
+        .onConflict((oc) =>
+          oc.columns(["business_id", "solution_code"]).doUpdateSet({
+            status: "active",
+            expires_at: null,
+            disabled_at: null,
+            paused_at: null,
+            updated_at: new Date(),
+          }),
+        )
+        .execute();
+      await audit(tx, id, userId, "settings_changed", id, {
+        solution: "leads",
+        event: "launched",
+      });
+      await trackProductEvent(tx, {
+        businessId: id,
+        userId,
+        event: "leads_launched",
+        meta: {},
+      });
     });
   }
   async activate(
@@ -458,7 +526,8 @@ export class SolutionService {
       if (solutionCode === "booking") {
         await resetBookingConfig(tx, id);
       } else if (solutionCode === "leads") {
-        const draft = newLeadSetupDraft();
+        const { newLeadSetupV2 } = await import("../../lib/leadSetupV2.ts");
+        const draft = newLeadSetupV2();
         const current = await tx
           .selectFrom("lead_setup")
           .select("revision")
@@ -481,7 +550,13 @@ export class SolutionService {
             }),
           )
           .execute();
-        await syncLeadFormFields(tx, id, draft);
+        // Soft-deactivate form fields; keep rows for history.
+        await tx
+          .updateTable("lead_form_field")
+          .set({ active: false, updated_at: now })
+          .where("business_id", "=", id)
+          .where("active", "=", true)
+          .execute();
       } else if (
         solutionCode === "orders" ||
         solutionCode === "autopost" ||
@@ -618,6 +693,7 @@ export class SolutionService {
   async list(userId: string, publicId: string) {
     const id = await this.business(userId, publicId);
     const setup = await this.get(userId, publicId);
+    const leadReadiness = await getLeadReadiness(this.db, id);
     const enabledSolutions = await this.db
       .selectFrom("business_solution")
       .select(["solution_code", "status", "expires_at"])
@@ -725,7 +801,9 @@ export class SolutionService {
         state?.entitlementStatus ?? "absent";
       const openDraft = draftByCode.get(solution.code);
       const channels =
-        solution.code === "leads" ? setup.draft.channels : connectedChannels;
+        solution.code === "leads"
+          ? setup.draft.channels
+          : connectedChannels;
       const ready =
         channels.length > 0 && channels.every((c) => states.get(c)?.ready);
       const scheduler =
@@ -738,16 +816,40 @@ export class SolutionService {
       let readinessIncomplete = false;
       let channelError = false;
       let note = "Подключите решение, чтобы настроить его функции.";
+      let cardState:
+        | ReturnType<typeof leadSolutionCardState>
+        | undefined;
 
       if (entitled) {
         if (solution.code === "leads") {
-          if (
-            setup.draft.step !== 3 ||
-            !channels.length ||
-            !channels.every((c) => states.has(c))
-          ) {
+          cardState = leadSolutionCardState(leadReadiness, entitled);
+          const channelFail = leadReadiness.checks.find(
+            (c) =>
+              !c.ok &&
+              (c.code === "CHANNEL_TELEGRAM" || c.code === "CHANNEL_VK"),
+          );
+          const channelMissing =
+            channelFail &&
+            /Подключите/.test(channelFail.message || "");
+          const channelBroken =
+            channelFail && !channelMissing;
+          if (!leadReadiness.setup.completed) {
             readinessIncomplete = true;
-            note = "Завершите настройку и подключите выбранные каналы.";
+            note =
+              leadReadiness.checks.find((c) => !c.ok)?.message ||
+              cardState.label;
+          } else if (channelMissing) {
+            // Selected channel not connected yet — keep setup-in-progress UX.
+            readinessIncomplete = true;
+            note = channelFail?.message || "Подключите выбранные каналы.";
+          } else if (channelBroken) {
+            channelError = true;
+            note = channelFail?.message || "Требует внимания";
+          } else if (!leadReadiness.ready) {
+            readinessIncomplete = true;
+            note =
+              leadReadiness.checks.find((c) => !c.ok)?.message ||
+              cardState.label;
           } else if (ready) {
             note = "Каналы приёма заявок и обработчики отвечают.";
           } else if (channels.some((c) => states.get(c)?.error)) {
@@ -796,18 +898,18 @@ export class SolutionService {
       } else if (!entitled) {
         lifecycleStatus = "not_connected";
         if (solution.code === "leads") {
+          cardState = leadSolutionCardState(leadReadiness, false);
           note = setup.revision
-            ? "Подключите решение, чтобы продолжить настройку."
+            ? cardState.label === "Не настроено"
+              ? "Подключите решение, чтобы продолжить настройку."
+              : cardState.label
             : "Выберите площадки и вопросы.";
         } else if (solution.code === "moderation") {
           note = "Решение пока не подключено к продукту.";
         } else {
           note = "Подключите решение, чтобы пройти настройку.";
         }
-      } else if (
-        openDraft ||
-        readinessIncomplete
-      ) {
+      } else if (openDraft || readinessIncomplete) {
         lifecycleStatus = "setup_in_progress";
         if (openDraft && !readinessIncomplete) {
           note = "Продолжите настройку решения.";
@@ -828,6 +930,15 @@ export class SolutionService {
         lifecycleStatus,
         note,
         entitlementStatus,
+        ...(cardState
+          ? {
+              cardState: cardState.state,
+              cardLabel: cardState.label,
+              cardActionLabel: cardState.actionLabel,
+              cardHref: cardState.href,
+              cardDetail: "detail" in cardState ? cardState.detail : undefined,
+            }
+          : {}),
         ...(openDraft
           ? { setupDraft: { status: openDraft.status, step: openDraft.step } }
           : {}),

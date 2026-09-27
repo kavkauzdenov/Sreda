@@ -1,6 +1,7 @@
 import type { Kysely, Transaction } from "kysely";
 import type { Database } from "../db/schema.ts";
 import { hasVerifiedStaffIdentity } from "./staff-destination.ts";
+import { loadLeadSetupV2 } from "../leads/setup.ts";
 
 async function queuePlatform(
   db: Kysely<Database>,
@@ -156,6 +157,21 @@ export async function notificationValid(
     .where("id", "=", id)
     .executeTakeFirst();
   if (!event) return false;
+
+  // Leads V2 can disable only staff Telegram delivery; in-app notifications
+  // remain a core invariant. Do not queue a Telegram staff message when the
+  // business has not enabled it in the Leads setup.
+  if (platform === "telegram" && event.type === "lead.created") {
+    const loaded = await loadLeadSetupV2(tx, event.business_id);
+    const rawVersion =
+      loaded.raw && typeof loaded.raw === "object"
+        ? (loaded.raw as { version?: unknown }).version
+        : null;
+    // Enforce the switch only for persisted V2 setup. Legacy/no-setup businesses
+    // keep their previous verified staff-notification behavior.
+    if (rawVersion === 2 && !loaded.setup.notifications.staffTelegram)
+      return false;
+  }
   const member = await tx
     .selectFrom("business_member")
     .select("status")

@@ -57,7 +57,10 @@ export class TelegramService {
           .where("status", "in", ["active", "trial"])
           .execute();
         if (
-          !(draft.step === 3 && draft.channels.includes("telegram")) &&
+          !(
+            (draft.completed || draft.setupStep >= 6) &&
+            draft.channels.includes("telegram")
+          ) &&
           !enabled.some((s) =>
             ["booking", "admin_messages", "autopost", "orders", "sales"].includes(
               s.solution_code,

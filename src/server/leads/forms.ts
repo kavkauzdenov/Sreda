@@ -8,6 +8,12 @@ import {
   type LeadFieldId,
   type LeadSetupDraft,
 } from "../../lib/leadSetupDraft.ts";
+import {
+  LEAD_FORM_PRESETS,
+  type LeadFormPresetId,
+} from "../../lib/leadFormPresetsV2.ts";
+
+type Db = Kysely<Database> | Transaction<Database>;
 
 const FIELD_TYPES = [
   "text",
@@ -129,12 +135,15 @@ function toField(row: {
 }
 
 export async function syncLeadFormFields(
-  tx: Transaction<Database>,
+  tx: Db,
   businessId: string,
   draft: LeadSetupDraft,
 ) {
   const now = new Date();
-  const selected = LEAD_FIELDS.filter((f) => draft.fields.includes(f.id));
+  const selected = [
+    ...LEAD_FIELDS.filter((f) => f.id === "name" && draft.fields.includes(f.id)),
+    ...LEAD_FIELDS.filter((f) => f.id !== "name" && draft.fields.includes(f.id)),
+  ];
   const keys = selected.map((f) => f.id);
   const existing = await tx
     .selectFrom("lead_form_field")
@@ -217,11 +226,19 @@ export class LeadFormService {
         .execute();
       await requireBusiness(tx, userId, publicId, "solutions.manage");
       const key = fieldKey(body.fieldKey ?? body.field_key);
+      let type = fieldType(body.fieldType ?? body.field_type);
+      let required = body.required === true;
+      let active = body.active !== false;
+      if (key === "name") {
+        type = "name";
+        required = true;
+        active = true;
+      }
       const values = {
         field_key: key,
         label: label(body.label),
-        field_type: fieldType(body.fieldType ?? body.field_type),
-        required: body.required === true,
+        field_type: type,
+        required,
         placeholder: placeholder(body.placeholder),
         options: JSON.stringify(options(body.options)),
         position:
@@ -231,7 +248,7 @@ export class LeadFormService {
           body.position <= 1000
             ? body.position
             : 0,
-        active: body.active !== false,
+        active,
         updated_at: new Date(),
       };
       if (fieldId) {
@@ -241,16 +258,37 @@ export class LeadFormService {
           )
         )
           throw new AppError(404, "LEAD_FIELD_NOT_FOUND", "Поле не найдено.");
-        const changed = await tx
-          .updateTable("lead_form_field")
-          .set(values)
+        const existing = await tx
+          .selectFrom("lead_form_field")
+          .selectAll()
           .where("business_id", "=", b.id)
           .where("id", "=", fieldId)
-          .returningAll()
           .executeTakeFirst();
-        if (!changed)
+        if (!existing)
           throw new AppError(404, "LEAD_FIELD_NOT_FOUND", "Поле не найдено.");
-        return toField(changed);
+        if (existing.field_key === "name" && key !== "name")
+          throw fail("Ключ поля «Имя» нельзя изменить.");
+        try {
+          const changed = await tx
+            .updateTable("lead_form_field")
+            .set(values)
+            .where("business_id", "=", b.id)
+            .where("id", "=", fieldId)
+            .returningAll()
+            .executeTakeFirst();
+          if (!changed)
+            throw new AppError(404, "LEAD_FIELD_NOT_FOUND", "Поле не найдено.");
+          return toField(changed);
+        } catch (error) {
+          if (
+            error &&
+            typeof error === "object" &&
+            "code" in error &&
+            (error as { code?: string }).code === "23505"
+          )
+            throw fail("Поле с таким ключом уже есть.");
+          throw error;
+        }
       }
       try {
         const row = await tx
@@ -292,6 +330,16 @@ export class LeadFormService {
         )
       )
         throw new AppError(404, "LEAD_FIELD_NOT_FOUND", "Поле не найдено.");
+      const current = await tx
+        .selectFrom("lead_form_field")
+        .selectAll()
+        .where("business_id", "=", b.id)
+        .where("id", "=", fieldId)
+        .executeTakeFirst();
+      if (!current)
+        throw new AppError(404, "LEAD_FIELD_NOT_FOUND", "Поле не найдено.");
+      if (current.field_key === "name")
+        throw fail("Поле «Имя» нельзя удалить.");
       const changed = await tx
         .updateTable("lead_form_field")
         .set({ active: false, updated_at: new Date() })
@@ -302,6 +350,157 @@ export class LeadFormService {
       if (!changed)
         throw new AppError(404, "LEAD_FIELD_NOT_FOUND", "Поле не найдено.");
       return { ok: true };
+    });
+  }
+
+  /** Reorder active fields by id list. Name stays required/active. */
+  async reorder(userId: string, publicId: string, orderedIds: unknown) {
+    if (!Array.isArray(orderedIds) || orderedIds.length > 100)
+      throw fail("Проверьте порядок полей.");
+    const ids = orderedIds.map((id) => {
+      if (
+        typeof id !== "string" ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+          id,
+        )
+      )
+        throw fail("Проверьте порядок полей.");
+      return id;
+    });
+    return this.db.transaction().execute(async (tx) => {
+      const b = await requireBusiness(tx, userId, publicId, "solutions.manage");
+      await tx
+        .selectFrom("business")
+        .select("id")
+        .where("id", "=", b.id)
+        .forUpdate()
+        .execute();
+      const existing = await tx
+        .selectFrom("lead_form_field")
+        .selectAll()
+        .where("business_id", "=", b.id)
+        .where("active", "=", true)
+        .execute();
+      const byId = new Map(existing.map((r) => [r.id, r]));
+      if (
+        ids.length !== existing.length ||
+        new Set(ids).size !== ids.length ||
+        ids.some((id) => !byId.has(id))
+      )
+        throw fail("Проверьте порядок полей.");
+      const nameField = existing.find((row) => row.field_key === "name");
+      if (nameField && ids[0] !== nameField.id)
+        throw fail("Поле «Имя» должно оставаться первым.");
+      const now = new Date();
+      for (const [position, id] of ids.entries()) {
+        await tx
+          .updateTable("lead_form_field")
+          .set({ position, updated_at: now })
+          .where("id", "=", id)
+          .execute();
+      }
+      const rows = await tx
+        .selectFrom("lead_form_field")
+        .selectAll()
+        .where("business_id", "=", b.id)
+        .where("active", "=", true)
+        .orderBy("position")
+        .orderBy("created_at")
+        .execute();
+      return rows.map(toField);
+    });
+  }
+
+  /**
+   * Apply a V2 preset. If replace=false and fields exist, refuse.
+   * If replace=true, soft-deactivate current active fields first (except we recreate name).
+   */
+  async applyPreset(
+    userId: string,
+    publicId: string,
+    presetId: unknown,
+    replace = false,
+  ) {
+    if (
+      typeof presetId !== "string" ||
+      !LEAD_FORM_PRESETS.some((p) => p.id === presetId)
+    )
+      throw fail("Выберите шаблон формы.");
+    const preset = LEAD_FORM_PRESETS.find((p) => p.id === presetId)!;
+    return this.db.transaction().execute(async (tx) => {
+      const b = await requireBusiness(tx, userId, publicId, "solutions.manage");
+      await tx
+        .selectFrom("business")
+        .select("id")
+        .where("id", "=", b.id)
+        .forUpdate()
+        .execute();
+      const existing = await tx
+        .selectFrom("lead_form_field")
+        .selectAll()
+        .where("business_id", "=", b.id)
+        .where("active", "=", true)
+        .execute();
+      if (existing.length && !replace) {
+        return {
+          applied: false,
+          reason: "fields_exist" as const,
+          count: 0,
+          needsConfirm: true,
+        };
+      }
+      const now = new Date();
+      if (existing.length && replace) {
+        await tx
+          .updateTable("lead_form_field")
+          .set({ active: false, updated_at: now })
+          .where("business_id", "=", b.id)
+          .where("active", "=", true)
+          .execute();
+      }
+      let count = 0;
+      for (const [position, field] of preset.fields.entries()) {
+        const values = {
+          label: field.label,
+          field_type: field.fieldType as FieldType,
+          required: field.fieldKey === "name" || Boolean(field.required),
+          placeholder: field.placeholder ?? "",
+          options: JSON.stringify(field.options ?? []),
+          position,
+          active: true,
+          updated_at: now,
+        };
+        const prior = await tx
+          .selectFrom("lead_form_field")
+          .select("id")
+          .where("business_id", "=", b.id)
+          .where("field_key", "=", field.fieldKey)
+          .executeTakeFirst();
+        if (prior) {
+          await tx
+            .updateTable("lead_form_field")
+            .set(values)
+            .where("id", "=", prior.id)
+            .execute();
+        } else {
+          await tx
+            .insertInto("lead_form_field")
+            .values({
+              id: randomUUID(),
+              business_id: b.id,
+              field_key: field.fieldKey,
+              ...values,
+            })
+            .execute();
+        }
+        count += 1;
+      }
+      return {
+        applied: true,
+        reason: "seeded" as const,
+        count,
+        presetId: preset.id as LeadFormPresetId,
+      };
     });
   }
 
