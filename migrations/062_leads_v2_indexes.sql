@@ -1,5 +1,5 @@
 -- Leads V2: additive indexes for list/filter/CRM/history lookups.
--- No destructive changes; safe on existing data.
+-- No destructive changes. Safe on existing data.
 
 CREATE INDEX IF NOT EXISTS lead_business_status_created_idx
   ON "lead" (business_id, status, created_at DESC);

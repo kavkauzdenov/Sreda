@@ -378,7 +378,15 @@ export class LeadFormService {
           .where("id", "=", id)
           .execute();
       }
-      return this.list(userId, publicId, true);
+      const rows = await tx
+        .selectFrom("lead_form_field")
+        .selectAll()
+        .where("business_id", "=", b.id)
+        .where("active", "=", true)
+        .orderBy("position")
+        .orderBy("created_at")
+        .execute();
+      return rows.map(toField);
     });
   }
 
