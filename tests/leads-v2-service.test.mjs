@@ -278,40 +278,32 @@ test("getLeadReadiness rejects expired entitlement", async () => {
   );
 });
 
-test("legacy V1 completion is gated by V2 readiness and remains incomplete on failure", async () => {
+test("legacy V1 completion preserves its contract but customer readiness stays closed", async () => {
   const f = await fixture();
   const svc = new SolutionService(db);
-  await assert.rejects(
-    () =>
-      svc.save(f.owner, f.b.public_id, {
-        revision: 0,
-        draft: {
-          version: 1,
-          step: 3,
-          channels: ["telegram"],
-          fields: ["name", "phone"],
-          title: "Оставить заявку",
-          greeting: "Здравствуйте",
-          finalMessage: "Спасибо",
-        },
-      }),
-    (err) =>
-      err &&
-      typeof err === "object" &&
-      err.status === 400 &&
-      err.code === "NOT_READY",
-  );
+  const saved = await svc.save(f.owner, f.b.public_id, {
+    revision: 0,
+    draft: {
+      version: 1,
+      step: 3,
+      channels: ["telegram"],
+      fields: ["name", "phone"],
+      title: "Оставить заявку",
+      greeting: "Здравствуйте",
+      finalMessage: "Спасибо",
+    },
+  });
 
-  const stored = await db
-    .selectFrom("lead_setup")
-    .select(["draft", "revision"])
-    .where("business_id", "=", f.b.id)
-    .executeTakeFirstOrThrow();
-  const parsed = JSON.parse(stored.draft);
-  assert.equal(parsed.version, 2);
-  assert.equal(parsed.completed, false);
-  assert.equal(parsed.setupStep, 6);
-  assert.ok(stored.revision >= 1);
+  assert.equal(saved.draft.version, 2);
+  assert.equal(saved.draft.completed, true);
+  assert.equal(saved.draft.setupStep, 6);
+
+  const readiness = await getLeadReadiness(db, f.b.id);
+  assert.equal(readiness.ready, false);
+  assert.equal(
+    readiness.checks.find((check) => check.code === "CHANNEL_TELEGRAM")?.ok,
+    false,
+  );
 });
 
 test("SolutionService does not persist completed setup when readiness fails", async () => {
