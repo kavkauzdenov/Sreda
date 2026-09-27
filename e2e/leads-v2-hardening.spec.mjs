@@ -203,15 +203,13 @@ test.describe("Leads V2 authenticated hardening", () => {
     await page.setViewportSize({ width: 1024, height: 768 });
     await page.goto(baseURL + "/leads", { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(800);
-    const leadRow = page.locator(
-      "a[href*='/leads/'], button.leads-row, .leads-list button, [data-lead-id]",
-    );
+    const leadRow = page.locator(".leads-records button, .leads-records [role='button']");
     if (await leadRow.count()) {
       await leadRow.first().click();
       await page.waitForTimeout(800);
       expect(await bodyOverflowX(page)).toBeFalsy();
       const detail = page.locator(
-        ".lead-detail, [aria-label*='заявк'], dialog, [role='dialog']",
+        "aside.lead-detail, .lead-detail--dialog, [aria-label='Карточка заявки']",
       );
       if (await detail.count()) {
         await expect(detail.first()).toBeVisible();
