@@ -30,6 +30,41 @@ function optionLabels(options: FormFieldSnapshot["options"]): string[] {
 
 const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
 
+function normalizeDateAnswer(value: string): string | null {
+  let year: number;
+  let month: number;
+  let day: number;
+
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (iso) {
+    year = Number(iso[1]);
+    month = Number(iso[2]);
+    day = Number(iso[3]);
+  } else {
+    const local = /^(\d{1,2})[./](\d{1,2})[./](\d{2}|\d{4})$/.exec(value);
+    if (!local) return null;
+    day = Number(local[1]);
+    month = Number(local[2]);
+    year = Number(local[3]);
+    if (year < 100) year += 2000;
+  }
+
+  if (year < 2000 || year > 2100 || month < 1 || month > 12 || day < 1)
+    return null;
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  if (
+    parsed.getUTCFullYear() !== year ||
+    parsed.getUTCMonth() !== month - 1 ||
+    parsed.getUTCDate() !== day
+  )
+    return null;
+  return [
+    String(year).padStart(4, "0"),
+    String(month).padStart(2, "0"),
+    String(day).padStart(2, "0"),
+  ].join("-");
+}
+
 export function validateLeadAnswer(
   field: FormFieldSnapshot,
   raw: string,
@@ -95,9 +130,10 @@ export function validateLeadAnswer(
       return { ok: true, value: cleaned };
     }
     case "date": {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(text) && !/^\d{1,2}[./]\d{1,2}[./]\d{2,4}$/.test(text))
-        return { ok: false, message: "Укажите дату, например 25.12.2026." };
-      return { ok: true, value: text };
+      const normalized = normalizeDateAnswer(text);
+      if (!normalized)
+        return { ok: false, message: "Укажите корректную дату, например 25.12.2026." };
+      return { ok: true, value: normalized };
     }
     case "checkbox": {
       const lower = text.toLowerCase();
@@ -137,9 +173,7 @@ export function validateLeadAnswer(
       };
     }
     default:
-      if (text.length > 900)
-        return { ok: false, message: "Слишком длинный ответ." };
-      return { ok: true, value: text };
+      return { ok: false, message: "Этот тип вопроса временно недоступен." };
   }
 }
 
