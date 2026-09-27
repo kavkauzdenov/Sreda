@@ -1,6 +1,7 @@
 /**
- * Clients V2 UI audit — list/detail layout, responsive, light/dark.
+ * Clients V2 UI audit — list/detail layout, responsive, light/dark, a11y.
  * Requires reachable app via E2E_BASE_URL / AUDIT_BASE_URL.
+ * Must not skip when the CI isolated app is healthy.
  */
 import { test, expect } from "playwright/test";
 import fs from "fs";
@@ -21,7 +22,8 @@ const VIEWPORTS = [
 
 const outDir =
   process.env.E2E_SCREENSHOT_DIR ||
-  "/opt/cursor/artifacts/screenshots/clients-v2";
+  process.env.AUDIT_OUTPUT ||
+  "artifacts/clients-v2-ui-audit";
 
 function isNetworkUnavailable(error) {
   const message = error instanceof Error ? error.message : String(error);
@@ -41,10 +43,11 @@ async function bodyOverflowX(page) {
   });
 }
 
-async function minTouchTarget(page) {
-  return page.evaluate(() => {
+async function minTouchTarget(page, scope = ".clients-workspace, .crm-page, main") {
+  return page.evaluate((sel) => {
+    const root = document.querySelector(sel) || document.body;
     let min = Infinity;
-    for (const el of document.querySelectorAll(
+    for (const el of root.querySelectorAll(
       "button, .button, a.button, [role='button']",
     )) {
       if (!(el instanceof HTMLElement)) continue;
@@ -55,7 +58,7 @@ async function minTouchTarget(page) {
       min = Math.min(min, Math.min(r.width, r.height));
     }
     return min === Infinity ? 0 : min;
-  });
+  }, scope);
 }
 
 async function registerAndBusiness(page) {
@@ -95,8 +98,11 @@ test.describe("Clients V2 UI audit", () => {
     fs.mkdirSync(outDir, { recursive: true });
   });
 
-  test("clients workspace responsive + themes", async ({ page, browserName }) => {
-    test.setTimeout(180_000);
+  test("clients workspace responsive + themes + a11y", async ({
+    page,
+    browserName,
+  }) => {
+    test.setTimeout(240_000);
     try {
       await registerAndBusiness(page);
     } catch (error) {
@@ -124,19 +130,43 @@ test.describe("Clients V2 UI audit", () => {
         `clients_${vp.width}_${browserName}_light.png`,
       );
       await page.screenshot({ path: shot, fullPage: true });
+      const touch = await minTouchTarget(page);
+      expect(touch).toBeGreaterThanOrEqual(43.5);
     }
 
-    // Open new client dialog
+    // Open new client dialog — focus trap + Escape
     await page.setViewportSize({ width: 1440, height: 900 });
     const newBtn = page.getByRole("button", { name: /новый клиент/i });
     await expect(newBtn).toBeVisible();
     await newBtn.click();
-    await expect(page.getByRole("dialog")).toBeVisible();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toHaveAttribute("aria-modal", "true");
+
+    // Tab cycle stays inside dialog
+    const firstFocus = await page.evaluate(() => {
+      const d = document.querySelector('[role="dialog"]');
+      const focusable = d?.querySelectorAll(
+        'button:not([disabled]), a[href], select:not([disabled]), input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      );
+      return focusable?.[0] instanceof HTMLElement
+        ? focusable[0].tagName
+        : null;
+    });
+    expect(firstFocus).toBeTruthy();
+    for (let i = 0; i < 12; i++) await page.keyboard.press("Tab");
+    const stillInside = await page.evaluate(() => {
+      const d = document.querySelector('[role="dialog"]');
+      return !!(d && d.contains(document.activeElement));
+    });
+    expect(stillInside).toBe(true);
+
     await page.screenshot({
       path: path.join(outDir, `clients_new_dialog_${browserName}.png`),
       fullPage: true,
     });
     await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
 
     // Create a client for detail screens
     await newBtn.click();
@@ -145,6 +175,16 @@ test.describe("Clients V2 UI audit", () => {
     await expect(page.locator(".client-detail, .client-detail--dialog")).toBeVisible({
       timeout: 20_000,
     });
+
+    // Tabs
+    for (const name of [/Обзор/i, /История/i, /Заметки/i]) {
+      const tab = page.getByRole("tab", { name }).or(page.getByRole("button", { name }));
+      if (await tab.count()) {
+        await tab.first().click().catch(() => undefined);
+        await page.waitForTimeout(150);
+      }
+    }
+
     await page.screenshot({
       path: path.join(outDir, `clients_detail_${browserName}.png`),
       fullPage: true,
@@ -161,11 +201,29 @@ test.describe("Clients V2 UI audit", () => {
     });
     expect(await bodyOverflowX(page)).toBe(false);
 
+    // Deep-link
+    const clientUrl = page.url();
+    const clientMatch = clientUrl.match(/client=([0-9a-f-]{36})/i);
+    if (clientMatch) {
+      await page.goto(baseURL + `/clients?client=${clientMatch[1]}`, {
+        waitUntil: "networkidle",
+        timeout: 60_000,
+      });
+      await expect(
+        page.locator(".client-detail, .client-detail--dialog"),
+      ).toBeVisible({ timeout: 20_000 });
+    }
+
     // Mobile detail layer
     await page.setViewportSize({ width: 390, height: 844 });
     await page.waitForTimeout(300);
     expect(await bodyOverflowX(page)).toBe(false);
     const touch = await minTouchTarget(page);
-    expect(touch).toBeGreaterThanOrEqual(40);
+    expect(touch).toBeGreaterThanOrEqual(43.5);
+
+    await page.setViewportSize({ width: 320, height: 568 });
+    await page.waitForTimeout(200);
+    expect(await bodyOverflowX(page)).toBe(false);
+    expect(await minTouchTarget(page)).toBeGreaterThanOrEqual(43.5);
   });
 });

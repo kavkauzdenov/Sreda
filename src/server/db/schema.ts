@@ -525,7 +525,7 @@ export interface Database
     client_id: Generated<string | null>;
     id: string;
     business_id: string;
-    source: "telegram" | "vk" | "max";
+    source: "telegram" | "vk" | "max" | "manual";
     name: string;
     phone: string | null;
     message: string | null;

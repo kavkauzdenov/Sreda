@@ -34,6 +34,10 @@ CREATE TABLE IF NOT EXISTS client_tag (
   CHECK (char_length(color_key) BETWEEN 1 AND 32)
 );
 
+-- Tenant-safe FK target for client_tag_link (business_id, tag_id).
+CREATE UNIQUE INDEX IF NOT EXISTS client_tag_business_id_uidx
+  ON client_tag (business_id, id);
+
 CREATE TABLE IF NOT EXISTS client_tag_link (
   business_id uuid NOT NULL,
   client_id uuid NOT NULL,
@@ -42,8 +46,8 @@ CREATE TABLE IF NOT EXISTS client_tag_link (
   PRIMARY KEY (business_id, client_id, tag_id),
   FOREIGN KEY (business_id, client_id)
     REFERENCES client (business_id, id),
-  FOREIGN KEY (tag_id)
-    REFERENCES client_tag (id) ON DELETE CASCADE
+  FOREIGN KEY (business_id, tag_id)
+    REFERENCES client_tag (business_id, id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS client_tag_link_tag_idx
@@ -63,7 +67,9 @@ CREATE TABLE IF NOT EXISTS client_duplicate_decision (
   FOREIGN KEY (business_id, client_a_id)
     REFERENCES client (business_id, id),
   FOREIGN KEY (business_id, client_b_id)
-    REFERENCES client (business_id, id)
+    REFERENCES client (business_id, id),
+  FOREIGN KEY (business_id, actor_user_id)
+    REFERENCES business_member (business_id, user_id)
 );
 
 CREATE INDEX IF NOT EXISTS client_activity_timeline_idx

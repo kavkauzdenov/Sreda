@@ -107,7 +107,9 @@ export function decodeClientCursor(raw: string): { t: Date; id: string } {
     if (
       typeof parsed.t !== "string" ||
       typeof parsed.id !== "string" ||
-      !/^[0-9a-f-]{36}$/i.test(parsed.id)
+      !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(
+        parsed.id,
+      )
     ) {
       throw new Error("bad");
     }

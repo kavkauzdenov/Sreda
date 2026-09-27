@@ -177,7 +177,7 @@ export async function createLeadForClient(
     {
       method: "POST",
       body: JSON.stringify({
-        source: "telegram",
+        source: "manual",
         name: input.name,
         phone: input.phone || undefined,
         clientId: input.clientId,

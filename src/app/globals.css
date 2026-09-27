@@ -3921,6 +3921,12 @@ ul {
   gap: 24px;
   align-items: start;
 }
+.clients-workspace .button,
+.clients-workspace button:not(.clients-list__row),
+.clients-workspace [role="button"] {
+  min-height: 44px;
+  min-width: 44px;
+}
 .clients-workspace.has-detail {
   grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
 }

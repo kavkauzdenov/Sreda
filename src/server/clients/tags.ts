@@ -6,6 +6,11 @@ import { requireBusiness } from "../access/permissions.ts";
 import { requireUuid } from "../http/validation.ts";
 import { normalizeTagName, type ClientTagDto } from "./types.ts";
 import { clientActivity } from "./service.ts";
+import {
+  assertClientAssignmentAllowed,
+  parseAssigneeInput,
+  resolveAssigneeMember,
+} from "./assignment.ts";
 
 type Db = Kysely<Database>;
 
@@ -195,48 +200,21 @@ export async function assignClient(
     if (!client)
       throw new AppError(404, "CLIENT_NOT_FOUND", "Клиент не найден.");
 
-    let nextAssignee: string | null = null;
-    if (assigneeId === null || assigneeId === "") {
-      nextAssignee = null;
-    } else if (typeof assigneeId === "string") {
-      requireUuid(assigneeId);
-      nextAssignee = assigneeId;
-    } else {
-      throw new AppError(400, "INVALID_ASSIGNEE", "Выберите сотрудника.");
-    }
+    const parsed = parseAssigneeInput(
+      assigneeId === undefined ? null : assigneeId,
+    );
+    const nextAssignee = await resolveAssigneeMember(
+      tx,
+      b.id,
+      parsed === undefined ? null : parsed,
+    );
 
-    const isOwnerAdmin = b.role === "owner" || b.role === "admin";
-    if (!isOwnerAdmin) {
-      // Operator: may only claim unassigned clients onto themselves.
-      if (client.assigned_user_id != null)
-        throw new AppError(
-          403,
-          "FORBIDDEN",
-          "Оператор не может переназначать клиента.",
-        );
-      if (nextAssignee !== userId)
-        throw new AppError(
-          403,
-          "FORBIDDEN",
-          "Оператор может взять клиента только на себя.",
-        );
-    }
-
-    if (nextAssignee) {
-      const member = await tx
-        .selectFrom("business_member")
-        .select("user_id")
-        .where("business_id", "=", b.id)
-        .where("user_id", "=", nextAssignee)
-        .where("status", "=", "active")
-        .executeTakeFirst();
-      if (!member)
-        throw new AppError(
-          400,
-          "INVALID_ASSIGNEE",
-          "Сотрудник недоступен в этом бизнесе.",
-        );
-    }
+    assertClientAssignmentAllowed({
+      role: b.role,
+      actorUserId: userId,
+      currentAssigneeId: client.assigned_user_id,
+      nextAssigneeId: nextAssignee,
+    });
 
     const now = new Date();
     await tx
@@ -284,6 +262,16 @@ export async function assignClient(
     }
     return { assignedUser };
   });
+}
+
+/** Operator (or any member) claims an unassigned client onto the authenticated user. */
+export async function claimClient(
+  db: Db,
+  userId: string,
+  publicId: string,
+  clientId: string,
+) {
+  return assignClient(db, userId, publicId, clientId, userId);
 }
 
 export async function listAssignees(

@@ -14,7 +14,7 @@ import { loadLeadSetupV2 } from "./setup.ts";
 import { getLeadAnalytics, getLeadStatusCounts } from "./analytics.ts";
 
 type Input = {
-  source: "telegram" | "vk" | "max";
+  source: "telegram" | "vk" | "max" | "manual";
   name: string;
   phone?: string | null;
   message?: string | null;
@@ -73,7 +73,7 @@ function clean(input: unknown): Input & { clientId?: string } {
     )
   )
     throw new AppError(400, "INVALID_LEAD", "Проверьте данные заявки.");
-  if (!["telegram", "vk", "max"].includes(String(value.source)))
+  if (!["telegram", "vk", "max", "manual"].includes(String(value.source)))
     throw new AppError(400, "INVALID_LEAD", "Неизвестный канал заявки.");
   const name = typeof value.name === "string" ? value.name.trim() : "";
   if (!name || name.length > 100 || /[\u0000-\u001f\u007f]/.test(name))
@@ -223,7 +223,7 @@ export class LeadService {
       );
     }
     if (filters.source) {
-      if (!["telegram", "vk", "max"].includes(filters.source))
+      if (!["telegram", "vk", "max", "manual"].includes(filters.source))
         throw new AppError(400, "INVALID_SOURCE", "Проверьте источник.");
       query = query.where(
         "lead.source",

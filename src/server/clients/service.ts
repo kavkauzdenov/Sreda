@@ -5,6 +5,11 @@ import type { Database } from "../db/schema.ts";
 import { AppError } from "../http/errors.ts";
 import { requireBusiness } from "../access/permissions.ts";
 import { normalizeTagName } from "./types.ts";
+import {
+  assertClientAssignmentAllowed,
+  parseAssigneeInput,
+  resolveAssigneeMember,
+} from "./assignment.ts";
 type Identity = {
   kind: "telegram" | "vk" | "whatsapp" | "instagram" | "phone" | "email";
   value: string;
@@ -398,11 +403,15 @@ export class ClientService {
     const noteText =
       typeof raw.note === "string" ? raw.note.trim().slice(0, 4000) : "";
     const tagIds = Array.isArray(raw.tagIds)
-      ? raw.tagIds.filter(
-          (v): v is string =>
-            typeof v === "string" &&
-            /^[0-9a-f-]{36}$/i.test(v),
-        )
+      ? raw.tagIds.filter((v): v is string => {
+          if (typeof v !== "string") return false;
+          try {
+            requireUuid(v);
+            return true;
+          } catch {
+            return false;
+          }
+        })
       : [];
     const tagNames = Array.isArray(raw.tags)
       ? raw.tags
@@ -411,7 +420,13 @@ export class ClientService {
           .filter((v) => v.length > 0 && v.length <= 40)
       : [];
     const assignedRaw =
-      raw.assignedUserId ?? raw.assigned_user_id ?? undefined;
+      "assignedUserId" in raw
+        ? raw.assignedUserId
+        : "assigned_user_id" in raw
+          ? raw.assigned_user_id
+          : undefined;
+    const expectedUpdatedAtRaw =
+      raw.updatedAt ?? raw.updated_at ?? raw.expectedUpdatedAt ?? undefined;
 
     return this.db.transaction().execute(async (tx) => {
       const b = await requireBusiness(tx, userId, publicId, "clients.write");
@@ -423,36 +438,58 @@ export class ClientService {
         .execute();
       await requireBusiness(tx, userId, publicId, "clients.write");
 
-      let assignedUserId: string | null | undefined;
-      if (assignedRaw === null || assignedRaw === "") {
-        assignedUserId = null;
-      } else if (typeof assignedRaw === "string") {
-        requireUuid(assignedRaw);
-        const member = await tx
-          .selectFrom("business_member")
-          .select("user_id")
-          .where("business_id", "=", b.id)
-          .where("user_id", "=", assignedRaw)
-          .where("status", "=", "active")
-          .executeTakeFirst();
-        if (!member)
-          throw new AppError(
-            400,
-            "INVALID_ASSIGNEE",
-            "Сотрудник недоступен в этом бизнесе.",
-          );
-        const isOwnerAdmin = b.role === "owner" || b.role === "admin";
-        if (!isOwnerAdmin && assignedRaw !== userId)
-          throw new AppError(
-            403,
-            "FORBIDDEN",
-            "Оператор может назначить клиента только на себя.",
-          );
-        assignedUserId = assignedRaw;
+      let assignedUserId: string | null | undefined = parseAssigneeInput(
+        assignedRaw,
+      );
+      if (assignedUserId !== undefined) {
+        assignedUserId = await resolveAssigneeMember(
+          tx,
+          b.id,
+          assignedUserId,
+        );
       }
 
       const now = new Date();
       if (id) {
+        const existing = await tx
+          .selectFrom("client")
+          .select(["id", "assigned_user_id", "updated_at"])
+          .where("business_id", "=", b.id)
+          .where("id", "=", id)
+          .where("archived_at", "is", null)
+          .forUpdate()
+          .executeTakeFirst();
+        if (!existing)
+          throw new AppError(404, "CLIENT_NOT_FOUND", "Клиент не найден.");
+
+        if (assignedUserId !== undefined) {
+          assertClientAssignmentAllowed({
+            role: b.role,
+            actorUserId: userId,
+            currentAssigneeId: existing.assigned_user_id,
+            nextAssigneeId: assignedUserId,
+          });
+        }
+
+        if (
+          typeof expectedUpdatedAtRaw === "string" &&
+          expectedUpdatedAtRaw.trim()
+        ) {
+          const expected = new Date(expectedUpdatedAtRaw);
+          if (Number.isNaN(expected.getTime()))
+            throw new AppError(
+              400,
+              "INVALID_REVISION",
+              "Некорректная ревизия карточки.",
+            );
+          if (existing.updated_at.getTime() !== expected.getTime())
+            throw new AppError(
+              409,
+              "CLIENT_CHANGED",
+              "Карточка клиента уже была изменена другим сотрудником. Обновите данные.",
+            );
+        }
+
         const patch: Record<string, unknown> = {
           ...input,
           updated_at: now,
@@ -481,7 +518,39 @@ export class ClientService {
           id,
           userId,
         );
+        if (
+          assignedUserId !== undefined &&
+          assignedUserId !== existing.assigned_user_id
+        ) {
+          const type =
+            existing.assigned_user_id && assignedUserId
+              ? "client.reassigned"
+              : assignedUserId
+                ? "client.assigned"
+                : "client.reassigned";
+          await clientActivity(
+            tx,
+            b.id,
+            id,
+            type,
+            `client-assign:${id}:${assignedUserId ?? "none"}:${now.getTime()}`,
+            assignedUserId,
+            userId,
+            {
+              previous: existing.assigned_user_id,
+              next: assignedUserId,
+            },
+          );
+        }
       } else {
+        if (assignedUserId !== undefined) {
+          assertClientAssignmentAllowed({
+            role: b.role,
+            actorUserId: userId,
+            currentAssigneeId: null,
+            nextAssigneeId: assignedUserId,
+          });
+        }
         id = randomUUID();
         await tx
           .insertInto("client")

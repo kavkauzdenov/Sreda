@@ -17,6 +17,7 @@ import {
   createTag,
   detachTag,
   assignClient,
+  claimClient,
   listBusinessTags,
   setProfileNote,
 } from "../src/server/clients/tags.ts";
@@ -495,4 +496,505 @@ test("clients v2: invalid cursor rejected", async () => {
     () => listClientsV2(db, uid, publicId, { cursor: "not-a-cursor", limit: 10 }),
     (e) => e.code === "INVALID_CURSOR",
   );
+});
+
+test("clients v2: PATCH assignment bypass blocked for operator", async () => {
+  const owner = await fixture("owner");
+  const operator = await addMember(owner.b.id, "operator");
+  const other = await addMember(owner.b.id, "admin");
+  const occupied = await makeClient(owner.b.id, {
+    name: "Occupied",
+    assigned_user_id: other,
+  });
+  const free = await makeClient(owner.b.id, { name: "Free" });
+  const svc = new ClientService(db);
+
+  await assert.rejects(
+    () =>
+      svc.save(
+        operator,
+        owner.publicId,
+        { name: "Occupied", assignedUserId: null },
+        occupied,
+      ),
+    (e) => e.code === "FORBIDDEN",
+  );
+  await assert.rejects(
+    () =>
+      svc.save(
+        operator,
+        owner.publicId,
+        { name: "Occupied", assignedUserId: operator },
+        occupied,
+      ),
+    (e) => e.code === "FORBIDDEN",
+  );
+  await assert.rejects(
+    () =>
+      svc.save(
+        operator,
+        owner.publicId,
+        { name: "Occupied", assignedUserId: other },
+        occupied,
+      ),
+    (e) => e.code === "FORBIDDEN",
+  );
+  await assert.rejects(
+    () =>
+      svc.save(
+        operator,
+        owner.publicId,
+        { name: "Free", assignedUserId: other },
+        free,
+      ),
+    (e) => e.code === "FORBIDDEN",
+  );
+
+  // Claim unassigned self via PATCH → OK
+  await svc.save(
+    operator,
+    owner.publicId,
+    { name: "Free", assignedUserId: operator },
+    free,
+  );
+  const claimed = await db
+    .selectFrom("client")
+    .select("assigned_user_id")
+    .where("id", "=", free)
+    .executeTakeFirstOrThrow();
+  assert.equal(claimed.assigned_user_id, operator);
+
+  // Owner may reassign / unassign
+  await svc.save(
+    owner.uid,
+    owner.publicId,
+    { name: "Occupied", assignedUserId: operator },
+    occupied,
+  );
+  await svc.save(
+    owner.uid,
+    owner.publicId,
+    { name: "Occupied", assignedUserId: null },
+    occupied,
+  );
+});
+
+test("clients v2: operator claim unassigned; cannot unassign/reassign occupied", async () => {
+  const owner = await fixture("owner");
+  const operator = await addMember(owner.b.id, "operator");
+  const other = await addMember(owner.b.id, "admin");
+  const free = await makeClient(owner.b.id, { name: "Claim me" });
+  const occupied = await makeClient(owner.b.id, {
+    name: "Taken",
+    assigned_user_id: other,
+  });
+
+  const result = await claimClient(db, operator, owner.publicId, free);
+  assert.equal(result.assignedUser?.id, operator);
+
+  await assert.rejects(
+    () => assignClient(db, operator, owner.publicId, occupied, null),
+    (e) => e.code === "FORBIDDEN",
+  );
+  await assert.rejects(
+    () => assignClient(db, operator, owner.publicId, occupied, operator),
+    (e) => e.code === "FORBIDDEN",
+  );
+  await assert.rejects(
+    () => assignClient(db, operator, owner.publicId, occupied, other),
+    (e) => e.code === "FORBIDDEN",
+  );
+
+  const timeline = await getClientTimeline(
+    db,
+    owner.uid,
+    owner.publicId,
+    free,
+    undefined,
+    20,
+  );
+  assert.ok(timeline.items.some((i) => i.type === "client.assigned"));
+});
+
+test("clients v2: timeline note appears once; mixed keyset stable", async () => {
+  const { uid, b, publicId } = await fixture();
+  const clientId = await makeClient(b.id, { name: "Notes" });
+  const svc = new ClientService(db);
+  await svc.note(uid, publicId, clientId, "Единственная заметка");
+
+  const stamp = new Date("2026-03-15T12:00:00.000Z");
+  const actA = randomUUID();
+  const actB = randomUUID();
+  await db
+    .insertInto("client_activity")
+    .values([
+      {
+        id: actA,
+        business_id: b.id,
+        client_id: clientId,
+        type: "lead.created",
+        event_key: `lead:${actA}`,
+        target_id: actA,
+        actor_user_id: uid,
+        created_at: stamp,
+      },
+      {
+        id: actB,
+        business_id: b.id,
+        client_id: clientId,
+        type: "order.created",
+        event_key: `order:${actB}`,
+        target_id: actB,
+        actor_user_id: uid,
+        created_at: stamp,
+      },
+    ])
+    .execute();
+  const noteId = randomUUID();
+  await db
+    .insertInto("client_note")
+    .values({
+      id: noteId,
+      business_id: b.id,
+      client_id: clientId,
+      actor_user_id: uid,
+      text: "Same stamp note",
+      created_at: stamp,
+    })
+    .execute();
+  // Audit activity that would otherwise duplicate the note stream
+  await db
+    .insertInto("client_activity")
+    .values({
+      id: randomUUID(),
+      business_id: b.id,
+      client_id: clientId,
+      type: "client.note_added",
+      event_key: `client-note:${noteId}`,
+      target_id: noteId,
+      actor_user_id: uid,
+      created_at: stamp,
+    })
+    .execute();
+
+  const full = await getClientTimeline(db, uid, publicId, clientId, undefined, 50);
+  const noteItems = full.items.filter((i) => i.type === "client.note_added");
+  assert.equal(noteItems.length, 2); // svc.note + same stamp note — each once
+  assert.equal(
+    full.items.filter((i) => i.description === "Единственная заметка").length,
+    1,
+  );
+  assert.equal(
+    full.items.filter((i) => i.description === "Same stamp note").length,
+    1,
+  );
+
+  const page1 = await getClientTimeline(db, uid, publicId, clientId, undefined, 1);
+  assert.equal(page1.items.length, 1);
+  assert.equal(page1.hasMore, true);
+  const page2 = await getClientTimeline(
+    db,
+    uid,
+    publicId,
+    clientId,
+    page1.nextCursor,
+    2,
+  );
+  const page3 = await getClientTimeline(
+    db,
+    uid,
+    publicId,
+    clientId,
+    page2.nextCursor,
+    10,
+  );
+  const allIds = [
+    ...page1.items,
+    ...page2.items,
+    ...page3.items,
+  ].map((i) => i.id);
+  assert.equal(new Set(allIds).size, allIds.length);
+  // Same-timestamp activity+note all appear exactly once across pages
+  for (const id of [actA, actB, noteId]) {
+    assert.equal(allIds.filter((x) => x === id).length, 1, id);
+  }
+});
+
+test("clients v2: today filter uses business timezone", async () => {
+  const { uid, b, publicId } = await fixture();
+  await db
+    .updateTable("business")
+    .set({ timezone: "Europe/Kaliningrad" })
+    .where("id", "=", b.id)
+    .execute();
+
+  // Kaliningrad is UTC+2. 22:30 UTC previous calendar day is already "today" in Kaliningrad
+  // when UTC date rolled back but local day did not — pick a time that is after local midnight
+  // but before UTC midnight when that situation applies. Safer: set last_seen to "now"
+  // and also create a client just before local midnight that must be excluded.
+  const { localDay, localInstants } = await import(
+    "../src/server/booking/time.ts"
+  );
+  const now = new Date();
+  const day = localDay(now, "Europe/Kaliningrad");
+  const localMidnight = localInstants(day, 0, "Europe/Kaliningrad")[0];
+  assert.ok(localMidnight);
+
+  const activeToday = await makeClient(b.id, {
+    name: "Today",
+    last_seen_at: new Date(localMidnight.getTime() + 60_000),
+  });
+  const yesterday = await makeClient(b.id, {
+    name: "Yesterday",
+    last_seen_at: new Date(localMidnight.getTime() - 60_000),
+  });
+
+  const page = await listClientsV2(db, uid, publicId, {
+    activity: "today",
+    limit: 50,
+  });
+  assert.ok(page.items.some((c) => c.id === activeToday));
+  assert.equal(page.items.some((c) => c.id === yesterday), false);
+});
+
+test("clients v2: cross-business client_tag_link rejected", async () => {
+  const a = await fixture();
+  const b = await fixture();
+  const clientA = await makeClient(a.b.id, { name: "A" });
+  const tagB = await createTag(db, b.uid, b.publicId, { name: "Чужой" });
+  await assert.rejects(async () => {
+    await db
+      .insertInto("client_tag_link")
+      .values({
+        business_id: a.b.id,
+        client_id: clientA,
+        tag_id: tagB.id,
+      })
+      .execute();
+  });
+});
+
+test("clients v2: public duplicate merged decision blocked", async () => {
+  const { uid, b, publicId } = await fixture();
+  const a = await makeClient(b.id, { phone: "+79991110000" });
+  const twin = await makeClient(b.id, { phone: "+79991110000" });
+  await assert.rejects(
+    () =>
+      decideDuplicate(db, uid, publicId, {
+        clientAId: a,
+        clientBId: twin,
+        decision: "merged",
+      }),
+    (e) => e.code === "INVALID_DECISION",
+  );
+});
+
+test("clients v2: malformed filters rejected", async () => {
+  const { parseListFilters } = await import("../src/server/clients/list.ts");
+  assert.throws(
+    () => parseListFilters(new URLSearchParams("tagId=abc")),
+    (e) => e.code === "INVALID_FILTER",
+  );
+  assert.throws(
+    () => parseListFilters(new URLSearchParams("assignedUserId=abc")),
+    (e) => e.code === "INVALID_FILTER",
+  );
+  assert.throws(
+    () => parseListFilters(new URLSearchParams("activity=hacker")),
+    (e) => e.code === "INVALID_FILTER",
+  );
+  assert.throws(
+    () => parseListFilters(new URLSearchParams("channel=test")),
+    (e) => e.code === "INVALID_FILTER",
+  );
+  const badCursor = Buffer.from(
+    JSON.stringify({ t: new Date().toISOString(), id: "not-a-uuid" }),
+  ).toString("base64url");
+  assert.throws(
+    () => parseListFilters(new URLSearchParams("cursor=" + badCursor)),
+    (e) => e.code === "INVALID_CURSOR" || e.code === "INVALID_ID",
+  );
+});
+
+test("clients v2: phone search normalization variants", async () => {
+  const { uid, b, publicId } = await fixture();
+  const id = await makeClient(b.id, {
+    name: "Phone Norm",
+    phone: "+79991112233",
+  });
+  for (const search of [
+    "79991112233",
+    "+79991112233",
+    "9991112233",
+    "+7 999 111-22-33",
+  ]) {
+    const page = await listClientsV2(db, uid, publicId, { search, limit: 20 });
+    assert.ok(
+      page.items.some((c) => c.id === id),
+      `phone search missed for ${search}`,
+    );
+  }
+});
+
+test("clients v2: optimistic concurrency conflict", async () => {
+  const { uid, b, publicId } = await fixture();
+  const id = await makeClient(b.id, { name: "Rev" });
+  const detail = await getClientDetailV2(db, uid, publicId, id);
+  const svc = new ClientService(db);
+  await svc.save(uid, publicId, { name: "Rev 2" }, id);
+  await assert.rejects(
+    () =>
+      svc.save(
+        uid,
+        publicId,
+        { name: "Rev stale", updatedAt: detail.client.updatedAt },
+        id,
+      ),
+    (e) => e.code === "CLIENT_CHANGED",
+  );
+});
+
+test("clients v2: manual lead source not telegram", async () => {
+  const { uid, b, publicId } = await fixture();
+  await db
+    .insertInto("business_solution")
+    .values({
+      business_id: b.id,
+      solution_code: "leads",
+      status: "active",
+    })
+    .execute();
+  const clientId = await makeClient(b.id, {
+    name: "Lead Client",
+    phone: "+79992223344",
+  });
+  const { LeadService } = await import("../src/server/leads/service.ts");
+  const leads = new LeadService(db);
+  const lead = await leads.create(uid, publicId, {
+    source: "manual",
+    name: "Lead Client",
+    phone: "+79992223344",
+    clientId,
+  });
+  assert.equal(lead.source, "manual");
+  assert.notEqual(lead.source, "telegram");
+  assert.equal(lead.clientId, clientId);
+});
+
+test("clients v2: create order for existing client_id", async () => {
+  const { uid, b, publicId } = await fixture();
+  await db
+    .insertInto("business_solution")
+    .values({
+      business_id: b.id,
+      solution_code: "orders",
+      status: "active",
+    })
+    .execute();
+  const clientId = await makeClient(b.id, {
+    name: "Order Client",
+    phone: "+79993334455",
+  });
+  const { CatalogService, OrderService } = await import(
+    "../src/server/orders/service.ts"
+  );
+  const catalog = new CatalogService(db);
+  const orders = new OrderService(db);
+  const product = await catalog.saveProduct(uid, publicId, {
+    name: "Товар",
+    price: "100",
+    active: true,
+  });
+  const before = await getClientDetailV2(db, uid, publicId, clientId);
+  const order = await orders.checkoutForBusiness(uid, publicId, {
+    platform: "web",
+    request_key: "rk-client-" + randomUUID(),
+    client_id: clientId,
+    customer_name: "Wrong Name",
+    customer_phone: "+79990000000",
+    fulfillment: "pickup",
+    cart_items: [{ product_id: product.id, quantity: 1 }],
+  });
+  assert.equal(order.client_id, clientId);
+  assert.equal(order.customer_name, "Order Client");
+  const after = await getClientDetailV2(db, uid, publicId, clientId);
+  assert.equal(after.stats.orderCount, before.stats.orderCount + 1);
+  const timeline = await getClientTimeline(db, uid, publicId, clientId);
+  assert.ok(timeline.items.some((i) => i.type === "order.created"));
+  // No second client created for this phone mismatch
+  const twins = await db
+    .selectFrom("client")
+    .select("id")
+    .where("business_id", "=", b.id)
+    .where("phone", "=", "+79990000000")
+    .where("archived_at", "is", null)
+    .execute();
+  assert.equal(twins.length, 0);
+});
+
+test("clients v2: create booking for existing client", async () => {
+  const { uid, b, publicId } = await fixture();
+  await db
+    .updateTable("business")
+    .set({ timezone: "Europe/Kaliningrad" })
+    .where("id", "=", b.id)
+    .execute();
+  await db
+    .insertInto("business_solution")
+    .values({
+      business_id: b.id,
+      solution_code: "booking",
+      status: "active",
+      starts_at: new Date(),
+      expires_at: null,
+    })
+    .execute();
+  const { BookingService } = await import("../src/server/booking/service.ts");
+  const svc = new BookingService(db);
+  const service = await svc.configure(uid, publicId, {
+    kind: "service",
+    name: "Стрижка",
+    duration_minutes: 60,
+    buffer_before_minutes: 0,
+    buffer_after_minutes: 0,
+  });
+  const specialist = await svc.configure(uid, publicId, {
+    kind: "specialist",
+    name: "Мастер",
+  });
+  await svc.configure(uid, publicId, {
+    kind: "links",
+    specialist_id: specialist.id,
+    service_ids: [service.id],
+  });
+  for (let weekday = 0; weekday < 7; weekday++)
+    await svc.configure(uid, publicId, {
+      kind: "schedule",
+      specialist_id: specialist.id,
+      weekday,
+      intervals: [{ start: 0, end: 1440 }],
+    });
+  const clientId = await makeClient(b.id, {
+    name: "Booking Client",
+    phone: "+79994445566",
+  });
+  const { localDay, localInstants } = await import(
+    "../src/server/booking/time.ts"
+  );
+  const day = localDay(
+    new Date(Date.now() + 2 * 86400000),
+    "Europe/Kaliningrad",
+  );
+  const starts = localInstants(day, 10 * 60, "Europe/Kaliningrad")[0];
+  assert.ok(starts);
+  const booking = await svc.create(uid, publicId, {
+    client_id: clientId,
+    service_id: service.id,
+    specialist_id: specialist.id,
+    starts_at: starts.toISOString(),
+    request_key: "bk-" + randomUUID(),
+  });
+  assert.equal(booking.client_id, clientId);
+  const after = await getClientDetailV2(db, uid, publicId, clientId);
+  assert.ok(after.stats.bookingCount >= 1);
 });

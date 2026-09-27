@@ -1,3 +1,4 @@
+import { sql } from "kysely";
 import type { Kysely } from "kysely";
 import type { Database } from "../db/schema.ts";
 import { AppError } from "../http/errors.ts";
@@ -45,6 +46,11 @@ function inferEntityType(type: string, targetId: string | null): string | null {
   return null;
 }
 
+/**
+ * Unified timeline via SQL UNION ALL.
+ * client_note is the canonical content for notes;
+ * client_activity type=client.note_added is excluded to avoid duplicates.
+ */
 export async function getClientTimeline(
   db: Db,
   userId: string,
@@ -73,139 +79,91 @@ export async function getClientTimeline(
       const decoded = decodeTimelineCursor(cursor);
       cursorAt = decoded.t;
       cursorId = decoded.id;
-    } catch {
+      requireUuid(cursorId);
+    } catch (e) {
+      if (e instanceof AppError) throw e;
       throw new AppError(400, "INVALID_CURSOR", "Обновите историю.");
     }
   }
 
-  // Unified stream: client_activity + client_note (as client.note_added).
-  // Two queries + merge keeps query count O(1).
-  let activityQ = db
-    .selectFrom("client_activity as a")
-    .leftJoin("user as u", "u.id", "a.actor_user_id")
-    .select([
-      "a.id",
-      "a.type",
-      "a.created_at",
-      "a.target_id",
-      "a.metadata",
-      "u.name as actor",
-    ])
-    .where("a.business_id", "=", b.id)
-    .where("a.client_id", "=", clientId)
-    .orderBy("a.created_at", "desc")
-    .orderBy("a.id", "desc")
-    .limit(take + 1);
-  if (cursorAt && cursorId) {
-    activityQ = activityQ.where((eb) =>
-      eb.or([
-        eb("a.created_at", "<", cursorAt!),
-        eb.and([
-          eb("a.created_at", "=", cursorAt!),
-          eb("a.id", "<", cursorId!),
-        ]),
-      ]),
-    );
-  }
+  const cursorClause = cursorAt && cursorId
+    ? sql`AND (u.created_at, u.id) < (${cursorAt}, ${cursorId})`
+    : sql``;
 
-  let noteQ = db
-    .selectFrom("client_note as n")
-    .leftJoin("user as u", "u.id", "n.actor_user_id")
-    .select([
-      "n.id",
-      "n.text",
-      "n.created_at",
-      "u.name as actor",
-    ])
-    .where("n.business_id", "=", b.id)
-    .where("n.client_id", "=", clientId)
-    .orderBy("n.created_at", "desc")
-    .orderBy("n.id", "desc")
-    .limit(take + 1);
-  if (cursorAt && cursorId) {
-    noteQ = noteQ.where((eb) =>
-      eb.or([
-        eb("n.created_at", "<", cursorAt!),
-        eb.and([
-          eb("n.created_at", "=", cursorAt!),
-          eb("n.id", "<", cursorId!),
-        ]),
-      ]),
-    );
-  }
-
-  const [activities, notes] = await Promise.all([
-    activityQ.execute(),
-    noteQ.execute(),
-  ]);
-
-  type Row = {
+  const result = await sql<{
     id: string;
     type: string;
-    createdAt: Date;
-    title: string;
-    description: string | null;
+    created_at: Date;
+    target_id: string | null;
+    metadata: unknown;
     actor: string | null;
-    entityType: string | null;
-    entityId: string | null;
-    metadata: Record<string, unknown> | null;
-  };
+    note_text: string | null;
+  }>`
+    SELECT * FROM (
+      SELECT
+        a.id::text AS id,
+        a.type,
+        a.created_at,
+        a.target_id::text AS target_id,
+        a.metadata,
+        u.name AS actor,
+        NULL::text AS note_text
+      FROM client_activity AS a
+      LEFT JOIN "user" AS u ON u.id = a.actor_user_id
+      WHERE a.business_id = ${b.id}::uuid
+        AND a.client_id = ${clientId}::uuid
+        AND a.type <> 'client.note_added'
+      UNION ALL
+      SELECT
+        n.id::text AS id,
+        'client.note_added'::text AS type,
+        n.created_at,
+        n.id::text AS target_id,
+        NULL::jsonb AS metadata,
+        u.name AS actor,
+        n.text AS note_text
+      FROM client_note AS n
+      LEFT JOIN "user" AS u ON u.id = n.actor_user_id
+      WHERE n.business_id = ${b.id}::uuid
+        AND n.client_id = ${clientId}::uuid
+    ) AS u
+    WHERE TRUE
+    ${cursorClause}
+    ORDER BY u.created_at DESC, u.id DESC
+    LIMIT ${take + 1}
+  `.execute(db);
 
-  const merged: Row[] = [
-    ...activities.map((a) => ({
-      id: a.id,
-      type: a.type,
-      createdAt: a.created_at,
-      title: activityTitle(a.type, a.metadata),
-      description: null as string | null,
-      actor: a.actor,
-      entityType: inferEntityType(a.type, a.target_id),
-      entityId: a.target_id,
-      metadata:
-        a.metadata && typeof a.metadata === "object"
-          ? (a.metadata as Record<string, unknown>)
-          : null,
-    })),
-    ...notes.map((n) => ({
-      id: n.id,
-      type: "client.note_added",
-      createdAt: n.created_at,
-      title: activityTitle("client.note_added"),
-      description: n.text,
-      actor: n.actor,
-      entityType: "note" as string | null,
-      entityId: n.id,
-      metadata: null as Record<string, unknown> | null,
-    })),
-  ];
-
-  merged.sort((a, b) => {
-    const d = b.createdAt.getTime() - a.createdAt.getTime();
-    if (d !== 0) return d;
-    return b.id < a.id ? -1 : b.id > a.id ? 1 : 0;
-  });
-
-  const page = merged.slice(0, take);
-  const hasMore = merged.length > take;
+  const rows = result.rows;
+  const page = rows.slice(0, take);
+  const hasMore = rows.length > take;
   const last = page[page.length - 1];
 
-  const items: TimelineItemDto[] = page.map((row) => ({
-    id: row.id,
-    type: row.type,
-    createdAt: row.createdAt.toISOString(),
-    title: row.title,
-    description: row.description,
-    actor: row.actor,
-    entityType: row.entityType,
-    entityId: row.entityId,
-    targetPath: targetPath(row.type, row.entityType, row.entityId),
-    metadata: row.metadata,
-  }));
+  const items: TimelineItemDto[] = page.map((row) => {
+    const entityType = inferEntityType(row.type, row.target_id);
+    const metadata =
+      row.metadata && typeof row.metadata === "object"
+        ? (row.metadata as Record<string, unknown>)
+        : null;
+    return {
+      id: row.id,
+      type: row.type,
+      createdAt: new Date(row.created_at).toISOString(),
+      title: activityTitle(row.type, metadata),
+      description: row.note_text,
+      actor: row.actor,
+      entityType,
+      entityId: row.target_id,
+      targetPath: targetPath(row.type, entityType, row.target_id),
+      metadata,
+    };
+  });
 
   return {
     items,
     nextCursor:
-      hasMore && last ? encodeTimelineCursor(last.createdAt, last.id) : null,
+      hasMore && last
+        ? encodeTimelineCursor(new Date(last.created_at), last.id)
+        : null,
     hasMore,
   };
 }

@@ -101,6 +101,24 @@ jobs:
           E2E_BASE_URL: ${{ steps.app.outputs.origin }}
           AUDIT_BASE_URL: ${{ steps.app.outputs.origin }}
         run: npx playwright test e2e/ui-system.spec.mjs --project=webkit
+      - name: Playwright Clients V2 (Chromium)
+        env:
+          E2E_BASE_URL: ${{ steps.app.outputs.origin }}
+          AUDIT_BASE_URL: ${{ steps.app.outputs.origin }}
+          AUDIT_OUTPUT: artifacts/clients-v2-ui-audit
+          E2E_SCREENSHOT_DIR: artifacts/clients-v2-ui-audit
+        run: |
+          mkdir -p artifacts/clients-v2-ui-audit
+          npx playwright test e2e/clients-v2.spec.mjs --project=chromium
+      - name: Playwright Clients V2 (WebKit)
+        env:
+          E2E_BASE_URL: ${{ steps.app.outputs.origin }}
+          AUDIT_BASE_URL: ${{ steps.app.outputs.origin }}
+          AUDIT_OUTPUT: artifacts/clients-v2-ui-audit
+          E2E_SCREENSHOT_DIR: artifacts/clients-v2-ui-audit
+        run: |
+          mkdir -p artifacts/clients-v2-ui-audit
+          npx playwright test e2e/clients-v2.spec.mjs --project=webkit
       - name: Playwright contrast computed styles
         env:
           E2E_BASE_URL: ${{ steps.app.outputs.origin }}
@@ -221,6 +239,7 @@ jobs:
           path: |
             artifacts/responsive-audit/
             artifacts/leads-v2-ui-audit/
+            artifacts/clients-v2-ui-audit/
             artifacts/ci-ui-app.json
             artifacts/ci-ui-app.log
           retention-days: 14

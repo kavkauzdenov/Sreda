@@ -14,6 +14,7 @@ import {
   createTag,
   detachTag,
   assignClient,
+  claimClient,
   listAssignees,
   listBusinessTags,
   setProfileNote,
@@ -228,6 +229,10 @@ export function crmHandler(
             id,
             body.assignedUserId ?? body.assigned_user_id ?? null,
           ),
+        );
+      if (body.action === "claim")
+        return json(
+          await claimClient(runtime.db, user.id, businessId, id),
         );
       if (body.action === "profile_note")
         return json(

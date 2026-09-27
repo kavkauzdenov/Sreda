@@ -227,8 +227,12 @@ export async function decideDuplicate(
   requireUuid(bId);
   if (a === bId)
     throw new AppError(400, "INVALID_PAIR", "Выберите двух разных клиентов.");
-  if (decision !== "separate" && decision !== "merged")
-    throw new AppError(400, "INVALID_DECISION", "Укажите решение.");
+  if (decision !== "separate")
+    throw new AppError(
+      400,
+      "INVALID_DECISION",
+      "Публично допускается только решение «разные клиенты». Объединение выполняется через merge.",
+    );
 
   const [clientA, clientB] = pairClients(a, bId);
   return db.transaction().execute(async (tx) => {

@@ -3,6 +3,8 @@ import type { Kysely } from "kysely";
 import type { Database } from "../db/schema.ts";
 import { AppError } from "../http/errors.ts";
 import { requireBusiness } from "../access/permissions.ts";
+import { requireUuid } from "../http/validation.ts";
+import { localDay, localInstants } from "../booking/time.ts";
 import {
   type ClientListFilters,
   type ClientListItemDto,
@@ -14,30 +16,73 @@ import {
 
 type Db = Kysely<Database>;
 
+const CHANNELS = new Set(["telegram", "vk", "whatsapp", "instagram", ""]);
+const ACTIVITIES = new Set(["today", "7d", "30d", "inactive", ""]);
+
 function parseBool(value: unknown): boolean {
   return value === true || value === "1" || value === "true";
+}
+
+function optionalUuidParam(
+  value: string | null,
+  label: string,
+): string | undefined {
+  if (value == null || value === "") return undefined;
+  try {
+    requireUuid(value);
+  } catch {
+    throw new AppError(400, "INVALID_FILTER", `Некорректный ${label}.`);
+  }
+  return value;
 }
 
 export function parseListFilters(
   params: URLSearchParams,
 ): ClientListFilters {
-  const limitRaw = Number(params.get("limit") ?? 50);
-  const limit = Number.isFinite(limitRaw)
-    ? Math.min(100, Math.max(1, Math.floor(limitRaw)))
-    : 50;
+  const limitRaw = params.get("limit");
+  let limit = 50;
+  if (limitRaw != null && limitRaw !== "") {
+    const n = Number(limitRaw);
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1 || n > 100)
+      throw new AppError(400, "INVALID_FILTER", "Лимит должен быть от 1 до 100.");
+    limit = n;
+  }
+
+  const channel = (params.get("channel") ?? "") as ClientListFilters["channel"];
+  if (!CHANNELS.has(channel))
+    throw new AppError(400, "INVALID_FILTER", "Проверьте канал.");
+
+  const activity = (params.get("activity") ?? "") as ClientListFilters["activity"];
+  if (!ACTIVITIES.has(activity))
+    throw new AppError(400, "INVALID_FILTER", "Проверьте фильтр активности.");
+
+  const cursor = params.get("cursor") ?? undefined;
+  if (cursor) {
+    try {
+      const decoded = decodeClientCursor(cursor);
+      requireUuid(decoded.id);
+    } catch (e) {
+      if (e instanceof AppError) throw e;
+      throw new AppError(400, "INVALID_CURSOR", "Обновите список клиентов.");
+    }
+  }
+
   return {
     search: (params.get("search") ?? "").trim().slice(0, 100),
-    channel: (params.get("channel") ?? "") as ClientListFilters["channel"],
-    activity: (params.get("activity") ?? "") as ClientListFilters["activity"],
+    channel,
+    activity,
     hasLeads: parseBool(params.get("hasLeads")),
     hasOrders: parseBool(params.get("hasOrders")),
     hasBookings: parseBool(params.get("hasBookings")),
     hasOpenConversation: parseBool(params.get("hasOpenConversation")),
     hasNotes: parseBool(params.get("hasNotes")),
-    tagId: params.get("tagId") ?? undefined,
-    assignedUserId: params.get("assignedUserId") ?? undefined,
+    tagId: optionalUuidParam(params.get("tagId"), "тег"),
+    assignedUserId: optionalUuidParam(
+      params.get("assignedUserId"),
+      "ответственный",
+    ),
     newOnly: parseBool(params.get("newOnly")),
-    cursor: params.get("cursor") ?? undefined,
+    cursor,
     limit,
   };
 }
@@ -46,8 +91,9 @@ function searchNeedle(search: string): string {
   return search.replace(/[%_\\]/g, "\\$&");
 }
 
+/** Digits-only needle for phone search (E.164 stored form). */
 function normalizePhoneSearch(search: string): string | null {
-  const digits = search.replace(/[^\d+]/g, "");
+  const digits = search.replace(/\D/g, "");
   if (digits.length < 5) return null;
   return digits;
 }
@@ -59,6 +105,11 @@ export async function listClientsV2(
   filters: ClientListFilters,
 ): Promise<ClientListResponse> {
   const b = await requireBusiness(db, userId, publicId, "clients.read");
+  const business = await db
+    .selectFrom("business")
+    .select("timezone")
+    .where("id", "=", b.id)
+    .executeTakeFirstOrThrow();
   const limit = filters.limit ?? 50;
   const now = Date.now();
 
@@ -116,6 +167,9 @@ export async function listClientsV2(
         ),
       ];
       if (phone) {
+        parts.push(
+          sql<boolean>`regexp_replace(coalesce(c.phone, ''), '\\D', '', 'g') like ${"%" + phone + "%"}`,
+        );
         parts.push(eb("c.phone", "ilike", "%" + phone + "%"));
       } else {
         parts.push(eb("c.phone", "ilike", like));
@@ -125,8 +179,6 @@ export async function listClientsV2(
   }
 
   if (filters.channel) {
-    if (!["telegram", "vk", "whatsapp", "instagram"].includes(filters.channel))
-      throw new AppError(400, "INVALID_FILTER", "Проверьте канал.");
     q = q.where((eb) =>
       eb.exists(
         eb
@@ -140,8 +192,10 @@ export async function listClientsV2(
   }
 
   if (filters.activity === "today") {
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
+    const day = localDay(new Date(), business.timezone);
+    const start = localInstants(day, 0, business.timezone)[0];
+    if (!start)
+      throw new AppError(500, "TIMEZONE_ERROR", "Не удалось вычислить локальную полночь.");
     q = q.where("c.last_seen_at", ">=", start);
   } else if (filters.activity === "7d") {
     q = q.where("c.last_seen_at", ">=", new Date(now - 7 * 86400000));
@@ -223,7 +277,9 @@ export async function listClientsV2(
     let cursor;
     try {
       cursor = decodeClientCursor(filters.cursor);
-    } catch {
+      requireUuid(cursor.id);
+    } catch (e) {
+      if (e instanceof AppError) throw e;
       throw new AppError(400, "INVALID_CURSOR", "Обновите список клиентов.");
     }
     q = q.where((eb) =>
