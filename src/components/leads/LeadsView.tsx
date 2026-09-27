@@ -73,6 +73,10 @@ export function LeadsView() {
         <LeadWorkspace
           key={`${currentBusiness.id}:${currentBusiness.role}`}
           businessId={currentBusiness.id}
+          canAssign={
+            currentBusiness.role === "owner" ||
+            currentBusiness.role === "admin"
+          }
         />
       ) : (
         <p>Выберите бизнес.</p>
@@ -81,7 +85,13 @@ export function LeadsView() {
   );
 }
 
-function LeadWorkspace({ businessId }: { businessId: string }) {
+function LeadWorkspace({
+  businessId,
+  canAssign,
+}: {
+  businessId: string;
+  canAssign: boolean;
+}) {
   const [period, setPeriod] = useState<LeadPeriod>(7);
   const [filters, setFilters] = useState<LeadFilterValues>({
     status: "all",
@@ -331,6 +341,7 @@ function LeadWorkspace({ businessId }: { businessId: string }) {
               onClose={() => setSelected(null)}
               onUpdated={onLeadUpdated}
               onOpenLead={setSelected}
+              canAssign={canAssign}
               variant="panel"
             />
           ) : null}
@@ -346,6 +357,7 @@ function LeadWorkspace({ businessId }: { businessId: string }) {
             onClose={() => setSelected(null)}
             onUpdated={onLeadUpdated}
             onOpenLead={setSelected}
+            canAssign={canAssign}
             variant="dialog"
           />
         </div>
