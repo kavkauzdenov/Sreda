@@ -311,11 +311,16 @@ function WizardSteps({
     });
   }
 
-  function toggleChannel(channel: LeadChannel) {
+  async function toggleChannel(channel: LeadChannel) {
     const channels = draft.channels.includes(channel)
       ? draft.channels.filter((c) => c !== channel)
       : [...draft.channels, channel];
-    setDraft({ ...draft, channels });
+    const next = { ...draft, channels };
+    setDraft(next);
+    setReadiness(null);
+    // Channel readiness must reflect the choice visible on this screen,
+    // not the previously persisted setup.
+    await save(next, { silent: true });
   }
 
   async function launch() {
@@ -506,7 +511,7 @@ function WizardSteps({
                         <input
                           type="checkbox"
                           checked={draft.channels.includes(channel)}
-                          onChange={() => toggleChannel(channel)}
+                          onChange={() => void toggleChannel(channel)}
                           aria-label={platformLabel(channel)}
                         />
                       </label>
