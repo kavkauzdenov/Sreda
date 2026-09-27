@@ -306,8 +306,9 @@ export class SolutionService {
           }),
         )
         .execute();
-      await audit(tx, id, userId, "solution.activated", id, {
+      await audit(tx, id, userId, "settings_changed", id, {
         solution: "leads",
+        event: "launched",
       });
       await trackProductEvent(tx, {
         businessId: id,

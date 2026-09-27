@@ -134,8 +134,6 @@ function toField(row: {
   };
 }
 
-type Db = Kysely<Database> | Transaction<Database>;
-
 export async function syncLeadFormFields(
   tx: Db,
   businessId: string,

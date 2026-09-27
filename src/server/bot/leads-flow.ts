@@ -1,6 +1,7 @@
 import type { Transaction } from "kysely";
 import type { Database } from "../db/schema.ts";
 import type { InboundAttachment } from "../attachments/service.ts";
+import { MAX_ATTACHMENT } from "../attachments/storage.ts";
 import type { OutboxButton } from "./types.ts";
 import { createLead } from "../leads/service.ts";
 import { loadLeadSetupV2 } from "../leads/setup.ts";
@@ -14,6 +15,7 @@ import {
 } from "../leads/validation.ts";
 import { getAvailableCustomerActions } from "../solutions/customer-actions.ts";
 import { isLeadCustomerReady } from "../leads/readiness.ts";
+import { randomUUID } from "node:crypto";
 
 type Queue = (
   message: string,
@@ -331,14 +333,42 @@ export async function leadsFlow(
         returnToReview: Boolean(readMeta(current.config).returnToReview),
       });
     }
-    const ids = (input.attachments ?? [])
-      .map((a) => a.id)
-      .filter(Boolean);
-    if (!ids.length) {
-      await queue(promptForField(field), withNav(keyboardForField(field), current.position));
+    const files = input.attachments ?? [];
+    if (!files.length) {
+      await queue(
+        promptForField(field),
+        withNav(keyboardForField(field), current.position),
+      );
       return true;
     }
-    // Ownership already enforced when attachments were stored for this business.
+    const ids: string[] = [];
+    for (const file of files.slice(0, 10)) {
+      if (file.size && file.size > MAX_ATTACHMENT) continue;
+      const id = randomUUID();
+      await tx
+        .insertInto("attachment")
+        .values({
+          id,
+          business_id: businessId,
+          type: file.type,
+          provider: platform,
+          storage_key: null,
+          connection_id: connectionId,
+          external: JSON.stringify(file.external),
+          filename: file.filename.slice(0, 150),
+          mime_type: file.mime,
+          size_bytes: file.size ? String(file.size) : null,
+        })
+        .execute();
+      ids.push(id);
+    }
+    if (!ids.length) {
+      await queue(
+        promptForField(field),
+        withNav(keyboardForField(field), current.position),
+      );
+      return true;
+    }
     answers[field.fieldKey] = ids;
     return advance(tx, {
       input,
@@ -391,7 +421,11 @@ function withNav(buttons: string[], position: number): string[] {
   return [...without, "Назад", "Отмена"];
 }
 
-function readMeta(configJson: string): Record<string, unknown> {
+function readMeta(configJson: string): {
+  selectPage: number;
+  multi: string[];
+  returnToReview: boolean;
+} {
   try {
     const parsed = JSON.parse(configJson) as Record<string, unknown>;
     const flow =
@@ -400,7 +434,9 @@ function readMeta(configJson: string): Record<string, unknown> {
         : parsed;
     return {
       selectPage: typeof flow.selectPage === "number" ? flow.selectPage : 0,
-      multi: Array.isArray(flow.multi) ? flow.multi : [],
+      multi: Array.isArray(flow.multi)
+        ? flow.multi.filter((x): x is string => typeof x === "string")
+        : [],
       returnToReview: flow.returnToReview === true,
     };
   } catch {
