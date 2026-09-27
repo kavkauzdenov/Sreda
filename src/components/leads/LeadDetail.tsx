@@ -11,6 +11,7 @@ import { isDemoMode } from "@/lib/dataMode";
 import {
   allowedLeadTransitions,
   leadStatusLabel,
+  leadTransitionActionLabel,
   LEAD_STATUS_LABELS,
 } from "@/lib/leadStatus";
 import type { Lead, LeadStatus } from "@/types";
@@ -324,7 +325,7 @@ export function LeadDetail({
                       </option>
                       {transitions.map((value) => (
                         <option key={value} value={value}>
-                          {leadStatusLabel(value)}
+                          {leadTransitionActionLabel(detail.status, value)}
                         </option>
                       ))}
                     </select>

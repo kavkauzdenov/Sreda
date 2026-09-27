@@ -1,5 +1,9 @@
 -- Leads V2: additive indexes for list/filter/CRM/history lookups.
 -- No destructive changes. Safe on existing data.
+--
+-- Index audit: lead_status_history (business_id, lead_id, created_at)
+-- already exists as lead_status_history_lead from migration 034.
+-- Do not recreate or DROP.
 
 CREATE INDEX IF NOT EXISTS lead_business_status_created_idx
   ON "lead" (business_id, status, created_at DESC);

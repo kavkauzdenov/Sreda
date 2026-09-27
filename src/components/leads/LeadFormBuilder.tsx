@@ -29,12 +29,20 @@ const FIELD_TYPES: { value: string; label: string }[] = [
   { value: "multiselect", label: "Несколько вариантов" },
   { value: "date", label: "Дата" },
   { value: "checkbox", label: "Флажок" },
+  { value: "attachment", label: "Фото / файл" },
   { value: "address", label: "Адрес" },
   { value: "budget", label: "Бюджет" },
   { value: "service", label: "Услуга" },
   { value: "message", label: "Сообщение" },
-  { value: "attachment", label: "Файл" },
 ];
+
+/** Types offered when creating a new field (system `name` is not creatable). */
+export const LEAD_FORM_BUILDER_CREATE_TYPES = FIELD_TYPES;
+
+export function leadFormBuilderTypeLabel(value: string) {
+  if (value === "name") return "Имя";
+  return FIELD_TYPES.find((item) => item.value === value)?.label ?? value;
+}
 
 function keyFromLabel(label: string) {
   const base = label
@@ -49,7 +57,7 @@ function keyFromLabel(label: string) {
 }
 
 function typeLabel(value: string) {
-  return FIELD_TYPES.find((item) => item.value === value)?.label ?? value;
+  return leadFormBuilderTypeLabel(value);
 }
 
 function optionsToText(options: unknown): string {
@@ -98,6 +106,7 @@ export function LeadFormBuilder({
   const [newLabel, setNewLabel] = useState("");
   const [newType, setNewType] = useState("text");
   const [newRequired, setNewRequired] = useState(false);
+  const [newOptions, setNewOptions] = useState("");
   const [pendingPreset, setPendingPreset] = useState<LeadFormPresetId | null>(
     null,
   );
@@ -227,6 +236,14 @@ export function LeadFormBuilder({
     const field = fields.find((f) => f.id === editingId);
     if (!field) return;
     const isName = field.fieldKey === "name";
+    const nextType = isName ? "name" : editType;
+    if (
+      (nextType === "select" || nextType === "multiselect") &&
+      textToOptions(editOptions).length < 1
+    ) {
+      setError("Добавьте хотя бы один вариант списка.");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -235,11 +252,11 @@ export function LeadFormBuilder({
         body: JSON.stringify({
           fieldKey: field.fieldKey,
           label: editLabel.trim() || field.label,
-          fieldType: isName ? "name" : editType,
+          fieldType: nextType,
           required: isName ? true : editRequired,
           placeholder: editPlaceholder,
           options:
-            editType === "select" || editType === "multiselect"
+            nextType === "select" || nextType === "multiselect"
               ? textToOptions(editOptions)
               : [],
           position: field.position ?? 0,
@@ -320,6 +337,13 @@ export function LeadFormBuilder({
       setError("Укажите название поля.");
       return;
     }
+    if (
+      (newType === "select" || newType === "multiselect") &&
+      textToOptions(newOptions).length < 1
+    ) {
+      setError("Добавьте хотя бы один вариант списка.");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -330,12 +354,17 @@ export function LeadFormBuilder({
           label: text,
           fieldType: newType,
           required: newRequired,
+          options:
+            newType === "select" || newType === "multiselect"
+              ? textToOptions(newOptions)
+              : [],
           position: fields.length,
         }),
       });
       setNewLabel("");
       setNewType("text");
       setNewRequired(false);
+      setNewOptions("");
       await refresh();
       setNotice("Поле добавлено.");
     } catch (e) {
@@ -611,6 +640,21 @@ export function LeadFormBuilder({
               ))}
             </select>
           </label>
+          {(newType === "select" || newType === "multiselect") && (
+            <label className="field">
+              <span className="field__label">
+                Варианты (каждый с новой строки)
+              </span>
+              <textarea
+                className="field__control"
+                rows={3}
+                value={newOptions}
+                disabled={busy}
+                onChange={(e) => setNewOptions(e.target.value)}
+                placeholder={"Вариант 1\nВариант 2"}
+              />
+            </label>
+          )}
           <label className="lead-form-fields-required">
             <input
               type="checkbox"

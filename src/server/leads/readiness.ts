@@ -200,7 +200,23 @@ export async function getLeadReadiness(
   return { ready, checks, setup, revision };
 }
 
-export function leadSolutionCardState(readiness: LeadReadiness, entitled: boolean) {
+export function leadSolutionCardState(
+  readiness: LeadReadiness,
+  entitled: boolean,
+) {
+  const entitlementFail = readiness.checks.find(
+    (c) => c.code === "ENTITLEMENT" && !c.ok,
+  );
+  if (entitlementFail) {
+    return {
+      state: "paused" as const,
+      label: "Выключено",
+      detail: entitlementFail.message,
+      actionLabel: "Открыть решения",
+      href: entitlementFail.cta?.href ?? "/solutions",
+    };
+  }
+
   if (entitled && readiness.ready && readiness.setup.completed) {
     return {
       state: "active" as const,
@@ -209,6 +225,7 @@ export function leadSolutionCardState(readiness: LeadReadiness, entitled: boolea
       href: "/leads",
     };
   }
+
   const channelFail = readiness.checks.find(
     (c) =>
       !c.ok &&
@@ -223,6 +240,7 @@ export function leadSolutionCardState(readiness: LeadReadiness, entitled: boolea
       href: channelFail.cta?.href ?? "/connections",
     };
   }
+
   if (readiness.ready && !readiness.setup.completed) {
     return {
       state: "ready" as const,
@@ -231,6 +249,7 @@ export function leadSolutionCardState(readiness: LeadReadiness, entitled: boolea
       href: "/solutions/leads/setup",
     };
   }
+
   if (readiness.setup.setupStep > 0 || readiness.setup.completed) {
     return {
       state: "in_progress" as const,
@@ -239,6 +258,7 @@ export function leadSolutionCardState(readiness: LeadReadiness, entitled: boolea
       href: "/solutions/leads/setup",
     };
   }
+
   return {
     state: "not_configured" as const,
     label: "Не настроено",

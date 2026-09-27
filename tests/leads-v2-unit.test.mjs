@@ -10,6 +10,11 @@ import {
   leadWaitMeta,
 } from "../src/server/leads/status.ts";
 import {
+  LEAD_STATUS_TRANSITIONS,
+  leadTransitionActionLabel,
+} from "../src/lib/leadStatus.ts";
+import { leadSolutionCardState } from "../src/server/leads/readiness.ts";
+import {
   parseLeadSetupV2,
   convertV1ToV2,
   validateLeadSetupV2,
@@ -18,6 +23,10 @@ import {
   newLeadSetupV2,
   DEFAULT_BUTTON_LABEL,
 } from "../src/lib/leadSetupV2.ts";
+import {
+  LEAD_FORM_BUILDER_CREATE_TYPES,
+  leadFormBuilderTypeLabel,
+} from "../src/components/leads/LeadFormBuilder.tsx";
 
 function field(partial) {
   return {
@@ -203,6 +212,7 @@ test("allowedLeadTransitions covers all statuses", () => {
 test("assertLeadTransition allows and rejects correctly", () => {
   assertLeadTransition("new", "processing");
   assertLeadTransition("new", "new");
+  assertLeadTransition("processing", "new");
   assert.throws(
     () => assertLeadTransition("new", "completed"),
     (err) =>
@@ -218,6 +228,168 @@ test("assertLeadTransition allows and rejects correctly", () => {
       typeof err === "object" &&
       err.code === "INVALID_STATUS_TRANSITION",
   );
+});
+
+test("status transitions: every from→to pair allowed or forbidden", () => {
+  const statuses = Object.keys(LEAD_STATUS_TRANSITIONS);
+  for (const from of statuses) {
+    const allowed = new Set(LEAD_STATUS_TRANSITIONS[from]);
+    for (const to of statuses) {
+      if (from === to || allowed.has(to)) {
+        assert.doesNotThrow(() => assertLeadTransition(from, to));
+      } else {
+        assert.throws(
+          () => assertLeadTransition(from, to),
+          (err) =>
+            err &&
+            typeof err === "object" &&
+            err.code === "INVALID_STATUS_TRANSITION",
+          `${from} → ${to} must be forbidden`,
+        );
+      }
+    }
+  }
+  assert.equal(
+    leadTransitionActionLabel("processing", "new"),
+    "Вернуть в новые",
+  );
+  assert.equal(
+    leadTransitionActionLabel("new", "processing"),
+    "Взять в работу",
+  );
+});
+
+test("leadSolutionCardState table-driven states", () => {
+  const baseSetup = {
+    version: 2,
+    setupStep: 0,
+    completed: false,
+    channels: [],
+    buttonLabel: "Оставить заявку",
+    greeting: "Привет",
+    finalMessage: "Спасибо",
+    notifyOwner: true,
+    notifyAssignee: true,
+    slaMinutes: null,
+  };
+
+  const cases = [
+    {
+      name: "not configured",
+      entitled: false,
+      readiness: {
+        ready: false,
+        checks: [{ code: "ENTITLEMENT", ok: true }],
+        setup: { ...baseSetup },
+        revision: 0,
+      },
+      expect: "not_configured",
+    },
+    {
+      name: "in progress",
+      entitled: true,
+      readiness: {
+        ready: false,
+        checks: [
+          { code: "ENTITLEMENT", ok: true },
+          { code: "FORM_FIELDS", ok: false, message: "Добавьте поля" },
+        ],
+        setup: { ...baseSetup, setupStep: 2 },
+        revision: 1,
+      },
+      expect: "in_progress",
+    },
+    {
+      name: "ready to launch",
+      entitled: false,
+      readiness: {
+        ready: true,
+        checks: [{ code: "ENTITLEMENT", ok: true }],
+        setup: { ...baseSetup, setupStep: 5, completed: false },
+        revision: 2,
+      },
+      expect: "ready",
+    },
+    {
+      name: "active",
+      entitled: true,
+      readiness: {
+        ready: true,
+        checks: [{ code: "ENTITLEMENT", ok: true }],
+        setup: { ...baseSetup, setupStep: 6, completed: true },
+        revision: 3,
+      },
+      expect: "active",
+    },
+    {
+      name: "channel attention",
+      entitled: true,
+      readiness: {
+        ready: false,
+        checks: [
+          { code: "ENTITLEMENT", ok: true },
+          {
+            code: "CHANNEL_TELEGRAM",
+            ok: false,
+            message: "Бот Telegram недоступен.",
+            cta: { label: "Подключения", href: "/connections" },
+          },
+        ],
+        setup: { ...baseSetup, setupStep: 6, completed: true },
+        revision: 4,
+      },
+      expect: "attention",
+    },
+    {
+      name: "paused/disabled",
+      entitled: false,
+      readiness: {
+        ready: false,
+        checks: [
+          {
+            code: "ENTITLEMENT",
+            ok: false,
+            message: "Решение выключено. Включите его в разделе «Решения».",
+            cta: { label: "Открыть решения", href: "/solutions" },
+          },
+        ],
+        setup: { ...baseSetup, setupStep: 6, completed: true },
+        revision: 5,
+      },
+      expect: "paused",
+    },
+  ];
+
+  for (const row of cases) {
+    const result = leadSolutionCardState(row.readiness, row.entitled);
+    assert.equal(result.state, row.expect, row.name);
+  }
+});
+
+test("LeadFormBuilder covers backend-supported field types", () => {
+  const createValues = LEAD_FORM_BUILDER_CREATE_TYPES.map((t) => t.value);
+  for (const type of [
+    "text",
+    "textarea",
+    "phone",
+    "email",
+    "number",
+    "select",
+    "multiselect",
+    "date",
+    "checkbox",
+    "attachment",
+    "address",
+    "budget",
+    "service",
+    "message",
+  ]) {
+    assert.ok(createValues.includes(type), `missing create type ${type}`);
+  }
+  assert.ok(!createValues.includes("name"), "system name is not creatable");
+  assert.equal(leadFormBuilderTypeLabel("multiselect"), "Несколько вариантов");
+  assert.equal(leadFormBuilderTypeLabel("name"), "Имя");
+  assert.equal(leadFormBuilderTypeLabel("select"), "Список");
 });
 
 test("leadWaitMeta SLA labels", () => {

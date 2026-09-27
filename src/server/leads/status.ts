@@ -1,31 +1,16 @@
 import type { LeadStatus } from "../db/schema.ts";
 import { AppError } from "../http/errors.ts";
+import {
+  LEAD_STATUS_LABELS,
+  LEAD_STATUS_TRANSITIONS,
+  allowedLeadTransitions,
+} from "../../lib/leadStatus.ts";
 
-const ALLOWED: Record<LeadStatus, LeadStatus[]> = {
-  new: ["processing", "rejected", "closed"],
-  processing: ["waiting_customer", "completed", "rejected", "closed", "new"],
-  waiting_customer: ["processing", "completed", "closed"],
-  completed: [],
-  rejected: [],
-  closed: [],
-};
-
-export const LEAD_STATUS_LABELS: Record<LeadStatus, string> = {
-  new: "Новая",
-  processing: "В работе",
-  waiting_customer: "Ждём клиента",
-  completed: "Выполнена",
-  rejected: "Отклонена",
-  closed: "Закрыта",
-};
-
-export function allowedLeadTransitions(from: LeadStatus): LeadStatus[] {
-  return ALLOWED[from] ?? [];
-}
+export { LEAD_STATUS_LABELS, allowedLeadTransitions };
 
 export function assertLeadTransition(from: LeadStatus, to: LeadStatus) {
   if (from === to) return;
-  if (!ALLOWED[from]?.includes(to)) {
+  if (!LEAD_STATUS_TRANSITIONS[from]?.includes(to)) {
     throw new AppError(
       400,
       "INVALID_STATUS_TRANSITION",
