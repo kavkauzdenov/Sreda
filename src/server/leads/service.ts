@@ -9,6 +9,10 @@ import { matchClient, clientActivity } from "../clients/service.ts";
 import { notify, resolveByEventKey } from "../notifications/service.ts";
 import { requireBusiness } from "../access/permissions.ts";
 import { assertEntitlement } from "../billing/entitlement.ts";
+import { assertLeadTransition, leadWaitMeta } from "./status.ts";
+import { loadLeadSetupV2 } from "./setup.ts";
+import { getLeadAnalytics, getLeadStatusCounts } from "./analytics.ts";
+
 type Input = {
   source: "telegram" | "vk" | "max";
   name: string;
@@ -54,9 +58,16 @@ function clean(input: unknown): Input {
   if (
     Object.keys(value).some(
       (key) =>
-        !["source", "name", "phone", "message", "externalEventId"].includes(
-          key,
-        ),
+        ![
+          "source",
+          "name",
+          "phone",
+          "message",
+          "externalEventId",
+          "answers",
+          "platformUserId",
+          "username",
+        ].includes(key),
     )
   )
     throw new AppError(400, "INVALID_LEAD", "Проверьте данные заявки.");
@@ -80,6 +91,11 @@ function clean(input: unknown): Input {
     message: optional("message", 2000),
     externalEventId: optional("externalEventId", 200),
   };
+}
+
+function emailFromAnswers(answers: Record<string, unknown> | undefined) {
+  const v = answers?.email;
+  return typeof v === "string" && v ? v : null;
 }
 
 export class LeadService {
@@ -108,20 +124,40 @@ export class LeadService {
       source?: string;
       from?: string;
       until?: string;
+      processingBy?: string;
     } = {},
   ) {
     const publicBusinessId = businessId;
     businessId = await this.resolve(userId, businessId);
     if (status && !statuses.includes(status))
       throw new AppError(400, "INVALID_STATUS", "Неизвестный статус.");
+    const { setup } = await loadLeadSetupV2(this.db, businessId);
+    const sla = setup.processing.firstResponseSlaMinutes;
     // API dates have millisecond precision; cursor ordering must use the same precision.
     const created = sql<Date>`date_trunc('milliseconds', created_at)`;
     let query = this.db
       .selectFrom("lead")
-      .selectAll()
-      .where("business_id", "=", businessId)
+      .leftJoin("user", "user.id", "lead.processing_by")
+      .select([
+        "lead.id",
+        "lead.business_id",
+        "lead.client_id",
+        "lead.source",
+        "lead.name",
+        "lead.phone",
+        "lead.message",
+        "lead.status",
+        "lead.external_event_id",
+        "lead.answers",
+        "lead.processing_by",
+        "lead.processing_at",
+        "lead.created_at",
+        "lead.updated_at",
+        "user.name as processing_name",
+      ])
+      .where("lead.business_id", "=", businessId)
       .orderBy(created, "desc")
-      .orderBy("id", "desc")
+      .orderBy("lead.id", "desc")
       .limit(100);
     if (before) {
       const [date, id, extra] = before.split("|");
@@ -139,7 +175,7 @@ export class LeadService {
       query = query.where((eb) =>
         eb.or([
           eb(created, "<", new Date(date)),
-          eb.and([eb(created, "=", new Date(date)), eb("id", "<", id)]),
+          eb.and([eb(created, "=", new Date(date)), eb("lead.id", "<", id)]),
         ]),
       );
     }
@@ -148,15 +184,28 @@ export class LeadService {
         throw new AppError(400, "INVALID_SEARCH", "Слишком длинный запрос.");
       query = query.where((eb) =>
         eb.or([
-          eb("name", "ilike", "%" + filters.search + "%"),
-          eb("phone", "ilike", "%" + filters.search + "%"),
+          eb("lead.name", "ilike", "%" + filters.search + "%"),
+          eb("lead.phone", "ilike", "%" + filters.search + "%"),
         ]),
       );
     }
     if (filters.source) {
       if (!["telegram", "vk", "max"].includes(filters.source))
         throw new AppError(400, "INVALID_SOURCE", "Проверьте источник.");
-      query = query.where("source", "=", filters.source as Input["source"]);
+      query = query.where(
+        "lead.source",
+        "=",
+        filters.source as Input["source"],
+      );
+    }
+    if (filters.processingBy) {
+      if (
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+          filters.processingBy,
+        )
+      )
+        throw new AppError(400, "INVALID_ASSIGNEE", "Проверьте ответственного.");
+      query = query.where("lead.processing_by", "=", filters.processingBy);
     }
     for (const [key, op] of [
       ["from", ">="],
@@ -182,27 +231,216 @@ export class LeadService {
             "INVALID_DATE",
             "Эта дата недоступна в часовом поясе бизнеса.",
           );
-        query = query.where("created_at", op, date);
+        query = query.where("lead.created_at", op, date);
       }
     }
-    if (status) query = query.where("status", "=", status) as typeof query;
-    return Promise.all(
-      (await query.execute()).map(async (lead) => ({
-        ...this.toLead(lead, publicBusinessId),
-        processingName: lead.processing_by
-          ? (
-              await this.db
-                .selectFrom("user")
-                .select("name")
-                .where("id", "=", lead.processing_by)
-                .executeTakeFirst()
-            )?.name
-          : undefined,
-      })),
-    );
+    if (status) query = query.where("lead.status", "=", status) as typeof query;
+    const rows = await query.execute();
+    return rows.map((lead) => {
+      const wait = leadWaitMeta(
+        lead.created_at,
+        lead.processing_at,
+        sla,
+      );
+      return {
+        ...this.toLead(
+          {
+            id: lead.id,
+            business_id: lead.business_id,
+            client_id: lead.client_id,
+            source: lead.source,
+            name: lead.name,
+            phone: lead.phone,
+            message: lead.message,
+            status: lead.status,
+            external_event_id: lead.external_event_id,
+            answers: lead.answers,
+            processing_by: lead.processing_by,
+            processing_at: lead.processing_at,
+            created_at: lead.created_at,
+            updated_at: lead.updated_at,
+          },
+          publicBusinessId,
+        ),
+        processingName: lead.processing_name ?? undefined,
+        waitLabel: wait.label,
+        waitedMinutes: wait.waitedMinutes,
+        overdue: wait.overdue,
+      };
+    });
   }
+
+  async summary(
+    userId: string,
+    publicId: string,
+    periodDays: 1 | 7 | 30 = 7,
+  ) {
+    const businessId = await this.resolve(userId, publicId);
+    const since = new Date(Date.now() - periodDays * 86400000);
+    const [counts, analytics] = await Promise.all([
+      getLeadStatusCounts(this.db, businessId, since),
+      getLeadAnalytics(this.db, businessId, periodDays),
+    ]);
+    return { periodDays, counts, analytics };
+  }
+
+  async get(userId: string, publicId: string, leadId: string) {
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        leadId,
+      )
+    )
+      throw new AppError(404, "LEAD_NOT_FOUND", "Заявка не найдена.");
+    const businessId = await this.resolve(userId, publicId);
+    const lead = await this.db
+      .selectFrom("lead")
+      .leftJoin("user", "user.id", "lead.processing_by")
+      .select([
+        "lead.id",
+        "lead.business_id",
+        "lead.client_id",
+        "lead.source",
+        "lead.name",
+        "lead.phone",
+        "lead.message",
+        "lead.status",
+        "lead.external_event_id",
+        "lead.answers",
+        "lead.processing_by",
+        "lead.processing_at",
+        "lead.created_at",
+        "lead.updated_at",
+        "user.name as processing_name",
+      ])
+      .where("lead.business_id", "=", businessId)
+      .where("lead.id", "=", leadId)
+      .executeTakeFirst();
+    if (!lead) throw new AppError(404, "LEAD_NOT_FOUND", "Заявка не найдена.");
+
+    const { setup } = await loadLeadSetupV2(this.db, businessId);
+    const fieldRows = await this.db
+      .selectFrom("lead_form_field")
+      .select(["field_key", "label", "field_type"])
+      .where("business_id", "=", businessId)
+      .execute();
+    const labelByKey = new Map(fieldRows.map((f) => [f.field_key, f.label]));
+
+    const history = await this.db
+      .selectFrom("lead_status_history")
+      .leftJoin("user", "user.id", "lead_status_history.actor_user_id")
+      .select([
+        "lead_status_history.id",
+        "lead_status_history.from_status",
+        "lead_status_history.to_status",
+        "lead_status_history.note",
+        "lead_status_history.created_at",
+        "user.name as actor_name",
+      ])
+      .where("lead_status_history.business_id", "=", businessId)
+      .where("lead_status_history.lead_id", "=", leadId)
+      .orderBy("lead_status_history.created_at", "asc")
+      .execute();
+
+    const duplicate = setup.processing.duplicateDetection
+      ? await this.findPossibleDuplicate(businessId, lead, leadId)
+      : null;
+
+    const wait = leadWaitMeta(
+      lead.created_at,
+      lead.processing_at,
+      setup.processing.firstResponseSlaMinutes,
+    );
+
+    const answers =
+      lead.answers && typeof lead.answers === "object"
+        ? (lead.answers as Record<string, unknown>)
+        : {};
+    const answerFields = Object.entries(answers).map(([key, value]) => ({
+      key,
+      label: labelByKey.get(key) || key,
+      value,
+    }));
+
+    return {
+      ...this.toLead(
+        {
+          id: lead.id,
+          business_id: lead.business_id,
+          client_id: lead.client_id,
+          source: lead.source,
+          name: lead.name,
+          phone: lead.phone,
+          message: lead.message,
+          status: lead.status,
+          external_event_id: lead.external_event_id,
+          answers: lead.answers,
+          processing_by: lead.processing_by,
+          processing_at: lead.processing_at,
+          created_at: lead.created_at,
+          updated_at: lead.updated_at,
+        },
+        publicId,
+      ),
+      processingName: lead.processing_name ?? undefined,
+      waitLabel: wait.label,
+      waitedMinutes: wait.waitedMinutes,
+      overdue: wait.overdue,
+      answerFields,
+      history: history.map((h) => ({
+        id: h.id,
+        fromStatus: h.from_status,
+        toStatus: h.to_status,
+        note: h.note,
+        actorName: h.actor_name ?? null,
+        createdAt: h.created_at.toISOString(),
+      })),
+      possibleDuplicate: duplicate
+        ? { id: duplicate.id, createdAt: duplicate.created_at.toISOString() }
+        : null,
+    };
+  }
+
+  private async findPossibleDuplicate(
+    businessId: string,
+    lead: {
+      client_id: string | null;
+      phone: string | null;
+      source: string;
+      created_at: Date;
+    },
+    excludeId: string,
+  ) {
+    const since = new Date(Date.now() - 30 * 86400000);
+    let query = this.db
+      .selectFrom("lead")
+      .select(["id", "created_at"])
+      .where("business_id", "=", businessId)
+      .where("id", "!=", excludeId)
+      .where("created_at", ">=", since)
+      .orderBy("created_at", "desc")
+      .limit(1);
+    if (lead.client_id) {
+      query = query.where("client_id", "=", lead.client_id);
+    } else if (lead.phone) {
+      query = query.where("phone", "=", lead.phone);
+    } else {
+      return null;
+    }
+    return query.executeTakeFirst();
+  }
+
   async create(userId: string, publicId: string, raw: unknown) {
     const input = clean(raw);
+    const answers =
+      raw &&
+      typeof raw === "object" &&
+      (raw as { answers?: unknown }).answers &&
+      typeof (raw as { answers: unknown }).answers === "object"
+        ? ((raw as { answers: Record<string, unknown> }).answers as Record<
+            string,
+            unknown
+          >)
+        : undefined;
     return this.db.transaction().execute(async (tx) => {
       const b = await requireBusiness(tx, userId, publicId, "leads.write");
       await tx
@@ -212,7 +450,7 @@ export class LeadService {
         .forUpdate()
         .execute();
       await requireBusiness(tx, userId, publicId, "leads.write");
-      const lead = await createLead(tx, b.id, input);
+      const lead = await createLead(tx, b.id, { ...input, answers });
       return this.toLead(lead, publicId);
     });
   }
@@ -258,26 +496,118 @@ export class LeadService {
         .executeTakeFirst();
       if (!current)
         throw new AppError(404, "LEAD_NOT_FOUND", "Заявка не найдена.");
-      if (current.processing_by && current.processing_by !== userId)
-        throw new AppError(
-          409,
-          "LEAD_ASSIGNED",
-          "Заявка уже в работе у другого сотрудника.",
-        );
       const next = status as LeadStatus;
+      assertLeadTransition(current.status, next);
+
+      // Concurrency: taking into processing — only one winner.
+      if (next === "processing") {
+        if (current.processing_by && current.processing_by !== userId) {
+          const holder = await tx
+            .selectFrom("user")
+            .select("name")
+            .where("id", "=", current.processing_by)
+            .executeTakeFirst();
+          throw new AppError(
+            409,
+            "LEAD_ASSIGNED",
+            holder?.name
+              ? `Заявка уже в работе у ${holder.name}.`
+              : "Заявка уже в работе у другого сотрудника.",
+          );
+        }
+        const claimed = await tx
+          .updateTable("lead")
+          .set({
+            status: next,
+            updated_at: new Date(),
+            processing_by: userId,
+            processing_at: current.processing_at ?? new Date(),
+          })
+          .where("id", "=", id)
+          .where((eb) =>
+            eb.or([
+              eb("processing_by", "is", null),
+              eb("processing_by", "=", userId),
+            ]),
+          )
+          .returningAll()
+          .executeTakeFirst();
+        if (!claimed) {
+          throw new AppError(
+            409,
+            "LEAD_ASSIGNED",
+            "Заявка уже в работе у другого сотрудника.",
+          );
+        }
+        if (current.status !== next) {
+          await recordStatusHistory(
+            tx,
+            internalBusinessId,
+            id,
+            current.status,
+            next,
+            userId,
+            "Взял в работу",
+          );
+          if (claimed.client_id)
+            await clientActivity(
+              tx,
+              internalBusinessId,
+              claimed.client_id,
+              "lead." + next,
+              randomUUID(),
+              id,
+              userId,
+            );
+          await tx
+            .insertInto("business_audit_log")
+            .values({
+              id: randomUUID(),
+              business_id: internalBusinessId,
+              actor_user_id: userId,
+              action: "lead_taken",
+              target_user_id: null,
+              details: id,
+            })
+            .execute();
+        }
+        return this.toLead(claimed, businessId);
+      }
+
+      if (current.processing_by && current.processing_by !== userId) {
+        // Owner/admin reassignment path is not silent steal — require same assignee
+        // for working transitions unless releasing to new.
+        const member = await tx
+          .selectFrom("business_member")
+          .select("role")
+          .where("business_id", "=", internalBusinessId)
+          .where("user_id", "=", userId)
+          .where("status", "=", "active")
+          .executeTakeFirst();
+        if (member?.role !== "owner" && member?.role !== "admin") {
+          const holder = await tx
+            .selectFrom("user")
+            .select("name")
+            .where("id", "=", current.processing_by)
+            .executeTakeFirst();
+          throw new AppError(
+            409,
+            "LEAD_ASSIGNED",
+            holder?.name
+              ? `Заявка уже в работе у ${holder.name}.`
+              : "Заявка уже в работе у другого сотрудника.",
+          );
+        }
+      }
+
       const row = await tx
         .updateTable("lead")
         .set({
           status: next,
           updated_at: new Date(),
-          ...(next === "processing"
-            ? {
-                processing_by: userId,
-                processing_at: current.processing_at ?? new Date(),
-              }
-            : next === "new"
-              ? { processing_by: null, processing_at: null }
-              : {}),
+          ...(next === "new"
+            ? { processing_by: null, processing_at: null }
+            : {}),
         })
         .where("id", "=", id)
         .returningAll()
@@ -301,28 +631,19 @@ export class LeadService {
             id,
             userId,
           );
-        if (
-          next === "processing" ||
-          next === "closed" ||
-          next === "completed" ||
-          next === "rejected"
-        )
+        if (next === "closed" || next === "completed" || next === "rejected")
           await tx
             .insertInto("business_audit_log")
             .values({
               id: randomUUID(),
               business_id: internalBusinessId,
               actor_user_id: userId,
-              action: next === "processing" ? "lead_taken" : "lead_closed",
+              action: "lead_closed",
               target_user_id: null,
               details: id,
             })
             .execute();
-        if (
-          next === "closed" ||
-          next === "completed" ||
-          next === "rejected"
-        )
+        if (next === "closed" || next === "completed" || next === "rejected")
           await resolveByEventKey(tx, internalBusinessId, "lead:" + id);
       }
       return this.toLead(row, businessId);
@@ -353,7 +674,7 @@ export async function createLead(
   input: Input & {
     platformUserId?: string;
     username?: string;
-    answers?: Record<string, string>;
+    answers?: Record<string, unknown>;
   },
 ) {
   await tx
@@ -376,7 +697,7 @@ export async function createLead(
   const clientId = await matchClient(tx, businessId, {
     name: input.name,
     phone: input.phone,
-    email: input.answers?.email || null,
+    email: emailFromAnswers(input.answers),
     identities:
       input.platformUserId && input.source !== "max"
         ? [
@@ -413,6 +734,8 @@ export async function createLead(
     "lead:" + lead.id,
     lead.id,
   );
+  const serviceHint =
+    typeof input.answers?.service === "string" ? input.answers.service : "";
   await notify(
     tx,
     businessId,
@@ -424,7 +747,7 @@ export async function createLead(
       (input.phone || "—") +
       "\nИсточник: " +
       input.source +
-      (input.answers?.service ? "\nУслуга: " + input.answers.service : ""),
+      (serviceHint ? "\nУслуга: " + serviceHint : ""),
     "/leads?id=" + lead.id,
   );
   return lead;

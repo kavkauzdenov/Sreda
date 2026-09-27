@@ -5,25 +5,17 @@ import type { InboundAttachment } from "../attachments/service.ts";
 import { bookingFlow } from "./booking-flow.ts";
 import { ordersFlow } from "./orders-flow.ts";
 import { customerProfileFlow } from "./customer-profile-flow.ts";
+import { leadsFlow } from "./leads-flow.ts";
 import type { OutboxButton } from "./types.ts";
 import type { Transaction } from "kysely";
 import type { Database } from "../db/schema.ts";
-import { validateSetup } from "../solutions/service.ts";
 import { getAvailableCustomerActions } from "../solutions/customer-actions.ts";
-import { createLead } from "../leads/service.ts";
 import { CommunicationService } from "../communications/service.ts";
-import { normalizeIdentity } from "../clients/service.ts";
-import type { LeadSetupDraft, LeadFieldId } from "../../lib/leadSetupDraft.ts";
 import { routeChannelAdmin } from "../channel-admin/router.ts";
 import { ChannelAdminBindingService } from "../channel-admin/binding.ts";
-const defaults: Record<string, string> = {
-  name: "Как к вам обращаться?",
-  phone: "Ваш телефон",
-  email: "Ваш email",
-  message: "Ваше сообщение",
-  service: "Что вас интересует?",
-  comment: "Комментарий",
-};
+
+const FLOW_META = "_flow";
+
 export async function routeBot(
   tx: Transaction<Database>,
   input: {
@@ -50,12 +42,6 @@ export async function routeBot(
     return;
   }
   const available = await getAvailableCustomerActions(tx, businessId, platform);
-  const setup = await tx
-    .selectFrom("lead_setup")
-    .select("draft")
-    .where("business_id", "=", businessId)
-    .executeTakeFirst();
-  const config = setup ? validateSetup(JSON.parse(setup.draft)) : undefined;
   const brand = b.public_name || b.name;
   const menu = [...available.labels];
   const queuePart = async (
@@ -110,10 +96,15 @@ export async function routeBot(
   const save = async (
     mode: string,
     fields: string[] = [],
-    answers: Record<string, string> = {},
+    answers: Record<string, unknown> = {},
     position = 0,
-    snapshot: LeadSetupDraft | Record<string, never> = {},
+    snapshot: Record<string, unknown> = {},
+    extra: Record<string, unknown> = {},
   ) => {
+    const configPayload =
+      Object.keys(extra).length > 0
+        ? { ...snapshot, [FLOW_META]: extra }
+        : snapshot;
     const row = {
       connection_id: connectionId,
       chat_id: userId,
@@ -121,7 +112,7 @@ export async function routeBot(
       fields: JSON.stringify(fields),
       answers: JSON.stringify(answers),
       position,
-      config: JSON.stringify(snapshot),
+      config: JSON.stringify(configPayload),
       last_update_id: eventId,
       updated_at: new Date(),
     };
@@ -200,8 +191,8 @@ export async function routeBot(
   // Stale callbacks / labels for disabled solutions must not run.
   if (
     (text === "/lead" ||
-      text === (config?.title || "Оставить заявку") ||
-      text === available.leadTitle) &&
+      text === available.leadTitle ||
+      (available.leadTitle == null && text === "Оставить заявку")) &&
     !available.has("leads")
   ) {
     await denyDisabled();
@@ -302,125 +293,38 @@ export async function routeBot(
     await denyDisabled();
     return;
   }
-  const ask = (snapshot: LeadSetupDraft, field: string) => {
-    const option = snapshot.fieldOptions?.[field as LeadFieldId];
-    return (
-      (option?.label || defaults[field] || field) +
-      (field === "name" || option?.required ? "" : "\nМожно пропустить: /skip.")
-    );
-  };
-  if (startLead && available.has("leads") && config) {
-    const fields = ["name", ...config.fields.filter((x) => x !== "name")];
-    await save("leads", fields, {}, 0, config);
-    await queue(
-      (config.greeting ||
-        `Здравствуйте! Оставьте заявку в ${b.public_name || b.name}.`) +
-        "\n\n" +
-        ask(config, fields[0]!),
-      ["Отмена"],
-    );
-    return;
-  }
-  if (
-    !current ||
-    !["leads", "review"].includes(current.mode) ||
-    Date.now() - current.updated_at.getTime() > 86400000
-  ) {
-    await showMenu();
-    return;
-  }
-  if (!available.has("leads")) {
-    await showMenu("Приём заявок временно недоступен.");
-    return;
-  }
-  const snapshot = JSON.parse(current.config) as LeadSetupDraft;
-  const fields = JSON.parse(current.fields) as string[];
-  const answers = JSON.parse(current.answers) as Record<string, string>;
-  if (current.mode === "review") {
-    if (text === "Изменить") {
-      await save("leads", fields, {}, 0, snapshot);
-      await queue(ask(snapshot, fields[0]!), ["Отмена"]);
+
+  try {
+    if (
+      await leadsFlow(tx, input, {
+        queue,
+        save,
+        showMenu,
+        current: current
+          ? {
+              mode: current.mode,
+              fields: current.fields,
+              answers: current.answers,
+              position: current.position,
+              config: current.config,
+              updated_at: current.updated_at,
+            }
+          : null,
+        startLead: Boolean(startLead && available.has("leads")),
+      })
+    ) {
       return;
     }
-    if (text !== "Отправить") {
-      await queue("Проверьте заявку и нажмите «Отправить».", [
-        "Отправить",
-        "Изменить",
-        "Отмена",
-      ]);
-      return;
-    }
-    await createLead(tx, businessId, {
-      source: platform,
-      name: answers.name!,
-      phone: answers.phone || null,
-      message: [
-        answers.message,
-        answers.service,
-        answers.comment,
-        answers.email,
-      ]
-        .filter(Boolean)
-        .join("\n"),
-      externalEventId: connectionId + ":" + eventId,
-      platformUserId: userId,
-      username: input.username,
-      answers,
-    });
-    await save("menu");
-    const fresh = await getAvailableCustomerActions(tx, businessId, platform);
-    await queue(
-      snapshot.finalMessage ||
-        "Спасибо! Ваша заявка принята. Мы скоро свяжемся с вами.",
-      fresh.labels,
-    );
+  } catch (error) {
+    if (
+      !(error instanceof AppError) ||
+      error.status >= 500 ||
+      error.status === 429
+    )
+      throw error;
+    await showMenu(error.message + " Выберите действие заново.");
     return;
   }
-  const field = fields[current.position]!;
-  const required =
-    field === "name" || snapshot.fieldOptions?.[field as LeadFieldId]?.required;
-  if (
-    !text ||
-    text.length > (field === "name" ? 100 : 900) ||
-    (text === "/skip" && required) ||
-    (text.startsWith("/") && text !== "/skip")
-  ) {
-    await queue("Проверьте ответ. " + ask(snapshot, field));
-    return;
-  }
-  let answer = text === "/skip" ? "" : text;
-  if (answer && (field === "phone" || field === "email")) {
-    try {
-      answer = normalizeIdentity({ kind: field, value: answer }).value;
-    } catch {
-      await queue(
-        field === "phone"
-          ? "Введите телефон в формате +79991234567."
-          : "Проверьте email.",
-      );
-      return;
-    }
-  }
-  answers[field] = answer;
-  const next = current.position + 1;
-  if (next < fields.length) {
-    await save("leads", fields, answers, next, snapshot);
-    await queue(ask(snapshot, fields[next]!), ["Отмена"]);
-    return;
-  }
-  await save("review", fields, answers, next, snapshot);
-  await queue(
-    "Проверьте заявку:\n\n" +
-      fields
-        .map(
-          (f) =>
-            (snapshot.fieldOptions?.[f as LeadFieldId]?.label ||
-              defaults[f] ||
-              f) +
-            ": " +
-            (answers[f] || "—"),
-        )
-        .join("\n"),
-    ["Отправить", "Изменить", "Отмена"],
-  );
+
+  await showMenu();
 }

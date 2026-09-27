@@ -23,11 +23,30 @@ async function handle(request: Request, publicId: string, fieldId?: string) {
     }
     if (request.method === "GET" && !fieldId)
       return json(await service.list(user.id, publicId));
-    if (request.method === "POST" && !fieldId)
-      return json(
-        await service.save(user.id, publicId, await readJson(request, 8000)),
-        201,
-      );
+    if (request.method === "POST" && !fieldId) {
+      const body = await readJson(request, 8000);
+      if (body && typeof body === "object") {
+        const action = (body as { action?: unknown }).action;
+        if (action === "reorder")
+          return json(
+            await service.reorder(
+              user.id,
+              publicId,
+              (body as { orderedIds?: unknown }).orderedIds,
+            ),
+          );
+        if (action === "apply_preset")
+          return json(
+            await service.applyPreset(
+              user.id,
+              publicId,
+              (body as { presetId?: unknown }).presetId,
+              (body as { replace?: unknown }).replace === true,
+            ),
+          );
+      }
+      return json(await service.save(user.id, publicId, body as Record<string, unknown>), 201);
+    }
     if ((request.method === "PATCH" || request.method === "PUT") && fieldId)
       return json(
         await service.save(
