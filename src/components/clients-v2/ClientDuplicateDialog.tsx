@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useDialogFocusTrap } from "@/hooks/useDialogFocusTrap";
 import { apiRequest } from "@/lib/apiClient";
 import { clientAction, mergeClients } from "@/services/clients.service";
 import { formatRelativeDateTimeInZone } from "@/lib/format";
@@ -60,6 +61,7 @@ function DuplicateSideCard({
 export function ClientDuplicateDialog({
   businessId,
   detail,
+  timezone,
   canMerge,
   onClose,
   onMerged,
@@ -67,6 +69,7 @@ export function ClientDuplicateDialog({
 }: {
   businessId: string;
   detail: ClientDetail;
+  timezone: string;
   canMerge: boolean;
   onClose: () => void;
   onMerged: (targetId: string) => void;
@@ -79,7 +82,8 @@ export function ClientDuplicateDialog({
   const [right, setRight] = useState<Side | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const timezone = "UTC";
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocusTrap(dialogRef, onClose);
 
   useEffect(() => {
     if (!otherId) return;
@@ -104,18 +108,6 @@ export function ClientDuplicateDialog({
       alive = false;
     };
   }, [businessId, detail.client.id, otherId]);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.body.style.overflow = "hidden";
-    window.addEventListener("keydown", onKey);
-    return () => {
-      document.body.style.overflow = "";
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [onClose]);
 
   async function markSeparate() {
     if (!otherId) return;
@@ -154,6 +146,7 @@ export function ClientDuplicateDialog({
     return (
       <div className="client-dialog-overlay" role="presentation" onClick={onClose}>
         <div
+          ref={dialogRef}
           className="client-dialog"
           role="dialog"
           aria-modal="true"
@@ -171,6 +164,7 @@ export function ClientDuplicateDialog({
   return (
     <div className="client-dialog-overlay" role="presentation" onClick={onClose}>
       <div
+        ref={dialogRef}
         className="client-dialog client-duplicate-dialog"
         role="dialog"
         aria-modal="true"

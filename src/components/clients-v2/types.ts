@@ -196,4 +196,5 @@ export type UpdateClientInput = {
   email?: string | null;
   assignedUserId?: string | null;
   profileNote?: string | null;
+  updatedAt?: string;
 };

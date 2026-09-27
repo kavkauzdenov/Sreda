@@ -299,7 +299,11 @@ function LeadWorkspace({
                         <span>{row.message || "Без сообщения"}</span>
                       </span>
                       <span className="leads-record__meta">
-                        <PlatformBadge platform={row.source} />
+                        {(row.source as string) === "manual" ? (
+                          <span>Вручную</span>
+                        ) : (
+                          <PlatformBadge platform={row.source} />
+                        )}
                         <LeadStatusBadge status={row.status} />
                         <time dateTime={row.createdAt}>
                           {formatRelativeDateTime(row.createdAt)}

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useBusinessContext } from "@/hooks/useBusinessContext";
@@ -11,6 +11,7 @@ import {
   SolutionSetupBanner,
 } from "@/components/solutions/SolutionSetupBanner";
 import { ProductEditor } from "@/components/orders/ProductEditor";
+import { getClientDetail } from "@/services/clients.service";
 
 type OrderRow = {
   id: string;
@@ -208,12 +209,18 @@ function OrdersPanel({
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("");
   const search = useSearchParams();
+  const deepClientId = search.get("client") || "";
   const [selected, setSelected] = useState<string | null>(
     () => search.get("order") || null,
   );
+  const [createOpen, setCreateOpen] = useState(() => !!search.get("client"));
   const [detail, setDetail] = useState<OrderDetail | null>(null);
   const [busy, setBusy] = useState(false);
   const base = `/api/v1/businesses/${businessId}/orders`;
+
+  useEffect(() => {
+    if (deepClientId) setCreateOpen(true);
+  }, [deepClientId]);
 
   useEffect(() => {
     let alive = true;
@@ -350,14 +357,21 @@ function OrdersPanel({
                     })}
                   </small>
                   <span>
-                    <Link href="/clients" onClick={(e) => e.stopPropagation()}>
+                    <Link
+                      href={
+                        o.client_id
+                          ? `/clients?client=${encodeURIComponent(o.client_id)}`
+                          : "/clients"
+                      }
+                      onClick={(e) => e.stopPropagation()}
+                    >
                       Клиент
                     </Link>
                     {o.conversation_id ? (
                       <>
                         {" · "}
                         <Link
-                          href="/messages"
+                          href={`/messages?conversation=${encodeURIComponent(o.conversation_id)}`}
                           onClick={(e) => e.stopPropagation()}
                         >
                           Диалог
@@ -409,17 +423,32 @@ function OrdersPanel({
             <p className="message-preview">{detail.comment}</p>
           ) : null}
           <nav aria-label="Связь с клиентом">
-            <Link className="button button--outline" href="/clients">
+            <Link
+              className="button button--outline"
+              href={
+                detail.client_id
+                  ? `/clients?client=${encodeURIComponent(detail.client_id)}`
+                  : "/clients"
+              }
+            >
               Клиент
             </Link>
             {detail.conversation_id ? (
-              <Link className="button button--outline" href="/messages">
+              <Link
+                className="button button--outline"
+                href={`/messages?conversation=${encodeURIComponent(detail.conversation_id)}`}
+              >
                 Диалог
               </Link>
             ) : null}
-            <Link className="button button--primary" href="/messages">
-              Связаться
-            </Link>
+            {detail.conversation_id ? (
+              <Link
+                className="button button--primary"
+                href={`/messages?conversation=${encodeURIComponent(detail.conversation_id)}`}
+              >
+                Связаться
+              </Link>
+            ) : null}
           </nav>
           {detail.items?.length ? (
             <>
@@ -489,7 +518,284 @@ function OrdersPanel({
           ) : null}
         </DetailDialog>
       )}
+      {createOpen && deepClientId ? (
+        <CreateOrderForClientDialog
+          businessId={businessId}
+          clientId={deepClientId}
+          busy={busy}
+          onBusy={setBusy}
+          onClose={() => setCreateOpen(false)}
+          onCreated={async (orderId) => {
+            setCreateOpen(false);
+            onNotice("Заказ создан.");
+            const rows = await apiRequest<OrderRow[]>(
+              base + (status ? "?status=" + encodeURIComponent(status) : ""),
+            );
+            setOrders(rows);
+            setSelected(orderId);
+            onError("");
+          }}
+          onError={onError}
+        />
+      ) : null}
     </>
+  );
+}
+
+type ProductVariant = {
+  id: string;
+  label: string;
+  active: boolean;
+};
+
+function CreateOrderForClientDialog({
+  businessId,
+  clientId,
+  busy,
+  onBusy,
+  onClose,
+  onCreated,
+  onError,
+}: {
+  businessId: string;
+  clientId: string;
+  busy: boolean;
+  onBusy: (v: boolean) => void;
+  onClose: () => void;
+  onCreated: (orderId: string) => void | Promise<void>;
+  onError: (message: string) => void;
+}) {
+  const requestKey = useRef("");
+  const [clientName, setClientName] = useState("");
+  const [clientPhone, setClientPhone] = useState("");
+  const [loadingClient, setLoadingClient] = useState(true);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [productId, setProductId] = useState("");
+  const [variants, setVariants] = useState<ProductVariant[]>([]);
+  const [variantId, setVariantId] = useState("");
+  const [quantity, setQuantity] = useState(1);
+  const [fulfillment, setFulfillment] = useState<"pickup" | "delivery">(
+    "pickup",
+  );
+  const [deliveryAddress, setDeliveryAddress] = useState("");
+  const productsBase = `/api/v1/businesses/${businessId}/products`;
+  const ordersBase = `/api/v1/businesses/${businessId}/orders`;
+
+  useEffect(() => {
+    let alive = true;
+    setLoadingClient(true);
+    void getClientDetail(businessId, clientId)
+      .then((data) => {
+        if (!alive) return;
+        setClientName(data.client.name);
+        setClientPhone(data.client.phone ?? "");
+        setLoadingClient(false);
+      })
+      .catch((e: unknown) => {
+        if (!alive) return;
+        onError(
+          e instanceof Error ? e.message : "Не удалось загрузить клиента.",
+        );
+        setLoadingClient(false);
+      });
+    void apiRequest<Product[]>(productsBase)
+      .then((rows) => {
+        if (alive) setProducts(rows.filter((p) => p.active));
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [businessId, clientId, onError, productsBase]);
+
+  useEffect(() => {
+    if (!productId) {
+      setVariants([]);
+      setVariantId("");
+      return;
+    }
+    const picked = products.find((p) => p.id === productId);
+    if (!picked?.use_variants) {
+      setVariants([]);
+      setVariantId("");
+      return;
+    }
+    let alive = true;
+    void apiRequest<{ variants: ProductVariant[] }>(
+      `${productsBase}/${encodeURIComponent(productId)}`,
+    )
+      .then((data) => {
+        if (!alive) return;
+        const rows = (data.variants ?? []).filter((v) => v.active);
+        setVariants(rows);
+        setVariantId(rows[0]?.id ?? "");
+      })
+      .catch(() => {
+        if (alive) setVariants([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [productId, products, productsBase]);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    if (busy || !productId || loadingClient) return;
+    const picked = products.find((p) => p.id === productId);
+    if (picked?.use_variants && !variantId) {
+      onError("Выберите вариант товара.");
+      return;
+    }
+    if (fulfillment === "delivery" && !deliveryAddress.trim()) {
+      onError("Укажите адрес доставки.");
+      return;
+    }
+    onBusy(true);
+    onError("");
+    requestKey.current ||= crypto.randomUUID();
+    try {
+      const created = await apiRequest<{ id: string }>(ordersBase, {
+        method: "POST",
+        body: JSON.stringify({
+          request_key: requestKey.current,
+          platform: "web",
+          client_id: clientId,
+          customer_name: clientName.trim(),
+          customer_phone: clientPhone.trim(),
+          fulfillment,
+          delivery_address:
+            fulfillment === "delivery" ? deliveryAddress.trim() : undefined,
+          cart_items: [
+            {
+              product_id: productId,
+              variant_id: variantId || null,
+              quantity,
+            },
+          ],
+        }),
+      });
+      requestKey.current = "";
+      await onCreated(created.id);
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Не удалось создать заказ.");
+    } finally {
+      onBusy(false);
+    }
+  }
+
+  return (
+    <DetailDialog title="Новый заказ для клиента" onClose={onClose}>
+      {loadingClient ? (
+        <p role="status">Загрузка клиента…</p>
+      ) : (
+        <>
+          <div className="detail-facts">
+            <span>Клиент</span>
+            <strong>{clientName}</strong>
+          </div>
+          <div className="detail-facts">
+            <span>Телефон</span>
+            <strong>{clientPhone || "—"}</strong>
+          </div>
+          <form onSubmit={(e) => void submit(e)}>
+            <fieldset disabled={busy}>
+              <label>
+                Товар
+                <select
+                  required
+                  value={productId}
+                  onChange={(e) => {
+                    setProductId(e.target.value);
+                    requestKey.current = "";
+                  }}
+                >
+                  <option value="">Выберите</option>
+                  {products.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {variants.length ? (
+                <label>
+                  Вариант
+                  <select
+                    required
+                    value={variantId}
+                    onChange={(e) => {
+                      setVariantId(e.target.value);
+                      requestKey.current = "";
+                    }}
+                  >
+                    <option value="">Выберите</option>
+                    {variants.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+              <label>
+                Количество
+                <input
+                  type="number"
+                  min={1}
+                  max={999}
+                  required
+                  value={quantity}
+                  onChange={(e) => {
+                    setQuantity(Number(e.target.value) || 1);
+                    requestKey.current = "";
+                  }}
+                />
+              </label>
+              <label>
+                Получение
+                <select
+                  value={fulfillment}
+                  onChange={(e) => {
+                    setFulfillment(
+                      e.target.value === "delivery" ? "delivery" : "pickup",
+                    );
+                    requestKey.current = "";
+                  }}
+                >
+                  <option value="pickup">Самовывоз</option>
+                  <option value="delivery">Доставка</option>
+                </select>
+              </label>
+              {fulfillment === "delivery" ? (
+                <label>
+                  Адрес доставки
+                  <input
+                    required
+                    value={deliveryAddress}
+                    onChange={(e) => {
+                      setDeliveryAddress(e.target.value);
+                      requestKey.current = "";
+                    }}
+                  />
+                </label>
+              ) : null}
+              <div className="catalog-create__actions">
+                <button type="submit" className="button button--primary">
+                  Создать заказ
+                </button>
+                <button
+                  type="button"
+                  className="button button--outline"
+                  onClick={onClose}
+                >
+                  Отмена
+                </button>
+              </div>
+            </fieldset>
+          </form>
+        </>
+      )}
+    </DetailDialog>
   );
 }
 

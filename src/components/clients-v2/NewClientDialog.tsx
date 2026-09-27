@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useDialogFocusTrap } from "@/hooks/useDialogFocusTrap";
 import { createClient, getClientAssignees } from "@/services/clients.service";
 
 export function NewClientDialog({
@@ -27,6 +28,7 @@ export function NewClientDialog({
   >([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const dialogRef = useRef<HTMLFormElement>(null);
 
   useEffect(() => {
     void getClientAssignees(businessId)
@@ -34,17 +36,7 @@ export function NewClientDialog({
       .catch(() => undefined);
   }, [businessId]);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.body.style.overflow = "hidden";
-    window.addEventListener("keydown", onKey);
-    return () => {
-      document.body.style.overflow = "";
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [onClose]);
+  useDialogFocusTrap(dialogRef, onClose);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -81,6 +73,7 @@ export function NewClientDialog({
       onClick={onClose}
     >
       <form
+        ref={dialogRef}
         className="client-dialog"
         role="dialog"
         aria-modal="true"

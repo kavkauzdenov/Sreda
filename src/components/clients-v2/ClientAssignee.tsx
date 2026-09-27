@@ -60,9 +60,40 @@ export function ClientAssignee({
     }
   }
 
+  async function claim() {
+    if (busy || assignedUser) return;
+    setBusy(true);
+    setError("");
+    try {
+      await clientAction(businessId, clientId, { action: "claim" });
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Не удалось взять клиента.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (!canAssignOthers) {
+    if (assignedUser) {
+      return <p>{assignedUser.name}</p>;
+    }
     return (
-      <p>{assignedUser?.name ?? "Не назначен"}</p>
+      <div>
+        <button
+          type="button"
+          className="button button--outline"
+          disabled={busy}
+          onClick={() => void claim()}
+        >
+          {busy ? "…" : "Взять клиента"}
+        </button>
+        {error ? (
+          <p className="account-error" role="alert">
+            {error}
+          </p>
+        ) : null}
+      </div>
     );
   }
 

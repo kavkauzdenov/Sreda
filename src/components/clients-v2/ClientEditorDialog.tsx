@@ -57,6 +57,7 @@ export function ClientEditorDialog({
         name: name.trim(),
         phone: phone.trim() || null,
         email: email.trim() || null,
+        updatedAt: detail.client.updatedAt,
         ...(canAssignOthers
           ? { assignedUserId: assignedUserId || null }
           : {}),

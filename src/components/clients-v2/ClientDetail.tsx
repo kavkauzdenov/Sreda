@@ -20,6 +20,14 @@ import type {
 } from "@/components/clients-v2/types";
 import { PlatformBadge } from "@/components/ui/PlatformBadge";
 import type { Platform } from "@/types";
+import { useDialogFocusTrap } from "@/hooks/useDialogFocusTrap";
+
+const SOCIAL_PLATFORMS = new Set([
+  "telegram",
+  "vk",
+  "whatsapp",
+  "instagram",
+]);
 
 export function ClientDetail({
   businessId,
@@ -77,24 +85,10 @@ export function ClientDetail({
     };
   }, [businessId, clientId, refreshKey]);
 
-  useEffect(() => {
-    if (variant === "panel") return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onClose();
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [variant, onClose]);
-
-  useEffect(() => {
-    if (variant === "panel") return;
-    rootRef.current
-      ?.querySelector<HTMLElement>("button, [href], input, select, textarea")
-      ?.focus();
-  }, [variant, clientId]);
+  useDialogFocusTrap(rootRef, onClose, {
+    enabled: variant !== "panel",
+    lockBodyScroll: variant !== "panel",
+  });
 
   function refresh() {
     setRefreshKey((v) => v + 1);
@@ -154,18 +148,23 @@ export function ClientDetail({
       <div className="client-detail__contacts">
         {detail.client.phone ? <p>Телефон: {detail.client.phone}</p> : null}
         {detail.client.email ? <p>Email: {detail.client.email}</p> : null}
-        {detail.identities.map((identity) => (
-          <p key={`${identity.kind}:${identity.value}`}>
-            {["telegram", "vk", "whatsapp", "instagram"].includes(
-              identity.kind,
-            ) ? (
-              <PlatformBadge platform={identity.kind as Platform} compact />
-            ) : (
-              <span>{identity.kind}</span>
-            )}{" "}
-            {identity.username ? `@${identity.username}` : identity.value}
-          </p>
-        ))}
+        {detail.identities.map((identity) => {
+          const isSocial = SOCIAL_PLATFORMS.has(identity.kind);
+          return (
+            <p key={`${identity.kind}:${identity.value}`}>
+              {isSocial ? (
+                <PlatformBadge platform={identity.kind as Platform} compact />
+              ) : (
+                <span>{identity.kind}</span>
+              )}{" "}
+              {identity.username
+                ? `@${identity.username}`
+                : isSocial
+                  ? "подключён"
+                  : identity.value}
+            </p>
+          );
+        })}
       </div>
       <ClientQuickActions
         businessId={businessId}
@@ -243,6 +242,7 @@ export function ClientDetail({
         <ClientDuplicateDialog
           businessId={businessId}
           detail={detail}
+          timezone={timezone}
           canMerge={canMerge}
           onClose={() => setDupOpen(false)}
           onMerged={(targetId) => {
