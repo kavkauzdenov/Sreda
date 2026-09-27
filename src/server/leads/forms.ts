@@ -268,16 +268,27 @@ export class LeadFormService {
           throw new AppError(404, "LEAD_FIELD_NOT_FOUND", "Поле не найдено.");
         if (existing.field_key === "name" && key !== "name")
           throw fail("Ключ поля «Имя» нельзя изменить.");
-        const changed = await tx
-          .updateTable("lead_form_field")
-          .set(values)
-          .where("business_id", "=", b.id)
-          .where("id", "=", fieldId)
-          .returningAll()
-          .executeTakeFirst();
-        if (!changed)
-          throw new AppError(404, "LEAD_FIELD_NOT_FOUND", "Поле не найдено.");
-        return toField(changed);
+        try {
+          const changed = await tx
+            .updateTable("lead_form_field")
+            .set(values)
+            .where("business_id", "=", b.id)
+            .where("id", "=", fieldId)
+            .returningAll()
+            .executeTakeFirst();
+          if (!changed)
+            throw new AppError(404, "LEAD_FIELD_NOT_FOUND", "Поле не найдено.");
+          return toField(changed);
+        } catch (error) {
+          if (
+            error &&
+            typeof error === "object" &&
+            "code" in error &&
+            (error as { code?: string }).code === "23505"
+          )
+            throw fail("Поле с таким ключом уже есть.");
+          throw error;
+        }
       }
       try {
         const row = await tx
@@ -371,8 +382,15 @@ export class LeadFormService {
         .where("active", "=", true)
         .execute();
       const byId = new Map(existing.map((r) => [r.id, r]));
-      if (ids.length !== existing.length || ids.some((id) => !byId.has(id)))
+      if (
+        ids.length !== existing.length ||
+        new Set(ids).size !== ids.length ||
+        ids.some((id) => !byId.has(id))
+      )
         throw fail("Проверьте порядок полей.");
+      const nameField = existing.find((row) => row.field_key === "name");
+      if (nameField && ids[0] !== nameField.id)
+        throw fail("Поле «Имя» должно оставаться первым.");
       const now = new Date();
       for (const [position, id] of ids.entries()) {
         await tx
