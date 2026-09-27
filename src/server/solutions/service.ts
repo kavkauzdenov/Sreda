@@ -244,24 +244,32 @@ export class SolutionService {
     }
 
     const setup = validateLeadSetupV2(rawDraft);
+
+    // Never persist completed=true before launch prerequisites are valid.
+    // Readiness is evaluated against the candidate setup, not the previous draft.
+    if (setup.completed) {
+      const id = await this.business(userId, publicId, true);
+      const readiness = await getLeadReadiness(this.db, id, setup);
+      if (!readiness.ready) {
+        throw new AppError(
+          400,
+          "NOT_READY",
+          readiness.checks.find((check) => !check.ok)?.message ||
+            "Завершите настройку перед запуском.",
+        );
+      }
+      await assertCanGrantEntitlement({
+        businessId: id,
+        solutionCode: "leads",
+      });
+    }
+
     const saved = await saveLeadSetupV2(this.db, userId, publicId, {
       draft: setup,
       revision: Number(body.revision),
     });
 
     if (setup.completed) {
-      const readiness = await this.db.transaction().execute(async (tx) => {
-        const id = await new SolutionService(tx).business(userId, publicId, true);
-        return getLeadReadiness(tx, id);
-      });
-      if (!readiness.ready) {
-        throw new AppError(
-          400,
-          "NOT_READY",
-          readiness.checks.find((c) => !c.ok)?.message ||
-            "Завершите настройку перед запуском.",
-        );
-      }
       await this.activateLeadsEntitlement(userId, publicId);
     }
 
