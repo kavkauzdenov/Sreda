@@ -474,6 +474,64 @@ test("LeadService.list returns processingName via join", async () => {
   assert.match(b.processingName, /^Operator /);
 });
 
+test("LeadService assignees are business-scoped and usable by operators", async () => {
+  const f = await fixture();
+  const operator = await addMember(f.b.id, "operator");
+  const rows = await f.leads.assignees(operator, f.b.public_id);
+  assert.ok(rows.some((row) => row.id === f.owner && row.role === "owner"));
+  assert.ok(rows.some((row) => row.id === operator && row.role === "operator"));
+
+  const other = await fixture();
+  assert.equal(rows.some((row) => row.id === other.owner), false);
+});
+
+test("LeadService list supports responsible filter and inclusive date-only until", async () => {
+  const f = await fixture();
+  const operator = await addMember(f.b.id, "operator");
+  const first = await f.leads.create(f.owner, f.b.public_id, {
+    source: "telegram",
+    name: "Сегодня",
+    phone: "+79991110011",
+  });
+  const second = await f.leads.create(f.owner, f.b.public_id, {
+    source: "telegram",
+    name: "Вчера",
+    phone: "+79991110012",
+  });
+
+  await db
+    .updateTable("lead")
+    .set({ created_at: new Date("2026-09-27T10:00:00.000Z") })
+    .where("id", "=", first.id)
+    .execute();
+  await db
+    .updateTable("lead")
+    .set({ created_at: new Date("2026-09-26T10:00:00.000Z") })
+    .where("id", "=", second.id)
+    .execute();
+
+  await f.leads.updateStatus(operator, f.b.public_id, first.id, "processing");
+
+  const byAssignee = await f.leads.list(
+    f.owner,
+    f.b.public_id,
+    undefined,
+    undefined,
+    { processingBy: operator },
+  );
+  assert.deepEqual(byAssignee.map((row) => row.id), [first.id]);
+
+  const sameDay = await f.leads.list(
+    f.owner,
+    f.b.public_id,
+    undefined,
+    undefined,
+    { from: "2026-09-27", until: "2026-09-27" },
+  );
+  assert.equal(sameDay.some((row) => row.id === first.id), true);
+  assert.equal(sameDay.some((row) => row.id === second.id), false);
+});
+
 test("LeadService status transition invalid throws", async () => {
   const f = await fixture();
   const lead = await f.leads.create(f.owner, f.b.public_id, {
