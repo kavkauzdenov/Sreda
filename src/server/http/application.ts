@@ -147,12 +147,23 @@ export function createApplication(options: {
         if (request.method !== "PATCH")
           throw new AppError(404, "NOT_FOUND", "Страница не найдена.");
         requireOrigin(request, options.origin);
+        const body = await readJson(request);
+        if (body.action === "assign") {
+          return json(
+            await options.leads.assign(
+              user.id,
+              businessId,
+              leadId,
+              body.assigneeId,
+            ),
+          );
+        }
         return json(
           await options.leads.updateStatus(
             user.id,
             businessId,
             leadId,
-            (await readJson(request)).status,
+            body.status,
           ),
         );
       }),
