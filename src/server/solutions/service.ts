@@ -202,18 +202,22 @@ export class SolutionService {
         ...draft,
         version: 1,
       });
-      const wantsComplete = draft.step === 3;
-      v2.setupStep = wantsComplete ? 6 : Math.min(draft.step, 6);
-      // Never persist a legacy completion claim before V2 readiness succeeds.
-      v2.completed = false;
+      // Preserve the legacy V1 contract: step 3 means configuration is saved.
+      // Customer availability is still gated by connection/runtime readiness.
+      if (draft.step === 3) {
+        v2.completed = true;
+        v2.setupStep = 6;
+      } else {
+        v2.setupStep = Math.min(draft.step, 6);
+        v2.completed = false;
+      }
 
-      let saved = await saveLeadSetupV2(this.db, userId, publicId, {
+      const saved = await saveLeadSetupV2(this.db, userId, publicId, {
         draft: v2,
         revision: Number(body.revision),
         convertLegacyFields: true,
       });
 
-      // Project the legacy form selection before evaluating launch readiness.
       if (body.syncFields !== false) {
         await this.db.transaction().execute(async (tx) => {
           const id = await new SolutionService(tx).business(
@@ -225,27 +229,7 @@ export class SolutionService {
         });
       }
 
-      if (wantsComplete) {
-        const candidate = { ...saved.draft, completed: true, setupStep: 6 as const };
-        const id = await this.business(userId, publicId, true);
-        const readiness = await getLeadReadiness(this.db, id, candidate);
-        if (!readiness.ready) {
-          throw new AppError(
-            400,
-            "NOT_READY",
-            readiness.checks.find((check) => !check.ok)?.message ||
-              "Завершите настройку перед запуском.",
-          );
-        }
-        await assertCanGrantEntitlement({
-          businessId: id,
-          solutionCode: "leads",
-        });
-        saved = await saveLeadSetupV2(this.db, userId, publicId, {
-          draft: candidate,
-          revision: saved.revision,
-          convertLegacyFields: false,
-        });
+      if (draft.step === 3) {
         await this.activateLeadsEntitlement(userId, publicId);
       }
 
@@ -256,7 +240,7 @@ export class SolutionService {
           revision: saved.revision,
         });
         const svc = new SolutionService(tx);
-        if (!wantsComplete)
+        if (draft.step < 3)
           await svc.touchSetupDraft(id, "leads", { step: draft.step });
         else await svc.completeSetupDraft(id, "leads");
       });
