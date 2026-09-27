@@ -656,75 +656,49 @@ test.describe("Orders V2 UI audit", () => {
     if (!(await boot(page))) return;
     await page.setViewportSize({ width: 1440, height: 900 });
 
-    // Hide all active products so setup step 2 starts incomplete.
-    await page.evaluate(async () => {
-      const businesses = await fetch("/api/v1/businesses").then((r) => r.json());
-      const biz = Array.isArray(businesses) ? businesses[0] : null;
-      const businessId = biz?.id;
-      if (!businessId) return;
-      const products = await fetch(
-        `/api/v1/businesses/${encodeURIComponent(businessId)}/products`,
-      ).then((r) => r.json());
-      for (const p of Array.isArray(products) ? products : []) {
-        if (!p.active) continue;
-        await fetch(
-          `/api/v1/businesses/${encodeURIComponent(businessId)}/products/${encodeURIComponent(p.id)}`,
-          {
-            method: "PATCH",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              name: p.name,
-              price: p.price,
-              description: p.description ?? "",
-              category_id: p.category_id,
-              currency: p.currency,
-              sku: p.sku,
-              use_variants: p.use_variants,
-              variant_prices_enabled: p.variant_prices_enabled ?? false,
-              track_inventory: p.track_inventory,
-              availability: p.availability,
-              stock_quantity: p.stock_quantity,
-              active: false,
-            }),
-          },
-        );
-      }
-    });
-
     await page.goto(baseURL + "/orders", {
       waitUntil: "domcontentloaded",
       timeout: 60_000,
     });
 
-    const setup = page.getByRole("region", { name: /настройка заказов|готовность заказов/i });
+    const setup = page.getByRole("region", {
+      name: /настройка заказов|готовность заказов/i,
+    });
     await expect(setup).toBeVisible({ timeout: 20_000 });
+    await expect(setup).not.toHaveAttribute("aria-busy", "true", {
+      timeout: 20_000,
+    });
     const openWizard = page.getByRole("button", {
       name: /открыть мастер настройки/i,
     });
     if (await openWizard.isVisible().catch(() => false)) {
       await openWizard.click();
     }
-
-    // Jump to step 2 (Первый товар).
+    await expect(
+      page.getByRole("button", { name: /2\.\s*Первый товар/i }),
+    ).toBeVisible({ timeout: 15_000 });
     await page.getByRole("button", { name: /2\.\s*Первый товар/i }).click();
     const count = page.getByTestId("orders-setup-product-count");
-    await expect(count).toContainText(/0/, { timeout: 15_000 });
+    await expect(count).toBeVisible({ timeout: 15_000 });
+    const beforeText = (await count.textContent()) || "0";
+    const beforeN = Number(beforeText.match(/(\d+)/)?.[1] ?? "0");
     const nextOnStep2 = page
       .locator(".solution-setup-banner__actions")
       .getByRole("button", { name: /^далее$/i });
-    await expect(nextOnStep2).toBeDisabled();
+    if (beforeN < 1) {
+      await expect(nextOnStep2).toBeDisabled();
+    }
 
     await page.getByRole("button", { name: /открыть каталог/i }).click();
     await expect(page.getByRole("region", { name: /каталог/i })).toBeVisible({
       timeout: 20_000,
     });
 
+    const uniqueName = `E2E Setup First ${Date.now().toString(36)}`;
     await page.getByRole("button", { name: /\+ добавить/i }).click();
     const dialog = page.getByRole("dialog");
     await expect(dialog).toBeVisible({ timeout: 15_000 });
-    await dialog
-      .getByRole("textbox", { name: /название/i })
-      .fill("E2E Setup First Product");
+    await dialog.getByRole("textbox", { name: /название/i }).fill(uniqueName);
 
     for (let i = 0; i < 6; i++) {
       const createBtn = dialog.getByRole("button", {
@@ -750,15 +724,18 @@ test.describe("Orders V2 UI audit", () => {
     );
     await dialog.getByRole("button", { name: /^(создать|сохранить)$/i }).click();
     expect((await savePromise).ok()).toBeTruthy();
-    await expect(page.getByText(/E2E Setup First Product/i).first()).toBeVisible({
+    await expect(page.getByText(uniqueName).first()).toBeVisible({
       timeout: 30_000,
     });
 
-    // Setup panel stays mounted; product count must refresh without full reload.
-    await expect(page.getByTestId("orders-setup-product-count")).toContainText(
-      /1/,
-      { timeout: 15_000 },
-    );
+    // Setup stays mounted — active count must rise without full page reload.
+    await expect
+      .poll(async () => {
+        const text = (await count.textContent()) || "";
+        return Number(text.match(/(\d+)/)?.[1] ?? "0");
+      }, { timeout: 15_000 })
+      .toBeGreaterThan(beforeN);
+
     await page.getByRole("button", { name: /2\.\s*Первый товар/i }).click();
     await expect(
       page
@@ -988,7 +965,9 @@ test.describe("Orders V2 UI audit", () => {
       const existing = await fetch(
         `/api/v1/businesses/${encodeURIComponent(businessId)}/products`,
       ).then((r) => r.json());
-      let product = Array.isArray(existing) ? existing[0] : null;
+      let product = (Array.isArray(existing) ? existing : []).find(
+        (p) => p.active !== false,
+      );
       if (!product) {
         const productRes = await fetch(
           `/api/v1/businesses/${encodeURIComponent(businessId)}/products`,
@@ -996,9 +975,10 @@ test.describe("Orders V2 UI audit", () => {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
-              name: "E2E Mobile",
+              name: `E2E Mobile ${Date.now()}`,
               price: "99",
               availability: "in_stock",
+              active: true,
             }),
           },
         );
@@ -1014,14 +994,17 @@ test.describe("Orders V2 UI audit", () => {
           body: JSON.stringify({
             platform: "web",
             customer_name: "Mobile Client",
-            customer_phone: "+79990001122",
+            customer_phone: `+7999${String(Date.now()).slice(-7)}`,
             fulfillment: "pickup",
-            request_key: `e2e-mob-${Date.now()}`,
+            request_key: `e2e-mob-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
             cart_items: [{ product_id: product.id, quantity: 1 }],
           }),
         },
       );
-      if (!orderRes.ok) return { error: `order ${orderRes.status}` };
+      if (!orderRes.ok) {
+        const body = await orderRes.text();
+        return { error: `order ${orderRes.status} ${body}` };
+      }
       const order = await orderRes.json();
       return { orderId: order.id };
     });

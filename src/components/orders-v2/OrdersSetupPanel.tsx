@@ -66,10 +66,14 @@ export function OrdersSetupPanel({
   const [connections, setConnections] = useState<Conn[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [dismissed, setDismissed] = useState(false);
+  /** loading → initial fetch; compact → ready banner; wizard → full steps. */
+  const [panelMode, setPanelMode] = useState<"loading" | "wizard" | "compact">(
+    "loading",
+  );
 
   useEffect(() => {
     let alive = true;
+    setPanelMode("loading");
     void Promise.all([
       getOrderSettings(businessId),
       listProducts(businessId),
@@ -84,16 +88,18 @@ export function OrdersSetupPanel({
         setProductCount(activeCount);
         setConnections(Array.isArray(conns) ? conns : []);
         onModeChange?.(s.businessMode);
-        // Initial readiness only — do not collapse wizard mid-setup on later refreshes.
-        if (activeCount > 0 && (s.pickupEnabled || s.deliveryEnabled)) {
-          setDismissed(true);
-        }
+        const fulfillment =
+          Boolean(s.pickupEnabled) || Boolean(s.deliveryEnabled);
+        setPanelMode(
+          activeCount > 0 && fulfillment ? "compact" : "wizard",
+        );
       })
       .catch((e: unknown) => {
         if (alive)
           setError(
             e instanceof Error ? e.message : "Не удалось загрузить готовность.",
           );
+        if (alive) setPanelMode("wizard");
       });
     return () => {
       alive = false;
@@ -102,6 +108,7 @@ export function OrdersSetupPanel({
   }, [businessId]);
 
   // Catalog create/update/toggle → refresh active product count without full reload.
+  // Never force compact here — user may be mid-wizard on step 2.
   useEffect(() => {
     if (catalogRevision === 0) return;
     let alive = true;
@@ -110,7 +117,7 @@ export function OrdersSetupPanel({
         if (!alive) return;
         const activeCount = products.filter((p) => p.active).length;
         setProductCount(activeCount);
-        if (activeCount === 0) setDismissed(false);
+        if (activeCount === 0) setPanelMode("wizard");
       })
       .catch(() => undefined);
     return () => {
@@ -147,7 +154,19 @@ export function OrdersSetupPanel({
   const ready =
     productCount > 0 && fulfillmentOk && Boolean(settings?.businessMode);
 
-  if (dismissed && ready) {
+  if (panelMode === "loading") {
+    return (
+      <section
+        className="panel solution-setup-banner"
+        aria-label="Готовность заказов"
+        aria-busy="true"
+      >
+        <p className="account-footnote">Проверяем готовность…</p>
+      </section>
+    );
+  }
+
+  if (panelMode === "compact" && ready) {
     return (
       <section className="panel solution-setup-banner" aria-label="Готовность заказов">
         <p className="account-footnote">
@@ -159,7 +178,7 @@ export function OrdersSetupPanel({
         <button
           type="button"
           className="button button--ghost"
-          onClick={() => setDismissed(false)}
+          onClick={() => setPanelMode("wizard")}
         >
           Открыть мастер настройки
         </button>
@@ -350,7 +369,7 @@ export function OrdersSetupPanel({
               className="button button--primary"
               disabled={!ready}
               onClick={() => {
-                setDismissed(true);
+                setPanelMode("compact");
                 onGoTab?.("orders");
               }}
             >
@@ -359,7 +378,7 @@ export function OrdersSetupPanel({
             <button
               type="button"
               className="button button--ghost"
-              onClick={() => setDismissed(true)}
+              onClick={() => setPanelMode("compact")}
             >
               Скрыть мастер
             </button>
