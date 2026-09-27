@@ -173,6 +173,22 @@ function demoFields(): FormField[] {
   ];
 }
 
+function formatConceptAnswer(value: unknown) {
+  if (value == null || value === "") return "—";
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  )
+    return String(value);
+  if (Array.isArray(value)) return value.map((item) => String(item)).join(", ");
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return "—";
+  }
+}
+
 function matchesFilter(lead: Lead, filter: WorkFilter) {
   if (filter === "all") return true;
   if (filter === "new") return lead.status === "new";
@@ -514,7 +530,7 @@ function LeadDetailPreview({ lead }: { lead: Lead }) {
                     ? "Комментарий"
                     : key}
               </span>
-              <strong>{value}</strong>
+              <strong>{formatConceptAnswer(value)}</strong>
             </div>
           ))
         ) : (
