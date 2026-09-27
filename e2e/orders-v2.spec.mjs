@@ -957,35 +957,30 @@ test.describe("Orders V2 UI audit", () => {
     test.setTimeout(150_000);
     if (!(await boot(page))) return;
 
+    // Always create a fresh in-stock product — reusing earlier E2E products can
+    // 409 (OUT_OF_STOCK) after inventory-tracking tests deplete stock.
     const seeded = await page.evaluate(async () => {
       const businesses = await fetch("/api/v1/businesses").then((r) => r.json());
       const biz = Array.isArray(businesses) ? businesses[0] : null;
       const businessId = biz?.id;
       if (!businessId) return { error: "no-business" };
-      const existing = await fetch(
+      const productRes = await fetch(
         `/api/v1/businesses/${encodeURIComponent(businessId)}/products`,
-      ).then((r) => r.json());
-      let product = (Array.isArray(existing) ? existing : []).find(
-        (p) => p.active !== false,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            name: `E2E Mobile ${Date.now()}`,
+            price: "99",
+            availability: "in_stock",
+            active: true,
+            track_inventory: false,
+          }),
+        },
       );
-      if (!product) {
-        const productRes = await fetch(
-          `/api/v1/businesses/${encodeURIComponent(businessId)}/products`,
-          {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              name: `E2E Mobile ${Date.now()}`,
-              price: "99",
-              availability: "in_stock",
-              active: true,
-            }),
-          },
-        );
-        if (!productRes.ok)
-          return { error: `product ${productRes.status}` };
-        product = await productRes.json();
-      }
+      if (!productRes.ok)
+        return { error: `product ${productRes.status}` };
+      const product = await productRes.json();
       const orderRes = await fetch(
         `/api/v1/businesses/${encodeURIComponent(businessId)}/orders`,
         {

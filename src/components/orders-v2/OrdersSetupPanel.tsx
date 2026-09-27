@@ -71,9 +71,19 @@ export function OrdersSetupPanel({
     "loading",
   );
 
+  // Reset mode when business changes (render-time adjust — avoids setState-in-effect).
+  const [loadedBusinessId, setLoadedBusinessId] = useState(businessId);
+  if (loadedBusinessId !== businessId) {
+    setLoadedBusinessId(businessId);
+    setPanelMode("loading");
+    setSettings(null);
+    setProductCount(0);
+    setConnections([]);
+    setError("");
+  }
+
   useEffect(() => {
     let alive = true;
-    setPanelMode("loading");
     void Promise.all([
       getOrderSettings(businessId),
       listProducts(businessId),
