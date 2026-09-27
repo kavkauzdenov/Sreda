@@ -548,8 +548,7 @@ async function decrementStock(
   productId: string,
   variantId: string | null,
   quantity: number,
-  orderId?: string | null,
-): Promise<boolean> {
+): Promise<{ deducted: boolean; remaining: number | null }> {
   if (variantId) {
     const variant = await tx
       .selectFrom("product_variant")
@@ -577,7 +576,8 @@ async function decrementStock(
       .executeTakeFirst();
     if (!product?.active)
       throw new AppError(409, "PRODUCT_UNAVAILABLE", "Товар недоступен.");
-    if (product.product_type === "service") return false;
+    if (product.product_type === "service")
+      return { deducted: false, remaining: null };
     if (!product.use_variants)
       throw fail("Этот товар больше не использует варианты.");
     if (!variant.active)
@@ -618,15 +618,6 @@ async function decrementStock(
         },
         "system",
       );
-      await recordMovement(tx, {
-        businessId,
-        productId,
-        variantId,
-        delta: -quantity,
-        remaining,
-        reason: "order_checkout",
-        orderId: orderId ?? null,
-      });
       await maybeEmitLowStock(tx, businessId, {
         productId,
         productName: product.name,
@@ -635,9 +626,9 @@ async function decrementStock(
         nextStock: remaining,
         threshold: product.low_stock_threshold,
       });
-      return true;
+      return { deducted: true, remaining };
     }
-    return false;
+    return { deducted: false, remaining: variant.stock_quantity };
   }
 
   const product = await tx
@@ -649,7 +640,8 @@ async function decrementStock(
     .executeTakeFirst();
   if (!product?.active)
     throw new AppError(409, "PRODUCT_UNAVAILABLE", "Товар недоступен.");
-  if (product.product_type === "service") return false;
+  if (product.product_type === "service")
+    return { deducted: false, remaining: null };
   if (product.use_variants)
     throw fail("Выберите вариант товара.");
   if (!isSellable(product.availability, product.stock_quantity))
@@ -678,15 +670,6 @@ async function decrementStock(
       { delta: -quantity, remaining },
       "system",
     );
-    await recordMovement(tx, {
-      businessId,
-      productId,
-      variantId: null,
-      delta: -quantity,
-      remaining,
-      reason: "order_checkout",
-      orderId: orderId ?? null,
-    });
     await maybeEmitLowStock(tx, businessId, {
       productId,
       productName: product.name,
@@ -694,9 +677,9 @@ async function decrementStock(
       nextStock: remaining,
       threshold: product.low_stock_threshold,
     });
-    return true;
+    return { deducted: true, remaining };
   }
-  return false;
+  return { deducted: false, remaining: product.stock_quantity };
 }
 
 /**
@@ -1857,6 +1840,7 @@ export class OrderService {
         quantity: number;
         line_total: string;
         stock_deducted: boolean;
+        remaining: number | null;
       }[] = [];
       let currency: string | null = null;
       let totalCents = 0;
@@ -1876,13 +1860,12 @@ export class OrderService {
             "MIXED_CURRENCY",
             "В одном заказе должны быть товары одной валюты.",
           );
-        const stockDeducted = await decrementStock(
+        const stockResult = await decrementStock(
           tx,
           businessId,
           item.product_id,
           item.variant_id,
           item.quantity,
-          orderId,
         );
         let variantLabel = "";
         let variantSku: string | null = null;
@@ -1909,7 +1892,8 @@ export class OrderService {
           unit_price: unit,
           quantity: item.quantity,
           line_total: lineTotal,
-          stock_deducted: stockDeducted,
+          stock_deducted: stockResult.deducted,
+          remaining: stockResult.remaining,
         });
       }
 
@@ -1941,7 +1925,9 @@ export class OrderService {
           total,
           subtotal,
           delivery_fee: deliveryFeeStr,
-          items_snapshot: JSON.stringify(snapshot),
+          items_snapshot: JSON.stringify(
+            snapshot.map(({ remaining: _r, ...line }) => line),
+          ),
           source,
           request_key: key,
           request_hash: hash,
@@ -1970,6 +1956,17 @@ export class OrderService {
             stock_deducted: line.stock_deducted,
           })
           .execute();
+        if (line.stock_deducted) {
+          await recordMovement(tx, {
+            businessId,
+            productId: line.product_id,
+            variantId: line.variant_id,
+            delta: -line.quantity,
+            remaining: line.remaining,
+            reason: "order_checkout",
+            orderId,
+          });
+        }
       }
 
       await writeStatusHistory(tx, businessId, orderId, null, "new", actor);

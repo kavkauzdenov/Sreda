@@ -367,6 +367,120 @@ test("second checkout reuses saved profile", async () => {
   assert.equal(orders.length, 2);
 });
 
+test("pickup-only settings skip fulfillment buttons and go to comment", async () => {
+  const f = await fixture();
+  await db
+    .insertInto("order_settings")
+    .values({
+      business_id: f.b.id,
+      pickup_enabled: true,
+      delivery_enabled: false,
+    })
+    .onConflict((oc) =>
+      oc.column("business_id").doUpdateSet({
+        pickup_enabled: true,
+        delivery_enabled: false,
+      }),
+    )
+    .execute();
+
+  let event = 0;
+  const send = (text) =>
+    db.transaction().execute((tx) =>
+      routeBot(tx, {
+        businessId: f.b.id,
+        connectionId: f.connection,
+        platform: "telegram",
+        userId: "9101",
+        eventId: String(++event),
+        text,
+      }),
+    );
+  const mode = async () =>
+    (
+      await db
+        .selectFrom("telegram_dialog")
+        .select("mode")
+        .where("connection_id", "=", f.connection)
+        .where("chat_id", "=", "9101")
+        .executeTakeFirstOrThrow()
+    ).mode;
+
+  const productLabel = `1. Улун · ${formatMoney("350.00", "RUB")}`;
+  await send("/start");
+  await send("Каталог");
+  await send("1. Чай");
+  await send(productLabel);
+  await send("1");
+  await send("Оформить заказ");
+  await send("Пётр");
+  await send("+79993334455");
+  assert.equal(await mode(), "orders:checkout_comment");
+  const out = await lastOutbox(f.connection, "9101");
+  const buttons = parseButtons(out.buttons);
+  assert.ok(!buttons.includes("Доставка"));
+  assert.ok(!buttons.includes("Самовывоз"));
+  assert.ok(buttons.includes("/skip"));
+});
+
+test("delivery-only settings skip fulfillment buttons and ask address", async () => {
+  const f = await fixture();
+  await db
+    .insertInto("order_settings")
+    .values({
+      business_id: f.b.id,
+      pickup_enabled: false,
+      delivery_enabled: true,
+      delivery_price: "100.00",
+    })
+    .onConflict((oc) =>
+      oc.column("business_id").doUpdateSet({
+        pickup_enabled: false,
+        delivery_enabled: true,
+        delivery_price: "100.00",
+      }),
+    )
+    .execute();
+
+  let event = 0;
+  const send = (text) =>
+    db.transaction().execute((tx) =>
+      routeBot(tx, {
+        businessId: f.b.id,
+        connectionId: f.connection,
+        platform: "telegram",
+        userId: "9102",
+        eventId: String(++event),
+        text,
+      }),
+    );
+  const mode = async () =>
+    (
+      await db
+        .selectFrom("telegram_dialog")
+        .select("mode")
+        .where("connection_id", "=", f.connection)
+        .where("chat_id", "=", "9102")
+        .executeTakeFirstOrThrow()
+    ).mode;
+
+  const productLabel = `1. Улун · ${formatMoney("350.00", "RUB")}`;
+  await send("/start");
+  await send("Каталог");
+  await send("1. Чай");
+  await send(productLabel);
+  await send("1");
+  await send("Оформить заказ");
+  await send("Ольга");
+  await send("+79993334466");
+  assert.equal(await mode(), "orders:checkout_address");
+  const out = await lastOutbox(f.connection, "9102");
+  assert.match(out.message, /адрес/i);
+  const buttons = parseButtons(out.buttons);
+  assert.ok(!buttons.includes("Доставка"));
+  assert.ok(!buttons.includes("Самовывоз"));
+});
+
 test("sales alias activates orders menu", async () => {
   const f = await fixture();
   await db

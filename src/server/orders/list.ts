@@ -222,8 +222,12 @@ export async function listOrdersV2(
   if (filters.date === "today") {
     const day = localDay(new Date(), timezone);
     const start = localInstants(day, 0, timezone)[0];
-    const end = localInstants(day, 24 * 60, timezone)[0];
-    if (!start || !end)
+    if (!start)
+      throw new AppError(500, "TIMEZONE_ERROR", "Не удалось вычислить локальный день.");
+    const nextDay = new Date(+start + 36 * 3600000);
+    const nextDayStr = localDay(nextDay, timezone);
+    const end = localInstants(nextDayStr, 0, timezone)[0];
+    if (!end)
       throw new AppError(500, "TIMEZONE_ERROR", "Не удалось вычислить локальный день.");
     q = q.where("o.created_at", ">=", start).where("o.created_at", "<", end);
   } else if (filters.date === "7d") {
@@ -244,7 +248,10 @@ export async function listOrdersV2(
     const term = filters.search;
     const phone = normalizePhoneSearch(term);
     const like = `%${term.replace(/[%_]/g, "\\$&")}%`;
-    const numberMatch = /^\d+$/.test(term) ? Number(term) : null;
+    const numberMatch =
+      /^\d{1,9}$/.test(term) && Number.isSafeInteger(Number(term))
+        ? Number(term)
+        : null;
     q = q.where((eb) => {
       const parts = [
         eb("o.customer_name", "ilike", like),
@@ -257,8 +264,7 @@ export async function listOrdersV2(
             and (oi.name ilike ${like} or coalesce(oi.sku,'') ilike ${like})
         )`,
       ];
-      if (numberMatch != null && Number.isSafeInteger(numberMatch))
-        parts.push(eb("o.order_number", "=", numberMatch));
+      if (numberMatch != null) parts.push(eb("o.order_number", "=", numberMatch));
       if (phone) {
         parts.push(
           sql<boolean>`regexp_replace(coalesce(o.customer_phone,''), '\\D', '', 'g') like ${"%" + phone}`,
@@ -340,8 +346,12 @@ export async function getOrderSummary(
   const timezone = business.timezone || "UTC";
   const day = localDay(new Date(), timezone);
   const start = localInstants(day, 0, timezone)[0];
-  const end = localInstants(day, 24 * 60, timezone)[0];
-  if (!start || !end)
+  if (!start)
+    throw new AppError(500, "TIMEZONE_ERROR", "Не удалось вычислить локальный день.");
+  const nextDay = new Date(+start + 36 * 3600000);
+  const nextDayStr = localDay(nextDay, timezone);
+  const end = localInstants(nextDayStr, 0, timezone)[0];
+  if (!end)
     throw new AppError(500, "TIMEZONE_ERROR", "Не удалось вычислить локальный день.");
 
   const counts = await db

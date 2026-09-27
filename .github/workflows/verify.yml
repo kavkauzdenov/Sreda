@@ -184,6 +184,28 @@ jobs:
         run: |
           mkdir -p artifacts/clients-v2-ui-audit
           npx playwright test e2e/clients-v2.spec.mjs --project=webkit
+      - name: Playwright Orders V2 (Chromium)
+        env:
+          E2E_BASE_URL: ${{ steps.app.outputs.origin }}
+          AUDIT_BASE_URL: ${{ steps.app.outputs.origin }}
+          AUDIT_STORAGE_STATE: artifacts/audit-storage.json
+          AUDIT_OUTPUT: artifacts/orders-v2-ui-audit
+          E2E_SCREENSHOT_DIR: artifacts/orders-v2-ui-audit
+          AUDIT_IGNORE_HTTPS_ERRORS: "1"
+        run: |
+          mkdir -p artifacts/orders-v2-ui-audit
+          npx playwright test e2e/orders-v2.spec.mjs --project=chromium
+      - name: Playwright Orders V2 (WebKit)
+        env:
+          E2E_BASE_URL: ${{ steps.app.outputs.origin }}
+          AUDIT_BASE_URL: ${{ steps.app.outputs.origin }}
+          AUDIT_STORAGE_STATE: artifacts/audit-storage.json
+          AUDIT_OUTPUT: artifacts/orders-v2-ui-audit
+          E2E_SCREENSHOT_DIR: artifacts/orders-v2-ui-audit
+          AUDIT_IGNORE_HTTPS_ERRORS: "1"
+        run: |
+          mkdir -p artifacts/orders-v2-ui-audit
+          npx playwright test e2e/orders-v2.spec.mjs --project=webkit
       - name: Playwright contrast computed styles
         env:
           E2E_BASE_URL: ${{ steps.app.outputs.origin }}
@@ -245,6 +267,7 @@ jobs:
             artifacts/responsive-audit/
             artifacts/leads-v2-ui-audit/
             artifacts/clients-v2-ui-audit/
+            artifacts/orders-v2-ui-audit/
             artifacts/ci-ui-app.json
             artifacts/ci-ui-app.log
           retention-days: 14
