@@ -115,7 +115,9 @@ export function convertV1ToV2(v1: LeadSetupDraft): LeadSetupV2 {
     },
     notifications: {
       inApp: true,
-      staffTelegram: false,
+      // Preserve legacy behavior: verified staff Telegram bindings used to
+      // receive lead notifications before the V2 switch existed.
+      staffTelegram: true,
       email: false,
     },
     setupStep: v1.step === 3 ? 6 : Math.min(v1.step, 6),
