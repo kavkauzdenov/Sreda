@@ -474,6 +474,58 @@ test("LeadService.list returns processingName via join", async () => {
   assert.match(b.processingName, /^Operator /);
 });
 
+test("LeadService.assign allows owner/admin transfer and rejects operator reassignment", async () => {
+  const f = await fixture();
+  const operatorA = await addMember(f.b.id, "operator");
+  const operatorB = await addMember(f.b.id, "operator");
+  const lead = await f.leads.create(f.owner, f.b.public_id, {
+    source: "telegram",
+    name: "Передача",
+    phone: "+79991110021",
+  });
+
+  const first = await f.leads.assign(
+    f.owner,
+    f.b.public_id,
+    lead.id,
+    operatorA,
+  );
+  assert.equal(first.status, "processing");
+  assert.equal(first.processingBy, operatorA);
+
+  const second = await f.leads.assign(
+    f.owner,
+    f.b.public_id,
+    lead.id,
+    operatorB,
+  );
+  assert.equal(second.processingBy, operatorB);
+
+  await assert.rejects(
+    () =>
+      f.leads.assign(
+        operatorA,
+        f.b.public_id,
+        lead.id,
+        operatorA,
+      ),
+    (err) =>
+      err &&
+      typeof err === "object" &&
+      err.status === 403 &&
+      err.code === "FORBIDDEN",
+  );
+
+  const history = await db
+    .selectFrom("lead_status_history")
+    .selectAll()
+    .where("lead_id", "=", lead.id)
+    .orderBy("created_at")
+    .execute();
+  assert.ok(history.some((row) => /Назначено сотруднику/.test(row.note)));
+  assert.ok(history.some((row) => /Передано сотруднику/.test(row.note)));
+});
+
 test("LeadService assignees are business-scoped and usable by operators", async () => {
   const f = await fixture();
   const operator = await addMember(f.b.id, "operator");
