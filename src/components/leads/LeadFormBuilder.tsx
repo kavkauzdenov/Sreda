@@ -26,6 +26,7 @@ const FIELD_TYPES: { value: string; label: string }[] = [
   { value: "email", label: "Email" },
   { value: "number", label: "Число" },
   { value: "select", label: "Список" },
+  { value: "multiselect", label: "Несколько вариантов" },
   { value: "date", label: "Дата" },
   { value: "checkbox", label: "Флажок" },
   { value: "address", label: "Адрес" },
@@ -161,6 +162,12 @@ export function LeadFormBuilder({
   function move(index: number, direction: -1 | 1) {
     const next = index + direction;
     if (next < 0 || next >= fields.length) return;
+    const current = fields[index];
+    const target = fields[next];
+    if (!current || !target) return;
+    // System field «Имя» is always the first question.
+    if (current.fieldKey === "name" && direction === 1) return;
+    if (target.fieldKey === "name" && direction === -1) return;
     const ordered = fields.map((f) => f.id);
     const item = ordered[index];
     if (!item) return;
@@ -515,7 +522,11 @@ export function LeadFormBuilder({
                         <button
                           type="button"
                           className="button button--outline"
-                          disabled={busy || index === 0}
+                          disabled={
+                            busy ||
+                            index === 0 ||
+                            (index === 1 && fields[0]?.fieldKey === "name")
+                          }
                           aria-label={`Переместить «${field.label}» вверх`}
                           onClick={() => move(index, -1)}
                         >
@@ -524,7 +535,11 @@ export function LeadFormBuilder({
                         <button
                           type="button"
                           className="button button--outline"
-                          disabled={busy || index === fields.length - 1}
+                          disabled={
+                            busy ||
+                            index === fields.length - 1 ||
+                            isName
+                          }
                           aria-label={`Переместить «${field.label}» вниз`}
                           onClick={() => move(index, 1)}
                         >
