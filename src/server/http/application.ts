@@ -94,6 +94,9 @@ export function createApplication(options: {
         const user = await requireUser(request.headers);
         if (request.method === "GET") {
           const params = new URL(request.url).searchParams;
+          if (params.get("view") === "assignees") {
+            return json(await options.leads.assignees(user.id, businessId));
+          }
           if (params.get("summary") === "1" || params.get("view") === "summary") {
             const days = Number(params.get("days") || 7);
             const periodDays = ([1, 7, 30].includes(days) ? days : 7) as
