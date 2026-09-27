@@ -3,13 +3,13 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: "pr = local PR build; staging = live Biznebiznesoty-staging (post-merge only)"
+        description: "pr = local PR build; production = live biznesoty.ru (post-merge read-only audit)"
         required: true
         default: "pr"
         type: choice
         options:
           - pr
-          - staging
+          - production
   pull_request:
 permissions:
   contents: read
@@ -88,8 +88,8 @@ jobs:
           test "$PNG_COUNT" -ge 1
           echo "Captured ${PNG_COUNT} PR PNGs against ${GITHUB_SHA}"
 
-      - name: Capture screenshots (staging post-merge)
-        if: env.VISUAL_TARGET == 'staging'
+      - name: Capture screenshots (production post-merge)
+        if: env.VISUAL_TARGET == 'production'
         id: capture_staging
         env:
           AUDIT_BASE_URL: ${{ vars.AUDIT_BASE_URL }}
@@ -101,7 +101,7 @@ jobs:
           AUDIT_CLEANUP_THROWAWAY: "1"
         run: |
           set -euo pipefail
-          export AUDIT_BASE_URL="${AUDIT_BASE_URL:-https://web-production-1aace.up.railway.app}"
+          export AUDIT_BASE_URL="${AUDIT_BASE_URL:-https://biznesoty.ru}"
           node scripts/ui-audit-capture.mjs
           PNG_COUNT=$(find artifacts/visual-audit -name '*.png' | wc -l | tr -d ' ')
           echo "png_count=${PNG_COUNT}" >> "$GITHUB_OUTPUT"
