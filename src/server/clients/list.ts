@@ -16,8 +16,8 @@ import {
 
 type Db = Kysely<Database>;
 
-const CHANNELS = new Set(["telegram", "vk", "whatsapp", "instagram", ""]);
-const ACTIVITIES = new Set(["today", "7d", "30d", "inactive", ""]);
+const CHANNELS = new Set<string>(["telegram", "vk", "whatsapp", "instagram", ""]);
+const ACTIVITIES = new Set<string>(["today", "7d", "30d", "inactive", ""]);
 
 function parseBool(value: unknown): boolean {
   return value === true || value === "1" || value === "true";
@@ -48,13 +48,15 @@ export function parseListFilters(
     limit = n;
   }
 
-  const channel = (params.get("channel") ?? "") as ClientListFilters["channel"];
-  if (!CHANNELS.has(channel))
+  const channelRaw = params.get("channel") ?? "";
+  if (!CHANNELS.has(channelRaw))
     throw new AppError(400, "INVALID_FILTER", "Проверьте канал.");
+  const channel = channelRaw as ClientListFilters["channel"];
 
-  const activity = (params.get("activity") ?? "") as ClientListFilters["activity"];
-  if (!ACTIVITIES.has(activity))
+  const activityRaw = params.get("activity") ?? "";
+  if (!ACTIVITIES.has(activityRaw))
     throw new AppError(400, "INVALID_FILTER", "Проверьте фильтр активности.");
+  const activity = activityRaw as ClientListFilters["activity"];
 
   const cursor = params.get("cursor") ?? undefined;
   if (cursor) {
@@ -168,7 +170,11 @@ export async function listClientsV2(
       ];
       if (phone) {
         parts.push(
-          sql<boolean>`regexp_replace(coalesce(c.phone, ''), '\\D', '', 'g') like ${"%" + phone + "%"}`,
+          eb(
+            sql<string>`regexp_replace(coalesce(c.phone, ''), '\\D', '', 'g')`,
+            "like",
+            "%" + phone + "%",
+          ),
         );
         parts.push(eb("c.phone", "ilike", "%" + phone + "%"));
       } else {

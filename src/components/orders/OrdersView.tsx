@@ -219,10 +219,6 @@ function OrdersPanel({
   const base = `/api/v1/businesses/${businessId}/orders`;
 
   useEffect(() => {
-    if (deepClientId) setCreateOpen(true);
-  }, [deepClientId]);
-
-  useEffect(() => {
     let alive = true;
     const timer = setTimeout(() => {
       setLoading(true);
@@ -583,7 +579,9 @@ function CreateOrderForClientDialog({
 
   useEffect(() => {
     let alive = true;
-    setLoadingClient(true);
+    queueMicrotask(() => {
+      if (alive) setLoadingClient(true);
+    });
     void getClientDetail(businessId, clientId)
       .then((data) => {
         if (!alive) return;
@@ -610,14 +608,18 @@ function CreateOrderForClientDialog({
 
   useEffect(() => {
     if (!productId) {
-      setVariants([]);
-      setVariantId("");
+      queueMicrotask(() => {
+        setVariants([]);
+        setVariantId("");
+      });
       return;
     }
     const picked = products.find((p) => p.id === productId);
     if (!picked?.use_variants) {
-      setVariants([]);
-      setVariantId("");
+      queueMicrotask(() => {
+        setVariants([]);
+        setVariantId("");
+      });
       return;
     }
     let alive = true;

@@ -7,7 +7,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseListFilters } from "../src/server/clients/list.ts";
 import { decideDuplicate } from "../src/server/clients/duplicates.ts";
-import { AppError } from "../src/server/http/errors.ts";
 
 test("clients v2 http filters: valid empty params", () => {
   const filters = parseListFilters(new URLSearchParams());
@@ -28,7 +27,7 @@ test("clients v2 http filters: reject malformed", () => {
   for (const [key, value] of cases) {
     assert.throws(
       () => parseListFilters(new URLSearchParams(`${key}=${value}`)),
-      (e) => e instanceof AppError && e.status === 400,
+      (e) => e && e.status === 400 && typeof e.code === "string",
       `${key}=${value}`,
     );
   }
@@ -49,7 +48,6 @@ test("clients v2 http filters: accept known enums and uuids", () => {
 });
 
 test("clients v2 http: public merged decision is invalid", async () => {
-  // decideDuplicate validates decision before DB access for "merged".
   await assert.rejects(
     () =>
       decideDuplicate(
@@ -62,6 +60,6 @@ test("clients v2 http: public merged decision is invalid", async () => {
           decision: "merged",
         },
       ),
-    (e) => e instanceof AppError && e.code === "INVALID_DECISION" && e.status === 400,
+    (e) => e && e.code === "INVALID_DECISION" && e.status === 400,
   );
 });

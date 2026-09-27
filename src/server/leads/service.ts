@@ -951,7 +951,9 @@ export async function createLead(
       phone: input.phone,
       email: emailFromAnswers(input.answers),
       identities:
-        input.platformUserId && input.source !== "max"
+        input.platformUserId &&
+        input.source !== "max" &&
+        input.source !== "manual"
           ? [
               {
                 kind: input.source,
