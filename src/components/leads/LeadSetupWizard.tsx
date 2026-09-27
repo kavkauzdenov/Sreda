@@ -557,7 +557,14 @@ function WizardSteps({
                   </span>
                   <select
                     className="field__control"
-                    value={String(draft.processing.firstResponseSlaMinutes)}
+                    value={
+                      SLA_PRESETS.some(
+                        (minutes) =>
+                          minutes === draft.processing.firstResponseSlaMinutes,
+                      )
+                        ? String(draft.processing.firstResponseSlaMinutes)
+                        : "custom"
+                    }
                     onChange={(e) => {
                       const raw = e.target.value;
                       setDraft({
@@ -565,7 +572,11 @@ function WizardSteps({
                         processing: {
                           ...draft.processing,
                           firstResponseSlaMinutes:
-                            raw === "null" ? null : Number(raw),
+                            raw === "null"
+                              ? null
+                              : raw === "custom"
+                                ? 45
+                                : Number(raw),
                         },
                       });
                     }}
@@ -575,8 +586,43 @@ function WizardSteps({
                         {SLA_LABELS[String(mins)]}
                       </option>
                     ))}
+                    <option value="custom">Своё значение</option>
                   </select>
                 </label>
+                {!SLA_PRESETS.some(
+                  (minutes) =>
+                    minutes === draft.processing.firstResponseSlaMinutes,
+                ) ? (
+                  <label className="field">
+                    <span className="field__label">Минут до первой реакции</span>
+                    <input
+                      className="field__control"
+                      type="number"
+                      min={1}
+                      max={1440}
+                      inputMode="numeric"
+                      value={draft.processing.firstResponseSlaMinutes ?? 45}
+                      onChange={(e) => {
+                        const minutes = Number(e.target.value);
+                        setDraft({
+                          ...draft,
+                          processing: {
+                            ...draft.processing,
+                            firstResponseSlaMinutes:
+                              Number.isInteger(minutes) &&
+                              minutes >= 1 &&
+                              minutes <= 1440
+                                ? minutes
+                                : 45,
+                          },
+                        });
+                      }}
+                    />
+                    <small className="field-hint">
+                      От 1 минуты до 24 часов.
+                    </small>
+                  </label>
+                ) : null}
               </>
             )}
 
