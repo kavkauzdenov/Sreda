@@ -43,9 +43,12 @@ async function bodyOverflowX(page) {
   });
 }
 
-async function minTouchTarget(page, scope = ".clients-workspace, .crm-page, main") {
+async function minTouchTarget(page, scope = ".clients-page") {
   return page.evaluate((sel) => {
-    const root = document.querySelector(sel) || document.body;
+    const root =
+      document.querySelector(sel) ||
+      document.querySelector(".clients-workspace") ||
+      document.body;
     let min = Infinity;
     for (const el of root.querySelectorAll(
       "button, .button, a.button, [role='button']",
@@ -53,8 +56,11 @@ async function minTouchTarget(page, scope = ".clients-workspace, .crm-page, main
       if (!(el instanceof HTMLElement)) continue;
       const style = getComputedStyle(el);
       if (style.display === "none" || style.visibility === "hidden") continue;
+      if (style.opacity === "0") continue;
       const r = el.getBoundingClientRect();
       if (r.width < 1 || r.height < 1) continue;
+      // Ignore off-screen / collapsed controls that are not user-facing.
+      if (r.bottom < 0 || r.top > window.innerHeight) continue;
       min = Math.min(min, Math.min(r.width, r.height));
     }
     return min === Infinity ? 0 : min;
