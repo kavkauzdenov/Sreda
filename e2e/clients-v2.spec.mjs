@@ -47,6 +47,53 @@ async function bodyOverflowX(page) {
   });
 }
 
+/** Temporary diagnostic: list elements that extend past the viewport. */
+async function diagnoseOverflow(page) {
+  return page.evaluate(() => {
+    const vw = window.innerWidth;
+    const hits = [];
+    for (const el of document.querySelectorAll("*")) {
+      if (!(el instanceof HTMLElement)) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width < 1 || r.height < 1) continue;
+      if (r.right > vw + 1 || r.left < -1) {
+        hits.push({
+          tag: el.tagName.toLowerCase(),
+          className: String(el.className || "").slice(0, 120),
+          left: Math.round(r.left),
+          right: Math.round(r.right),
+          width: Math.round(r.width),
+          scrollWidth: el.scrollWidth,
+          clientWidth: el.clientWidth,
+        });
+      }
+    }
+    hits.sort((a, b) => b.right - a.right);
+    return {
+      innerWidth: vw,
+      docScrollWidth: document.documentElement.scrollWidth,
+      docClientWidth: document.documentElement.clientWidth,
+      bodyScrollWidth: document.body?.scrollWidth ?? null,
+      bodyClientWidth: document.body?.clientWidth ?? null,
+      hits: hits.slice(0, 25),
+    };
+  });
+}
+
+async function expectNoBodyOverflow(page, label = "") {
+  const overflow = await bodyOverflowX(page);
+  if (overflow) {
+    const diag = await diagnoseOverflow(page);
+    console.error(
+      `HORIZONTAL_OVERFLOW${label ? ` (${label})` : ""}`,
+      JSON.stringify(diag, null, 2),
+    );
+  }
+  expect(overflow, `body horizontal overflow${label ? ` at ${label}` : ""}`).toBe(
+    false,
+  );
+}
+
 async function minTouchTarget(page, scope = ".clients-page") {
   return page.evaluate((sel) => {
     const root =
@@ -160,7 +207,10 @@ async function boot(page) {
   return true;
 }
 
-/** Create a client via UI; waits for create dialog to close. Returns client id. */
+/**
+ * Create a client via UI.
+ * Client id comes from the POST JSON response — never from the current URL.
+ */
 async function createClientViaUi(page, name = "Аудит Клиент") {
   const newBtn = page.getByRole("button", { name: /новый клиент/i });
   await expect(newBtn).toBeVisible();
@@ -180,16 +230,16 @@ async function createClientViaUi(page, name = "Аудит Клиент") {
   );
   await page.getByRole("button", { name: /^Создать$/i }).click();
   const res = await createPromise;
-  const body = await res.json().catch(() => ({}));
   expect(res.ok()).toBeTruthy();
+  const body = await res.json();
+  expect(body && typeof body.id === "string" && body.id.length > 0).toBeTruthy();
   await expect(page.locator(".client-dialog-overlay")).toHaveCount(0, {
     timeout: 10_000,
   });
   await expect(
-    page.locator(".client-detail, .client-detail--dialog"),
+    page.locator(".client-detail, .client-detail--dialog, .client-detail--drawer"),
   ).toBeVisible({ timeout: 20_000 });
-  const fromUrl = page.url().match(/client=([0-9a-f-]{36})/i);
-  return body.id || (fromUrl ? fromUrl[1] : null);
+  return body.id;
 }
 
 test.describe("Clients V2 UI audit", () => {
@@ -208,7 +258,7 @@ test.describe("Clients V2 UI audit", () => {
     for (const vp of VIEWPORTS) {
       await page.setViewportSize(vp);
       await page.waitForTimeout(100);
-      expect(await bodyOverflowX(page)).toBe(false);
+      await expectNoBodyOverflow(page, `${vp.width}x${vp.height}`);
       await page.screenshot({
         path: path.join(
           outDir,
@@ -248,6 +298,7 @@ test.describe("Clients V2 UI audit", () => {
     });
     await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);
+    await expect(page.locator(".client-dialog-overlay")).toHaveCount(0);
   });
 
   test("create/select client + tabs", async ({ page, browserName }) => {
@@ -255,7 +306,12 @@ test.describe("Clients V2 UI audit", () => {
     if (!(await boot(page))) return;
 
     await page.setViewportSize({ width: 1440, height: 900 });
-    await createClientViaUi(page, "Аудит Клиент Tabs");
+    const clientId = await createClientViaUi(page, "Аудит Клиент Tabs");
+    expect(clientId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    );
+    await expect(page.locator(".client-dialog-overlay")).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Аудит Клиент Tabs" })).toBeVisible();
 
     for (const name of [/Обзор/i, /История/i, /Заметки/i]) {
       const tab = page.getByRole("tab", { name });
@@ -267,7 +323,7 @@ test.describe("Clients V2 UI audit", () => {
       path: path.join(outDir, `clients_detail_${browserName}.png`),
       fullPage: false,
     });
-    expect(await bodyOverflowX(page)).toBe(false);
+    await expectNoBodyOverflow(page, "desktop detail");
   });
 
   test("dark theme", async ({ page, browserName }) => {
@@ -283,7 +339,7 @@ test.describe("Clients V2 UI audit", () => {
       path: path.join(outDir, `clients_1440_${browserName}_dark.png`),
       fullPage: false,
     });
-    expect(await bodyOverflowX(page)).toBe(false);
+    await expectNoBodyOverflow(page, "dark 1440");
     expect(await minTouchTarget(page)).toBeGreaterThanOrEqual(43.5);
   });
 
@@ -292,17 +348,24 @@ test.describe("Clients V2 UI audit", () => {
     if (!(await boot(page))) return;
 
     await page.setViewportSize({ width: 1440, height: 900 });
-    const clientId = await createClientViaUi(page, "Аудит Deep Link");
-    expect(clientId).toBeTruthy();
+    const clientName = "Аудит Deep Link";
+    const clientId = await createClientViaUi(page, clientName);
+    expect(clientId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    );
 
-    await page.goto(baseURL + `/clients?client=${clientId}`, {
+    await page.goto(baseURL + `/clients?client=${encodeURIComponent(clientId)}`, {
       waitUntil: "domcontentloaded",
       timeout: 60_000,
     });
-    await expect(
-      page.locator(".client-detail, .client-detail--dialog"),
-    ).toBeVisible({ timeout: 20_000 });
-    expect(await bodyOverflowX(page)).toBe(false);
+    const detail = page.locator(
+      ".client-detail, .client-detail--dialog, .client-detail--drawer",
+    );
+    await expect(detail).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole("heading", { name: clientName })).toBeVisible();
+    await expect(detail).toHaveAttribute("aria-label", new RegExp(clientName));
+    expect(page.url()).toContain(`client=${clientId}`);
+    await expectNoBodyOverflow(page, "deep-link");
   });
 
   test("mobile/tablet detail dialog semantics", async ({ page }) => {
@@ -310,37 +373,53 @@ test.describe("Clients V2 UI audit", () => {
     if (!(await boot(page))) return;
 
     await page.setViewportSize({ width: 1440, height: 900 });
-    await createClientViaUi(page, "Аудит Mobile Dialog");
+    const clientName = "Аудит Mobile Dialog";
+    await createClientViaUi(page, clientName);
+    await expect(page.locator(".client-dialog-overlay")).toHaveCount(0);
 
     // Tablet band: >900px and ≤1279px → drawer + aria-modal
     await page.setViewportSize({ width: 1024, height: 768 });
-    await page.waitForTimeout(200);
-    expect(await bodyOverflowX(page)).toBe(false);
+    await page.waitForTimeout(250);
+    await expectNoBodyOverflow(page, "1024 drawer");
     const tabletDetail = page.locator(
       '.client-detail--drawer[role="dialog"]',
     );
     await expect(tabletDetail).toBeVisible({ timeout: 15_000 });
     await expect(tabletDetail).toHaveAttribute("aria-modal", "true");
-    await expect(tabletDetail).toHaveAttribute("aria-label", /.+/);
+    await expect(tabletDetail).toHaveAttribute(
+      "aria-label",
+      new RegExp(clientName),
+    );
     expect(await minTouchTarget(page)).toBeGreaterThanOrEqual(43.5);
 
     // Mobile ≤900px → dialog + aria-modal
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.waitForTimeout(200);
-    expect(await bodyOverflowX(page)).toBe(false);
+    await page.waitForTimeout(250);
+    await expectNoBodyOverflow(page, "390 dialog");
     const mobileDetail = page.locator(
       '.client-detail--dialog[role="dialog"]',
     );
     await expect(mobileDetail).toBeVisible({ timeout: 15_000 });
     await expect(mobileDetail).toHaveAttribute("aria-modal", "true");
-    await expect(mobileDetail).toHaveAttribute("aria-label", /.+/);
+    await expect(mobileDetail).toHaveAttribute(
+      "aria-label",
+      new RegExp(clientName),
+    );
     expect(await minTouchTarget(page)).toBeGreaterThanOrEqual(43.5);
 
     await page.setViewportSize({ width: 320, height: 568 });
-    await page.waitForTimeout(150);
-    expect(await bodyOverflowX(page)).toBe(false);
+    await page.waitForTimeout(200);
+    await expectNoBodyOverflow(page, "320 dialog");
     await expect(mobileDetail).toBeVisible();
     await expect(mobileDetail).toHaveAttribute("aria-modal", "true");
     expect(await minTouchTarget(page)).toBeGreaterThanOrEqual(43.5);
+
+    await page.setViewportSize({ width: 768, height: 1024 });
+    await page.waitForTimeout(200);
+    await expectNoBodyOverflow(page, "768");
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.waitForTimeout(200);
+    await expectNoBodyOverflow(page, "1440");
   });
 });
