@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { useSearchParams } from "next/navigation";
 import { useBusinessContext } from "@/hooks/useBusinessContext";
 import { LoadingPanel } from "@/components/dashboard/LoadingPanel";
-import { SolutionSetupBanner } from "@/components/solutions/SolutionSetupBanner";
+import { OrdersSetupPanel } from "@/components/orders-v2/OrdersSetupPanel";
 import { OrdersHeader } from "@/components/orders-v2/OrdersHeader";
 import { OrdersSummaryCards } from "@/components/orders-v2/OrdersSummaryCards";
 import { OrderFilters } from "@/components/orders-v2/OrderFilters";
@@ -315,7 +315,15 @@ function OrdersWorkspaceBody({
         }}
         periodLabel={periodLabel}
       />
-      <SolutionSetupBanner code="orders" />
+      <OrdersSetupPanel
+        businessId={businessId}
+        canEdit={canAssignOthers}
+        onModeChange={(mode) => setBusinessMode(mode)}
+        onGoTab={(next) => {
+          setSelected(null);
+          setTab(next);
+        }}
+      />
 
       {activeTab === "orders" ? (
         <>

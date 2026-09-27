@@ -41,6 +41,7 @@ export const ORDER_STATUSES: OrderStatus[] = [
   "cancelled",
 ];
 
+/** Base graph; fulfillment-specific filtering via allowedStatusesForFulfillment. */
 export const STATUS_FLOW: Record<OrderStatus, OrderStatus[]> = {
   new: ["accepted", "cancelled"],
   accepted: ["assembling", "cancelled"],
@@ -51,6 +52,22 @@ export const STATUS_FLOW: Record<OrderStatus, OrderStatus[]> = {
   completed: [],
   cancelled: [],
 };
+
+/**
+ * Pickup: ready → handed_over → completed.
+ * Delivery: ready → delivered → completed.
+ */
+export function allowedStatusesForFulfillment(
+  status: OrderStatus,
+  fulfillment: OrderFulfillment,
+): OrderStatus[] {
+  const next = STATUS_FLOW[status] ?? [];
+  return next.filter((s) => {
+    if (s === "handed_over" && fulfillment === "delivery") return false;
+    if (s === "delivered" && fulfillment === "pickup") return false;
+    return true;
+  });
+}
 
 export const STATUS_LABELS: Record<OrderStatus, string> = {
   new: "Новый",

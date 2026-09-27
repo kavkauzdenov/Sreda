@@ -1,5 +1,5 @@
 /**
- * Orders V2 UI audit — split into independent tests.
+ * Orders V2 UI audit — real flows (not dialog open/close only).
  * Prefer AUDIT_STORAGE_STATE (UI gate register → recovery → business).
  * Must not skip when the CI isolated app is healthy.
  */
@@ -138,7 +138,6 @@ async function ensureAuthed(page) {
 }
 
 async function ensureOrdersSolution(page) {
-  // Activate via solutions API if present in page context.
   await page.evaluate(async () => {
     try {
       const me = await fetch("/api/v1/businesses").then((r) => r.json());
@@ -195,6 +194,35 @@ async function openTab(page, name) {
   );
   await expect(tab).toBeVisible({ timeout: 15_000 });
   await tab.click();
+}
+
+async function seedBiz(page) {
+  return page.evaluate(async () => {
+    const businesses = await fetch("/api/v1/businesses").then((r) => r.json());
+    const biz = Array.isArray(businesses) ? businesses[0] : null;
+    const businessId = biz?.id;
+    if (!businessId) return { error: "no-business" };
+    await fetch(`/api/v1/businesses/${encodeURIComponent(businessId)}/solutions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: "orders", enabled: true }),
+    });
+    await fetch(
+      `/api/v1/businesses/${encodeURIComponent(businessId)}/orders?view=settings`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          pickupEnabled: true,
+          deliveryEnabled: true,
+          deliveryPrice: "150",
+          freeDeliveryFrom: "5000",
+          minimumOrderAmount: null,
+        }),
+      },
+    );
+    return { businessId };
+  });
 }
 
 test.describe("Orders V2 UI audit", () => {
@@ -255,10 +283,9 @@ test.describe("Orders V2 UI audit", () => {
     await expectNoBodyOverflow(page, "filters");
   });
 
-  test("select order detail + status transition", async ({ page, browserName }) => {
-    test.setTimeout(120_000);
+  test("pickup pipeline + cancel confirmation", async ({ page, browserName }) => {
+    test.setTimeout(150_000);
     if (!(await boot(page))) return;
-
     await page.setViewportSize({ width: 1440, height: 900 });
 
     const seeded = await page.evaluate(async () => {
@@ -277,15 +304,13 @@ test.describe("Orders V2 UI audit", () => {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            name: "E2E Товар",
+            name: "E2E Pickup",
             price: "199",
             availability: "in_stock",
           }),
         },
       );
-      if (!productRes.ok) {
-        return { error: `product ${productRes.status}` };
-      }
+      if (!productRes.ok) return { error: `product ${productRes.status}` };
       const product = await productRes.json();
       const orderRes = await fetch(
         `/api/v1/businesses/${encodeURIComponent(businessId)}/orders`,
@@ -294,138 +319,407 @@ test.describe("Orders V2 UI audit", () => {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             platform: "web",
-            customer_name: "E2E Клиент",
-            customer_phone: "+79998887766",
+            customer_name: "E2E Pickup Client",
+            customer_phone: "+79998887701",
             fulfillment: "pickup",
-            request_key: `e2e-${Date.now()}`,
+            request_key: `e2e-pick-${Date.now()}`,
             cart_items: [{ product_id: product.id, quantity: 1 }],
           }),
         },
       );
-      if (!orderRes.ok) {
-        return { error: `order ${orderRes.status}` };
-      }
+      if (!orderRes.ok) return { error: `order ${orderRes.status}` };
       const order = await orderRes.json();
+      for (const status of ["accepted", "assembling", "ready"]) {
+        const patch = await fetch(
+          `/api/v1/businesses/${encodeURIComponent(businessId)}/orders/${order.id}`,
+          {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ status }),
+          },
+        );
+        if (!patch.ok) return { error: `patch ${status} ${patch.status}` };
+      }
       return { businessId, orderId: order.id, orderNumber: order.order_number };
     });
 
     expect(seeded.error, JSON.stringify(seeded)).toBeUndefined();
-    expect(seeded.orderId).toBeTruthy();
-
     await page.goto(
       baseURL + `/orders?order=${encodeURIComponent(seeded.orderId)}`,
       { waitUntil: "domcontentloaded", timeout: 60_000 },
     );
 
-    const detail = page.locator(
-      ".client-detail, .client-detail--dialog, .client-detail--drawer, .orders-detail",
-    );
     await expect(
-      page.getByRole("heading", { name: /заказ|e2e/i }).first(),
+      page.getByRole("button", { name: /перевести в «выдан»/i }).first(),
     ).toBeVisible({ timeout: 25_000 });
-    await expect(page.getByText(/E2E Клиент/i).first()).toBeVisible({
+    await expect(
+      page.getByRole("button", { name: /^доставлен$/i }),
+    ).toHaveCount(0);
+
+    const cancelBtn = page.getByRole("button", { name: /^отменить$/i }).first();
+    await cancelBtn.click();
+    const confirm = page.getByRole("alertdialog");
+    await expect(confirm).toBeVisible();
+    await expect(confirm).toContainText(/отменить заказ/i);
+    await expect(confirm).toContainText(/остатки будут возвращены/i);
+    await page.keyboard.press("Escape");
+    await expect(confirm).toHaveCount(0, { timeout: 10_000 });
+
+    await cancelBtn.click();
+    await expect(page.getByRole("alertdialog")).toBeVisible();
+    const patchPromise = page.waitForResponse(
+      (r) =>
+        r.request().method() === "PATCH" &&
+        r.url().includes(`/orders/${seeded.orderId}`),
+      { timeout: 30_000 },
+    );
+    await page.getByRole("button", { name: /отменить заказ/i }).click();
+    const patchRes = await patchPromise;
+    expect(patchRes.ok()).toBeTruthy();
+    await expect(page.getByText(/заказ отменён/i).first()).toBeVisible({
       timeout: 15_000,
     });
 
-    // Primary status action from new → accepted.
-    const accept = page
-      .getByRole("button", { name: /перевести в «принят»/i })
-      .first();
-    if (await accept.isVisible().catch(() => false)) {
-      const patchPromise = page.waitForResponse(
-        (r) =>
-          r.request().method() === "PATCH" &&
-          r.url().includes(`/orders/${seeded.orderId}`),
-        { timeout: 30_000 },
-      );
-      await accept.click();
-      const patchRes = await patchPromise;
-      expect(patchRes.ok()).toBeTruthy();
-      // Next pipeline action after accepted → assembling (avoid matching hidden <option>Принят</option>).
-      await expect(
-        page.getByRole("button", { name: /перевести в «сборка»/i }).first(),
-      ).toBeVisible({ timeout: 15_000 });
-    }
-
     await page.screenshot({
-      path: path.join(outDir, `orders_detail_status_${browserName}.png`),
+      path: path.join(outDir, `orders_pickup_cancel_${browserName}.png`),
       fullPage: false,
     });
-    await expectNoBodyOverflow(page, "order detail");
-    void detail;
   });
 
-  test("manual create order dialog", async ({ page, browserName }) => {
-    test.setTimeout(90_000);
+  test("delivery pipeline shows delivered only", async ({ page, browserName }) => {
+    test.setTimeout(150_000);
     if (!(await boot(page))) return;
-
     await page.setViewportSize({ width: 1440, height: 900 });
-    const createBtn = page.getByRole("button", { name: /создать заказ/i });
-    await expect(createBtn).toBeVisible();
-    await createBtn.click();
+
+    const seeded = await page.evaluate(async () => {
+      const businesses = await fetch("/api/v1/businesses").then((r) => r.json());
+      const biz = Array.isArray(businesses) ? businesses[0] : null;
+      const businessId = biz?.id;
+      if (!businessId) return { error: "no-business" };
+      const productRes = await fetch(
+        `/api/v1/businesses/${encodeURIComponent(businessId)}/products`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            name: "E2E Delivery",
+            price: "250",
+            availability: "in_stock",
+          }),
+        },
+      );
+      if (!productRes.ok) return { error: `product ${productRes.status}` };
+      const product = await productRes.json();
+      const orderRes = await fetch(
+        `/api/v1/businesses/${encodeURIComponent(businessId)}/orders`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            platform: "web",
+            customer_name: "E2E Delivery Client",
+            customer_phone: "+79998887702",
+            fulfillment: "delivery",
+            delivery_address: "Тестовая 1",
+            request_key: `e2e-del-${Date.now()}`,
+            cart_items: [{ product_id: product.id, quantity: 1 }],
+          }),
+        },
+      );
+      if (!orderRes.ok) return { error: `order ${orderRes.status}` };
+      const order = await orderRes.json();
+      for (const status of ["accepted", "assembling", "ready"]) {
+        await fetch(
+          `/api/v1/businesses/${encodeURIComponent(businessId)}/orders/${order.id}`,
+          {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ status }),
+          },
+        );
+      }
+      return { orderId: order.id };
+    });
+
+    expect(seeded.error, JSON.stringify(seeded)).toBeUndefined();
+    await page.goto(
+      baseURL + `/orders?order=${encodeURIComponent(seeded.orderId)}`,
+      { waitUntil: "domcontentloaded", timeout: 60_000 },
+    );
+    await expect(
+      page.getByRole("button", { name: /перевести в «доставлен»/i }).first(),
+    ).toBeVisible({ timeout: 25_000 });
+    await expect(
+      page.getByRole("button", { name: /^выдан$/i }),
+    ).toHaveCount(0);
+
+    await page.screenshot({
+      path: path.join(outDir, `orders_delivery_pipeline_${browserName}.png`),
+      fullPage: false,
+    });
+  });
+
+  test("manual multi-item order with totals", async ({ page, browserName }) => {
+    test.setTimeout(180_000);
+    if (!(await boot(page))) return;
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    const seeded = await page.evaluate(async () => {
+      const businesses = await fetch("/api/v1/businesses").then((r) => r.json());
+      const biz = Array.isArray(businesses) ? businesses[0] : null;
+      const businessId = biz?.id;
+      if (!businessId) return { error: "no-business" };
+      await fetch(
+        `/api/v1/businesses/${encodeURIComponent(businessId)}/orders?view=settings`,
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            pickupEnabled: true,
+            deliveryEnabled: true,
+            deliveryPrice: "100",
+            freeDeliveryFrom: null,
+          }),
+        },
+      );
+      const names = ["E2E Multi A", "E2E Multi B"];
+      const products = [];
+      for (const name of names) {
+        const res = await fetch(
+          `/api/v1/businesses/${encodeURIComponent(businessId)}/products`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              name,
+              price: name.endsWith("A") ? "100" : "200",
+              availability: "in_stock",
+              active: true,
+            }),
+          },
+        );
+        if (!res.ok) return { error: `product ${res.status}` };
+        products.push(await res.json());
+      }
+      return { businessId, products };
+    });
+    expect(seeded.error, JSON.stringify(seeded)).toBeUndefined();
+
+    await page.goto(baseURL + "/orders", {
+      waitUntil: "domcontentloaded",
+      timeout: 60_000,
+    });
+    await page.getByRole("button", { name: /создать заказ/i }).click();
     const dialog = page.getByRole("dialog");
     await expect(dialog).toBeVisible({ timeout: 15_000 });
-    await expect(dialog).toHaveAttribute("aria-modal", "true");
 
+    await dialog.getByRole("button", { name: /^новый$/i }).click();
+    await dialog.getByRole("textbox", { name: /имя/i }).fill("Multi Client");
+    await dialog.getByRole("textbox", { name: /телефон/i }).fill("+79991112233");
+
+    const cartSection = dialog.locator("fieldset").filter({ hasText: /^Корзина/ });
+    for (const p of seeded.products) {
+      await cartSection.locator("select").first().selectOption({ label: new RegExp(p.name) });
+      await dialog.getByRole("button", { name: /добавить в заказ/i }).click();
+      await expect(dialog.getByText(p.name).first()).toBeVisible();
+    }
+
+    await expect(dialog.getByRole("region", { name: /итоги заказа/i })).toBeVisible();
+    await expect(dialog.getByText(/^Подытог$/)).toBeVisible();
+    await expect(dialog.getByText(/^Доставка$/)).toBeVisible();
+    await expect(dialog.getByText(/^Итого$/)).toBeVisible();
+
+    const createPromise = page.waitForResponse(
+      (r) => {
+        if (r.request().method() !== "POST") return false;
+        try {
+          const u = new URL(r.url());
+          return /\/api\/v1\/businesses\/[^/]+\/orders$/.test(u.pathname);
+        } catch {
+          return false;
+        }
+      },
+      { timeout: 60_000 },
+    );
+    await dialog.getByRole("button", { name: /^создать заказ$/i }).click();
+    const createRes = await createPromise;
+    expect(createRes.ok()).toBeTruthy();
+    const created = await createRes.json();
+    expect(created.id).toBeTruthy();
+
+    await expect(page.getByText(/E2E Multi A/i).first()).toBeVisible({
+      timeout: 25_000,
+    });
+    await expect(page.getByText(/E2E Multi B/i).first()).toBeVisible();
+    // Detail should list both line items.
+    await expect(page.locator(".crm-list li").filter({ hasText: /E2E Multi/ })).toHaveCount(2);
     await page.screenshot({
-      path: path.join(outDir, `orders_create_dialog_${browserName}.png`),
+      path: path.join(outDir, `orders_manual_multi_${browserName}.png`),
       fullPage: false,
     });
-    await page.keyboard.press("Escape");
-    await expect(dialog).toHaveCount(0, { timeout: 10_000 });
   });
 
-  test("catalog tab + product editor", async ({ page, browserName }) => {
-    test.setTimeout(120_000);
+  test("catalog product creation + filters + image placeholder", async ({
+    page,
+    browserName,
+  }) => {
+    test.setTimeout(180_000);
     if (!(await boot(page))) return;
-
     await page.setViewportSize({ width: 1440, height: 900 });
     await openTab(page, /каталог/i);
     await expect(page.getByRole("region", { name: /каталог/i })).toBeVisible({
       timeout: 20_000,
     });
 
+    await expect(
+      page.getByPlaceholder(/название или sku/i),
+    ).toBeVisible();
+
     const add = page.getByRole("button", { name: /\+ добавить/i });
-    await expect(add).toBeVisible();
     await add.click();
     const dialog = page.getByRole("dialog");
     await expect(dialog).toBeVisible({ timeout: 15_000 });
 
+    await dialog.getByRole("textbox", { name: /название/i }).fill("E2E Catalog Tea");
+
+    // Wizard: main → images → price → variants → inventory → preview
+    for (let i = 0; i < 6; i++) {
+      const createBtn = dialog.getByRole("button", {
+        name: /^(создать|сохранить)$/i,
+      });
+      if (await createBtn.isVisible().catch(() => false)) break;
+      const price = dialog.getByRole("textbox", { name: /базовая цена/i });
+      if (await price.isVisible().catch(() => false)) {
+        await price.fill("350");
+      }
+      const next = dialog.getByRole("button", { name: /^далее$/i });
+      if (await next.isVisible().catch(() => false)) {
+        await next.click();
+        await page.waitForTimeout(150);
+      } else break;
+    }
+
+    const savePromise = page.waitForResponse(
+      (r) =>
+        r.url().includes("/products") &&
+        (r.request().method() === "POST" || r.request().method() === "PATCH"),
+      { timeout: 60_000 },
+    );
+    await dialog.getByRole("button", { name: /^(создать|сохранить)$/i }).click();
+    const res = await savePromise;
+    expect(res.ok()).toBeTruthy();
+
+    await expect(page.getByText(/E2E Catalog Tea/i).first()).toBeVisible({
+      timeout: 30_000,
+    });
+    await expect(
+      page.getByRole("img", { name: /нет фото/i }).first(),
+    ).toBeVisible();
+
+    await page.getByPlaceholder(/название или sku/i).fill("Catalog Tea");
+    await page.waitForTimeout(300);
+    await expect(page.getByText(/E2E Catalog Tea/i).first()).toBeVisible();
+
     await page.screenshot({
-      path: path.join(outDir, `orders_catalog_editor_${browserName}.png`),
+      path: path.join(outDir, `orders_catalog_created_${browserName}.png`),
       fullPage: false,
     });
-    await page.keyboard.press("Escape");
     await expectNoBodyOverflow(page, "catalog");
   });
 
-  test("inventory tab", async ({ page, browserName }) => {
-    test.setTimeout(90_000);
+  test("inventory stock adjustment + low stock", async ({ page, browserName }) => {
+    test.setTimeout(150_000);
     if (!(await boot(page))) return;
-
     await page.setViewportSize({ width: 1440, height: 900 });
+
+    const seeded = await page.evaluate(async () => {
+      const businesses = await fetch("/api/v1/businesses").then((r) => r.json());
+      const biz = Array.isArray(businesses) ? businesses[0] : null;
+      const businessId = biz?.id;
+      if (!businessId) return { error: "no-business" };
+      const productRes = await fetch(
+        `/api/v1/businesses/${encodeURIComponent(businessId)}/products`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            name: "E2E Stock Item",
+            price: "80",
+            track_inventory: true,
+            availability: "quantity",
+            stock_quantity: 8,
+            low_stock_threshold: 5,
+          }),
+        },
+      );
+      if (!productRes.ok) return { error: `product ${productRes.status}` };
+      const product = await productRes.json();
+      const adj = await fetch(
+        `/api/v1/businesses/${encodeURIComponent(businessId)}/orders?view=inventory`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ productId: product.id, quantity: 4 }),
+        },
+      );
+      if (!adj.ok) return { error: `adjust ${adj.status}` };
+      const inv = await fetch(
+        `/api/v1/businesses/${encodeURIComponent(businessId)}/orders?view=inventory&state=low`,
+      ).then((r) => r.json());
+      return {
+        businessId,
+        productId: product.id,
+        lowHit: (inv.items || []).some((i) => i.productId === product.id),
+      };
+    });
+    expect(seeded.error, JSON.stringify(seeded)).toBeUndefined();
+    expect(seeded.lowHit).toBeTruthy();
+
     await openTab(page, /склад/i);
     await expect(
       page.getByRole("region", { name: "Склад", exact: true }),
-    ).toBeVisible({
+    ).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText(/E2E Stock Item/i).first()).toBeVisible({
       timeout: 20_000,
     });
+
     await page.screenshot({
-      path: path.join(outDir, `orders_inventory_${browserName}.png`),
+      path: path.join(outDir, `orders_inventory_low_${browserName}.png`),
       fullPage: false,
     });
-    await expectNoBodyOverflow(page, "inventory");
   });
 
-  test("settings tab", async ({ page, browserName }) => {
-    test.setTimeout(90_000);
+  test("settings save + channel deep links", async ({ page, browserName }) => {
+    test.setTimeout(120_000);
     if (!(await boot(page))) return;
-
     await page.setViewportSize({ width: 1440, height: 900 });
+    await seedBiz(page);
     await openTab(page, /настройки/i);
     await expect(page.getByRole("heading", { name: /настройки заказов/i })).toBeVisible({
       timeout: 20_000,
     });
+    await expect(page.getByText(/telegram/i).first()).toBeVisible();
+    await expect(page.getByText(/^vk$/i).first()).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: /подключить/i }).first(),
+    ).toHaveAttribute("href", /connections/);
+
+    const save = page.getByRole("button", { name: /сохранить настройки/i });
+    if (await save.isVisible().catch(() => false)) {
+      const savePromise = page.waitForResponse(
+        (r) =>
+          r.url().includes("view=settings") &&
+          (r.request().method() === "PATCH" || r.request().method() === "PUT"),
+        { timeout: 30_000 },
+      );
+      await save.click();
+      const res = await savePromise;
+      expect(res.ok()).toBeTruthy();
+      await expect(page.getByText(/настройки сохранены/i)).toBeVisible({
+        timeout: 15_000,
+      });
+    }
+
     await page.screenshot({
       path: path.join(outDir, `orders_settings_${browserName}.png`),
       fullPage: false,
@@ -483,7 +777,6 @@ test.describe("Orders V2 UI audit", () => {
       page.getByRole("heading", { name: /настройки заказов/i }),
     ).toBeVisible({ timeout: 20_000 });
 
-    // Unknown order id should not crash the workspace.
     await page.goto(
       baseURL + "/orders?order=00000000-0000-4000-8000-000000000099",
       {
@@ -507,19 +800,64 @@ test.describe("Orders V2 UI audit", () => {
         timeout: 60_000,
       },
     );
-    // Workspace must remain usable; create dialog may open when client preset is set.
     await expect(page.locator(".orders-page")).toBeVisible({ timeout: 20_000 });
     await expectNoBodyOverflow(page, "client deep-link");
   });
 
   test("mobile viewport detail shell", async ({ page, browserName }) => {
-    test.setTimeout(120_000);
+    test.setTimeout(150_000);
     if (!(await boot(page))) return;
 
+    const seeded = await page.evaluate(async () => {
+      const businesses = await fetch("/api/v1/businesses").then((r) => r.json());
+      const biz = Array.isArray(businesses) ? businesses[0] : null;
+      const businessId = biz?.id;
+      if (!businessId) return { error: "no-business" };
+      const productRes = await fetch(
+        `/api/v1/businesses/${encodeURIComponent(businessId)}/products`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            name: "E2E Mobile",
+            price: "99",
+            availability: "in_stock",
+          }),
+        },
+      );
+      if (!productRes.ok) return { error: `product ${productRes.status}` };
+      const product = await productRes.json();
+      const orderRes = await fetch(
+        `/api/v1/businesses/${encodeURIComponent(businessId)}/orders`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            platform: "web",
+            customer_name: "Mobile Client",
+            customer_phone: "+79990001122",
+            fulfillment: "pickup",
+            request_key: `e2e-mob-${Date.now()}`,
+            cart_items: [{ product_id: product.id, quantity: 1 }],
+          }),
+        },
+      );
+      if (!orderRes.ok) return { error: `order ${orderRes.status}` };
+      const order = await orderRes.json();
+      return { orderId: order.id };
+    });
+    expect(seeded.error, JSON.stringify(seeded)).toBeUndefined();
+
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.waitForTimeout(200);
+    await page.goto(
+      baseURL + `/orders?order=${encodeURIComponent(seeded.orderId)}`,
+      { waitUntil: "domcontentloaded", timeout: 60_000 },
+    );
     await expect(page.locator(".orders-page")).toBeVisible();
-    await expectNoBodyOverflow(page, "390");
+    await expect(
+      page.getByRole("dialog").or(page.locator(".client-detail--dialog")),
+    ).toBeVisible({ timeout: 25_000 });
+    await expectNoBodyOverflow(page, "390 detail");
     expect(await minTouchTarget(page)).toBeGreaterThanOrEqual(43.5);
 
     await page.screenshot({

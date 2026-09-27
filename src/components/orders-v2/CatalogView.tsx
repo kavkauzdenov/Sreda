@@ -1,12 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ProductCard } from "@/components/orders-v2/ProductCard";
 import { ProductEditorWizard } from "@/components/orders-v2/ProductEditorWizard";
-import type {
-  BusinessMode,
-  ProductCategory,
-  ProductListItem,
+import {
+  EMPTY_CATALOG_FILTERS,
+  productStockLabel,
+  type BusinessMode,
+  type CatalogFilterValues,
+  type ProductCategory,
+  type ProductListItem,
 } from "@/components/orders-v2/types";
 import {
   createCategory,
@@ -14,6 +17,32 @@ import {
   listProducts,
   updateProduct,
 } from "@/services/orders.service";
+
+function stockStateOf(product: ProductListItem): string {
+  const label = productStockLabel(product);
+  if (!label || label === "Без учёта") return "untracked";
+  if (label.startsWith("Нет")) return "out";
+  if (label.startsWith("Мало")) return "low";
+  if (label.startsWith("В наличии")) return "in_stock";
+  return "untracked";
+}
+
+function matchesFilters(
+  product: ProductListItem,
+  filters: CatalogFilterValues,
+): boolean {
+  if (filters.visibility === "active" && !product.active) return false;
+  if (filters.visibility === "hidden" && product.active) return false;
+  if (filters.categoryId && product.category_id !== filters.categoryId)
+    return false;
+  if (filters.stock && stockStateOf(product) !== filters.stock) return false;
+  const q = filters.search.trim().toLowerCase();
+  if (q) {
+    const hay = `${product.name} ${product.sku ?? ""}`.toLowerCase();
+    if (!hay.includes(q)) return false;
+  }
+  return true;
+}
 
 export function CatalogView({
   businessId,
@@ -24,6 +53,9 @@ export function CatalogView({
 }) {
   const [categories, setCategories] = useState<ProductCategory[]>([]);
   const [products, setProducts] = useState<ProductListItem[]>([]);
+  const [filters, setFilters] = useState<CatalogFilterValues>({
+    ...EMPTY_CATALOG_FILTERS,
+  });
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -125,6 +157,11 @@ export function CatalogView({
       ? "Добавьте услуги в каталог, чтобы принимать заказы."
       : "Добавьте товары в каталог, чтобы принимать заказы из бота.";
 
+  const filtered = useMemo(
+    () => products.filter((p) => matchesFilters(p, filters)),
+    [products, filters],
+  );
+
   return (
     <div className="orders-catalog">
       {error ? (
@@ -170,6 +207,76 @@ export function CatalogView({
           </div>
         </div>
 
+        <div className="orders-catalog__filters" aria-label="Фильтры каталога">
+          <label className="field">
+            <span className="field__label">Поиск</span>
+            <input
+              className="field__control"
+              value={filters.search}
+              onChange={(e) =>
+                setFilters((f) => ({ ...f, search: e.target.value }))
+              }
+              placeholder="Название или SKU"
+              disabled={busy || editorOpen}
+            />
+          </label>
+          <label className="field">
+            <span className="field__label">Видимость</span>
+            <select
+              className="field__control"
+              value={filters.visibility}
+              onChange={(e) =>
+                setFilters((f) => ({
+                  ...f,
+                  visibility: e.target.value as CatalogFilterValues["visibility"],
+                }))
+              }
+              disabled={busy || editorOpen}
+            >
+              <option value="">Все</option>
+              <option value="active">В продаже</option>
+              <option value="hidden">Скрытые</option>
+            </select>
+          </label>
+          <label className="field">
+            <span className="field__label">Категория</span>
+            <select
+              className="field__control"
+              value={filters.categoryId}
+              onChange={(e) =>
+                setFilters((f) => ({ ...f, categoryId: e.target.value }))
+              }
+              disabled={busy || editorOpen}
+            >
+              <option value="">Все категории</option>
+              {categories.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span className="field__label">Остаток</span>
+            <select
+              className="field__control"
+              value={filters.stock}
+              onChange={(e) =>
+                setFilters((f) => ({
+                  ...f,
+                  stock: e.target.value as CatalogFilterValues["stock"],
+                }))
+              }
+              disabled={busy || editorOpen}
+            >
+              <option value="">Все</option>
+              <option value="in_stock">В наличии</option>
+              <option value="low">Мало товара</option>
+              <option value="out">Нет в наличии</option>
+            </select>
+          </label>
+        </div>
+
         {showCategory ? (
           <form
             className="orders-catalog__category-form"
@@ -200,12 +307,6 @@ export function CatalogView({
           </form>
         ) : null}
 
-        {categories.length ? (
-          <p className="account-footnote">
-            Категории: {categories.map((c) => c.name).join(", ")}
-          </p>
-        ) : null}
-
         {loading ? (
           <div className="clients-skeleton" aria-busy="true">
             {Array.from({ length: 4 }).map((_, i) => (
@@ -227,11 +328,23 @@ export function CatalogView({
               Добавить первый товар
             </button>
           </div>
+        ) : !filtered.length ? (
+          <div className="empty-state empty-state--compact">
+            <p>Ничего не найдено по фильтрам.</p>
+            <button
+              type="button"
+              className="button button--outline"
+              onClick={() => setFilters({ ...EMPTY_CATALOG_FILTERS })}
+            >
+              Сбросить фильтры
+            </button>
+          </div>
         ) : (
           <ul className="orders-product-grid">
-            {products.map((p) => (
+            {filtered.map((p) => (
               <li key={p.id}>
                 <ProductCard
+                  businessId={businessId}
                   product={p}
                   categoryName={categoryNameOf(p.category_id)}
                   busy={busy || editorOpen}

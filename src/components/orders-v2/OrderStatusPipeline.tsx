@@ -1,9 +1,11 @@
 "use client";
 
+import { useId, useRef, useState } from "react";
+import { useDialogFocusTrap } from "@/hooks/useDialogFocusTrap";
 import {
+  allowedStatusesForFulfillment,
   nextActionLabel,
   primaryNextStatus,
-  STATUS_FLOW,
   STATUS_LABELS,
   type OrderStatus,
 } from "@/components/orders-v2/types";
@@ -21,38 +23,37 @@ const PIPELINE: OrderStatus[] = [
 export function OrderStatusPipeline({
   status,
   fulfillment,
+  orderNumber,
   busy,
   onTransition,
 }: {
   status: OrderStatus;
   fulfillment: "pickup" | "delivery";
+  orderNumber?: number | null;
   busy?: boolean;
   onTransition: (next: OrderStatus) => void;
 }) {
-  const nextStatuses = STATUS_FLOW[status] ?? [];
-  const primary = primaryNextStatus(status);
-  const primaryLabel = nextActionLabel(status);
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const cancelDialogRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+  const descId = useId();
+
+  const nextStatuses = allowedStatusesForFulfillment(status, fulfillment);
+  const actionStatus = primaryNextStatus(status, fulfillment);
+  const actionLabel =
+    actionStatus != null
+      ? `Перевести в «${STATUS_LABELS[actionStatus]}»`
+      : nextActionLabel(status, fulfillment);
   const canCancel = nextStatuses.includes("cancelled");
+  // Compute alts AFTER fulfillment filtering so pickup never shows «Доставлен»
+  // and delivery never shows «Выдан» (and no duplicate of the primary).
   const altStatuses = nextStatuses.filter(
-    (s) => s !== "cancelled" && s !== primary,
+    (s) => s !== "cancelled" && s !== actionStatus,
   );
 
-  // For pickup, prefer handed_over; for delivery, prefer delivered in ready step.
-  const preferredPrimary =
-    status === "ready"
-      ? fulfillment === "delivery"
-        ? "delivered"
-        : "handed_over"
-      : primary;
-
-  const actionStatus =
-    preferredPrimary && nextStatuses.includes(preferredPrimary)
-      ? preferredPrimary
-      : primary;
-
-  const actionLabel = actionStatus
-    ? `Перевести в «${STATUS_LABELS[actionStatus]}»`
-    : primaryLabel;
+  useDialogFocusTrap(cancelDialogRef, () => setCancelOpen(false), {
+    enabled: cancelOpen,
+  });
 
   const steps = PIPELINE.filter((s) => {
     if (s === "handed_over" && fulfillment === "delivery") return false;
@@ -60,6 +61,9 @@ export function OrderStatusPipeline({
     return true;
   });
   const currentIdx = steps.indexOf(status === "cancelled" ? "new" : status);
+
+  const orderLabel =
+    orderNumber != null ? `№${orderNumber}` : "этот заказ";
 
   return (
     <section className="orders-pipeline" aria-label="Статус заказа">
@@ -114,7 +118,7 @@ export function OrderStatusPipeline({
             type="button"
             className="button button--outline"
             disabled={busy}
-            onClick={() => onTransition("cancelled")}
+            onClick={() => setCancelOpen(true)}
           >
             Отменить
           </button>
@@ -123,6 +127,50 @@ export function OrderStatusPipeline({
           <p className="account-footnote">Дальнейших переходов нет.</p>
         ) : null}
       </div>
+
+      {cancelOpen ? (
+        <div
+          className="client-dialog-overlay"
+          role="presentation"
+          onClick={() => setCancelOpen(false)}
+        >
+          <div
+            ref={cancelDialogRef}
+            className="client-dialog"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby={titleId}
+            aria-describedby={descId}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id={titleId}>Отменить заказ {orderLabel}?</h2>
+            <p id={descId}>
+              При отмене зарезервированные остатки будут возвращены.
+            </p>
+            <div className="client-dialog__actions">
+              <button
+                type="button"
+                className="button button--outline"
+                disabled={busy}
+                onClick={() => setCancelOpen(false)}
+              >
+                Не отменять
+              </button>
+              <button
+                type="button"
+                className="button button--primary"
+                disabled={busy}
+                onClick={() => {
+                  setCancelOpen(false);
+                  onTransition("cancelled");
+                }}
+              >
+                Отменить заказ
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

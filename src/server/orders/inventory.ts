@@ -9,6 +9,8 @@ import type { InventoryMovementReason } from "./schema.ts";
 
 type Db = Kysely<Database>;
 
+const INVENTORY_STATES = new Set(["", "in_stock", "low", "out", "untracked"]);
+
 export type InventoryRowDto = {
   productId: string;
   variantId: string | null;
@@ -29,6 +31,10 @@ export async function listInventory(
   publicId: string,
   opts: { search?: string; state?: string } = {},
 ): Promise<{ items: InventoryRowDto[] }> {
+  const stateRaw = opts.state ?? "";
+  if (!INVENTORY_STATES.has(stateRaw))
+    throw new AppError(400, "INVALID_FILTER", "Проверьте фильтр остатков.");
+
   const b = await requireBusiness(db, userId, publicId, "orders.write");
   const products = await db
     .selectFrom("product as p")
@@ -72,7 +78,7 @@ export async function listInventory(
       else if (threshold != null && stock <= threshold) state = "low";
       else state = "in_stock";
     }
-    if (opts.state && opts.state !== state) continue;
+    if (stateRaw && stateRaw !== state) continue;
     const name = row.name;
     const sku = row.use_variants ? row.variant_sku : row.product_sku;
     if (opts.search) {
@@ -146,6 +152,21 @@ export async function adjustInventory(
     if (product.product_type === "service")
       throw new AppError(400, "INVALID_STOCK", "У услуги нет складского учёта.");
 
+    if (product.use_variants) {
+      if (!variantId)
+        throw new AppError(
+          400,
+          "INVALID_STOCK",
+          "Для товара с вариантами укажите variantId.",
+        );
+    } else if (variantId) {
+      throw new AppError(
+        400,
+        "INVALID_STOCK",
+        "У этого товара нет вариантов.",
+      );
+    }
+
     let remaining: number | null = null;
     let delta = 0;
 
@@ -160,6 +181,16 @@ export async function adjustInventory(
         .executeTakeFirst();
       if (!variant)
         throw new AppError(404, "VARIANT_NOT_FOUND", "Вариант не найден.");
+      if (!variant.active)
+        throw new AppError(
+          400,
+          "INVALID_STOCK",
+          "Нельзя менять остаток неактивного варианта.",
+        );
+      // Ensure variant belongs to this product (already filtered) and business.
+      if (variant.product_id !== productId)
+        throw new AppError(404, "VARIANT_NOT_FOUND", "Вариант не найден.");
+
       const current = variant.stock_quantity ?? 0;
       remaining = mode === "set" ? value : current + value;
       if (remaining < 0)
@@ -177,6 +208,17 @@ export async function adjustInventory(
           updated_at: new Date(),
         })
         .where("id", "=", variantId)
+        .where("business_id", "=", b.id)
+        .execute();
+      // Manual quantity adjustment enables product-level inventory tracking.
+      await tx
+        .updateTable("product")
+        .set({
+          track_inventory: true,
+          availability: "quantity",
+          updated_at: new Date(),
+        })
+        .where("id", "=", productId)
         .where("business_id", "=", b.id)
         .execute();
     } else {

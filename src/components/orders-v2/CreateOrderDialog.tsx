@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useDialogFocusTrap } from "@/hooks/useDialogFocusTrap";
 import { formatMoney } from "@/lib/money";
 import {
@@ -17,6 +17,7 @@ import {
 import { EMPTY_CLIENT_FILTERS } from "@/components/clients-v2/types";
 import type {
   OrderFulfillment,
+  OrderSettings,
   ProductListItem,
 } from "@/components/orders-v2/types";
 
@@ -32,6 +33,22 @@ type CartLine = {
 };
 
 type VariantOpt = { id: string; label: string; price: string | null };
+
+function previewDeliveryFee(
+  settings: OrderSettings | null,
+  fulfillment: OrderFulfillment,
+  subtotal: number,
+): number {
+  if (!settings || fulfillment === "pickup") return 0;
+  const fee = Number(settings.deliveryPrice) || 0;
+  const freeFrom =
+    settings.freeDeliveryFrom != null
+      ? Number(settings.freeDeliveryFrom)
+      : null;
+  if (freeFrom != null && Number.isFinite(freeFrom) && subtotal >= freeFrom)
+    return 0;
+  return fee;
+}
 
 export function CreateOrderDialog({
   businessId,
@@ -68,6 +85,7 @@ export function CreateOrderDialog({
   const [cart, setCart] = useState<CartLine[]>([]);
 
   const [fulfillment, setFulfillment] = useState<OrderFulfillment>("pickup");
+  const [settings, setSettings] = useState<OrderSettings | null>(null);
   const [pickupEnabled, setPickupEnabled] = useState(true);
   const [deliveryEnabled, setDeliveryEnabled] = useState(true);
   const [deliveryAddress, setDeliveryAddress] = useState("");
@@ -83,12 +101,13 @@ export function CreateOrderDialog({
       })
       .catch(() => undefined);
     void getOrderSettings(businessId)
-      .then((settings) => {
+      .then((next) => {
         if (!alive) return;
-        setPickupEnabled(settings.pickupEnabled);
-        setDeliveryEnabled(settings.deliveryEnabled);
-        if (settings.pickupEnabled) setFulfillment("pickup");
-        else if (settings.deliveryEnabled) setFulfillment("delivery");
+        setSettings(next);
+        setPickupEnabled(next.pickupEnabled);
+        setDeliveryEnabled(next.deliveryEnabled);
+        if (next.pickupEnabled) setFulfillment("pickup");
+        else if (next.deliveryEnabled) setFulfillment("delivery");
       })
       .catch(() => undefined);
     return () => {
@@ -187,6 +206,28 @@ export function CreateOrderDialog({
     };
   }, [businessId, productId, products]);
 
+  const currencies = useMemo(
+    () => [...new Set(cart.map((l) => l.currency || "RUB"))],
+    [cart],
+  );
+  const mixedCurrency = currencies.length > 1;
+  const currency = currencies[0] || "RUB";
+  const subtotal = useMemo(() => {
+    if (mixedCurrency) return 0;
+    return cart.reduce(
+      (sum, line) => sum + Number(line.unitPrice) * line.quantity,
+      0,
+    );
+  }, [cart, mixedCurrency]);
+  const deliveryFee = previewDeliveryFee(settings, fulfillment, subtotal);
+  const total = subtotal + deliveryFee;
+  const belowMinimum =
+    settings?.minimumOrderAmount != null &&
+    Number.isFinite(Number(settings.minimumOrderAmount)) &&
+    subtotal > 0 &&
+    !mixedCurrency &&
+    subtotal < Number(settings.minimumOrderAmount);
+
   function bumpRequestKey() {
     requestKey.current = "";
   }
@@ -243,12 +284,26 @@ export function CreateOrderDialog({
       setError("Добавьте хотя бы одну позицию.");
       return;
     }
+    if (mixedCurrency) {
+      setError("Нельзя смешивать валюты в одном заказе.");
+      return;
+    }
     if (!clientName.trim()) {
       setError("Укажите имя клиента.");
       return;
     }
+    if (!clientPhone.trim()) {
+      setError("Укажите телефон клиента.");
+      return;
+    }
     if (fulfillment === "delivery" && !deliveryAddress.trim()) {
       setError("Укажите адрес доставки.");
+      return;
+    }
+    if (belowMinimum) {
+      setError(
+        `Минимальная сумма заказа ${Number(settings?.minimumOrderAmount).toFixed(2)}.`,
+      );
       return;
     }
     setBusy(true);
@@ -288,6 +343,12 @@ export function CreateOrderDialog({
       setBusy(false);
     }
   }
+
+  const canSubmit =
+    cart.length > 0 &&
+    !mixedCurrency &&
+    !belowMinimum &&
+    Boolean(clientPhone.trim());
 
   return (
     <div
@@ -399,9 +460,10 @@ export function CreateOrderDialog({
             />
           </label>
           <label className="field">
-            <span className="field__label">Телефон</span>
+            <span className="field__label">Телефон *</span>
             <input
               className="field__control"
+              required
               value={clientPhone}
               onChange={(e) => {
                 setClientPhone(e.target.value);
@@ -411,7 +473,12 @@ export function CreateOrderDialog({
             />
           </label>
           {clientId ? (
-            <p className="account-footnote">Клиент привязан к карточке CRM.</p>
+            <p className="account-footnote">
+              Клиент привязан к карточке CRM.
+              {!clientPhone.trim()
+                ? " Укажите телефон для этого заказа."
+                : ""}
+            </p>
           ) : null}
         </fieldset>
 
@@ -550,11 +617,54 @@ export function CreateOrderDialog({
           </label>
         </fieldset>
 
+        {cart.length ? (
+          <section
+            className="orders-create-dialog__totals"
+            aria-label="Итоги заказа"
+          >
+            {mixedCurrency ? (
+              <p className="account-error" role="alert">
+                В корзине разные валюты — заказ создать нельзя.
+              </p>
+            ) : (
+              <>
+                <div className="detail-facts">
+                  <span>Подытог</span>
+                  <strong>{formatMoney(subtotal.toFixed(2), currency)}</strong>
+                </div>
+                <div className="detail-facts">
+                  <span>Доставка</span>
+                  <strong>
+                    {formatMoney(deliveryFee.toFixed(2), currency)}
+                  </strong>
+                </div>
+                <div className="detail-facts">
+                  <span>Итого</span>
+                  <strong>{formatMoney(total.toFixed(2), currency)}</strong>
+                </div>
+                {belowMinimum ? (
+                  <p className="account-error" role="alert">
+                    Минимальная сумма заказа{" "}
+                    {formatMoney(
+                      Number(settings?.minimumOrderAmount).toFixed(2),
+                      currency,
+                    )}
+                    .
+                  </p>
+                ) : null}
+                <p className="account-footnote">
+                  Итог на сервере — источник истины; здесь предварительный расчёт.
+                </p>
+              </>
+            )}
+          </section>
+        ) : null}
+
         <div className="client-dialog__actions">
           <button
             type="submit"
             className="button button--primary"
-            disabled={busy || !cart.length}
+            disabled={busy || !canSubmit}
           >
             {busy ? "Создаём…" : "Создать заказ"}
           </button>

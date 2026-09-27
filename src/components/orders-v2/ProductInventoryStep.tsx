@@ -75,6 +75,35 @@ export function ProductInventoryStep({
           ))}
         </ul>
       ) : null}
+      {value.trackInventory ? (
+        <label className="field">
+          <span className="field__label">
+            Предупредить, когда останется ≤
+          </span>
+          <input
+            className="field__control"
+            inputMode="numeric"
+            placeholder="Не задано"
+            value={
+              value.lowStockThreshold != null
+                ? String(value.lowStockThreshold)
+                : ""
+            }
+            onChange={(e) => {
+              const raw = e.target.value.trim();
+              if (!raw) {
+                onChange({ ...value, lowStockThreshold: null });
+                return;
+              }
+              const n = Number(raw);
+              onChange({
+                ...value,
+                lowStockThreshold: Number.isFinite(n) ? Math.floor(n) : null,
+              });
+            }}
+          />
+        </label>
+      ) : null}
     </fieldset>
   );
 }

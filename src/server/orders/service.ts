@@ -18,12 +18,13 @@ import {
   calculateDeliveryFee,
   loadOrderSettingsForBusiness,
 } from "./settings.ts";
-import type {
-  CartPlatform,
-  OrderFulfillment,
-  OrderStatus,
-  ProductAvailability,
-  ProductType,
+import {
+  allowedStatusesForFulfillment,
+  type CartPlatform,
+  type OrderFulfillment,
+  type OrderStatus,
+  type ProductAvailability,
+  type ProductType,
 } from "./schema.ts";
 
 async function maybeEmitLowStock(
@@ -100,18 +101,6 @@ const ORDER_STATUSES: OrderStatus[] = [
   "completed",
   "cancelled",
 ];
-
-/** Allowed forward transitions; cancelled handled separately from early states. */
-const STATUS_FLOW: Record<OrderStatus, OrderStatus[]> = {
-  new: ["accepted", "cancelled"],
-  accepted: ["assembling", "cancelled"],
-  assembling: ["ready", "cancelled"],
-  ready: ["handed_over", "delivered", "cancelled"],
-  handed_over: ["completed"],
-  delivered: ["completed"],
-  completed: [],
-  cancelled: [],
-};
 
 function id(value: unknown) {
   if (typeof value !== "string" || !UUID_RE.test(value)) throw fail();
@@ -2128,7 +2117,10 @@ export class OrderService {
         : null,
       items,
       history,
-      next_statuses: STATUS_FLOW[order.status as OrderStatus] ?? [],
+      next_statuses: allowedStatusesForFulfillment(
+        order.status as OrderStatus,
+        order.fulfillment as OrderFulfillment,
+      ),
     };
   }
 
@@ -2160,7 +2152,10 @@ export class OrderService {
       if (!ORDER_STATUSES.includes(next as OrderStatus))
         throw fail("Проверьте статус.");
       const to = next as OrderStatus;
-      const allowed = STATUS_FLOW[current.status];
+      const allowed = allowedStatusesForFulfillment(
+        current.status as OrderStatus,
+        current.fulfillment as OrderFulfillment,
+      );
       if (!allowed.includes(to))
         throw new AppError(
           409,

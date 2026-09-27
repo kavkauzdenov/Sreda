@@ -60,6 +60,19 @@ export const STATUS_FLOW: Record<OrderStatus, OrderStatus[]> = {
   cancelled: [],
 };
 
+/** Pickup: ready → handed_over; delivery: ready → delivered. */
+export function allowedStatusesForFulfillment(
+  status: OrderStatus,
+  fulfillment: OrderFulfillment,
+): OrderStatus[] {
+  const next = STATUS_FLOW[status] ?? [];
+  return next.filter((s) => {
+    if (s === "handed_over" && fulfillment === "delivery") return false;
+    if (s === "delivered" && fulfillment === "pickup") return false;
+    return true;
+  });
+}
+
 export const FULFILLMENT_LABELS: Record<OrderFulfillment, string> = {
   pickup: "Самовывоз",
   delivery: "Доставка",
@@ -219,7 +232,16 @@ export type ProductListItem = {
   track_inventory: boolean;
   availability: string;
   stock_quantity: number | null;
+  low_stock_threshold?: number | null;
   product_type?: string;
+  images?: { attachment_id: string; id?: string }[];
+  variants?: {
+    id: string;
+    label?: string;
+    price?: string | null;
+    stock_quantity?: number | null;
+    active?: boolean;
+  }[];
 };
 
 export type ProductVariantOption = {
@@ -252,6 +274,7 @@ export type ProductEditorState = {
   active: boolean;
   trackInventory: boolean;
   stockQuantity: string;
+  lowStockThreshold: number | null;
   useVariants: boolean;
   variantPricesEnabled: boolean;
   groups: ProductOptionGroup[];
@@ -270,6 +293,7 @@ export const EMPTY_PRODUCT_EDITOR: ProductEditorState = {
   active: true,
   trackInventory: false,
   stockQuantity: "",
+  lowStockThreshold: null,
   useVariants: false,
   variantPricesEnabled: false,
   groups: [],
@@ -278,13 +302,22 @@ export const EMPTY_PRODUCT_EDITOR: ProductEditorState = {
   productType: "product",
 };
 
-export function primaryNextStatus(status: OrderStatus): OrderStatus | null {
-  const next = (STATUS_FLOW[status] ?? []).find((s) => s !== "cancelled");
+export function primaryNextStatus(
+  status: OrderStatus,
+  fulfillment?: OrderFulfillment,
+): OrderStatus | null {
+  const flow = fulfillment
+    ? allowedStatusesForFulfillment(status, fulfillment)
+    : (STATUS_FLOW[status] ?? []);
+  const next = flow.find((s) => s !== "cancelled");
   return next ?? null;
 }
 
-export function nextActionLabel(status: OrderStatus): string | null {
-  const next = primaryNextStatus(status);
+export function nextActionLabel(
+  status: OrderStatus,
+  fulfillment?: OrderFulfillment,
+): string | null {
+  const next = primaryNextStatus(status, fulfillment);
   if (!next) return null;
   return `Перевести в «${STATUS_LABELS[next]}»`;
 }
@@ -293,4 +326,63 @@ export function tabsForBusinessMode(mode: BusinessMode): OrdersTab[] {
   if (mode === "service") return ["orders", "catalog", "settings"];
   if (mode === "combined") return ["orders", "catalog", "inventory", "settings"];
   return ["orders", "catalog", "inventory", "settings"];
+}
+
+export type CatalogVisibility = "" | "active" | "hidden";
+export type CatalogStockFilter =
+  | ""
+  | "in_stock"
+  | "low"
+  | "out"
+  | "untracked";
+
+export type CatalogFilterValues = {
+  search: string;
+  visibility: CatalogVisibility;
+  categoryId: string;
+  stock: CatalogStockFilter;
+};
+
+export const EMPTY_CATALOG_FILTERS: CatalogFilterValues = {
+  search: "",
+  visibility: "",
+  categoryId: "",
+  stock: "",
+};
+
+/** Aggregated stock label for catalog cards (variant-aware). */
+export function productStockLabel(product: ProductListItem): string | null {
+  if (product.product_type === "service") return null;
+  if (!product.track_inventory) return "Без учёта";
+  if (product.use_variants) {
+    const variants = (product.variants ?? []).filter((v) => v.active !== false);
+    if (!variants.length) return "Нет вариантов";
+    const stocks = variants.map((v) =>
+      v.stock_quantity == null ? 0 : Number(v.stock_quantity),
+    );
+    const total = stocks.reduce((a, b) => a + b, 0);
+    const threshold = product.low_stock_threshold ?? null;
+    if (total <= 0) return "Нет в наличии";
+    if (threshold != null && stocks.some((s) => s > 0 && s <= threshold))
+      return `Мало · ${total} шт.`;
+    return `В наличии · ${total} шт.`;
+  }
+  const qty = product.stock_quantity;
+  if (qty == null || qty <= 0) return "Нет в наличии";
+  const threshold = product.low_stock_threshold ?? null;
+  if (threshold != null && qty <= threshold) return `Мало · ${qty} шт.`;
+  return `В наличии · ${qty} шт.`;
+}
+
+export function productPriceLabel(product: ProductListItem): string {
+  if (product.use_variants && product.variant_prices_enabled) {
+    const prices = (product.variants ?? [])
+      .filter((v) => v.active !== false && v.price != null && v.price !== "")
+      .map((v) => Number(v.price));
+    if (prices.length) {
+      const min = Math.min(...prices);
+      return `от ${min}`;
+    }
+  }
+  return product.price;
 }

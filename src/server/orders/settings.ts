@@ -32,6 +32,21 @@ function optionalMoney(raw: unknown, label: string): string | null {
   return money(raw, label);
 }
 
+/** Strict boolean — reject string "true"/"false" (Boolean("false") === true). */
+function strictBoolean(raw: unknown, label: string): boolean {
+  if (typeof raw === "boolean") return raw;
+  throw new AppError(400, "INVALID_SETTINGS", `Проверьте ${label}.`);
+}
+
+function optionalStrictBoolean(
+  raw: unknown,
+  fallback: boolean,
+  label: string,
+): boolean {
+  if (raw === undefined) return fallback;
+  return strictBoolean(raw, label);
+}
+
 export async function ensureOrderSettings(db: Db, businessId: string) {
   await db
     .insertInto("order_settings")
@@ -130,10 +145,18 @@ export async function saveOrderSettingsV2(
       businessMode = String(modeRaw) as BusinessMode;
     }
 
-    const pickupEnabled =
-      raw.pickupEnabled ?? raw.pickup_enabled ?? current.pickup_enabled;
-    const deliveryEnabled =
-      raw.deliveryEnabled ?? raw.delivery_enabled ?? current.delivery_enabled;
+    const pickupEnabled = optionalStrictBoolean(
+      raw.pickupEnabled !== undefined ? raw.pickupEnabled : raw.pickup_enabled,
+      current.pickup_enabled,
+      "самовывоз",
+    );
+    const deliveryEnabled = optionalStrictBoolean(
+      raw.deliveryEnabled !== undefined
+        ? raw.deliveryEnabled
+        : raw.delivery_enabled,
+      current.delivery_enabled,
+      "доставку",
+    );
     if (!pickupEnabled && !deliveryEnabled)
       throw new AppError(
         400,
@@ -143,7 +166,7 @@ export async function saveOrderSettingsV2(
 
     const patch = {
       customer_cancel_statuses: cancelStatuses,
-      pickup_enabled: Boolean(pickupEnabled),
+      pickup_enabled: pickupEnabled,
       pickup_address: String(
         raw.pickupAddress ?? raw.pickup_address ?? current.pickup_address ?? "",
       ).slice(0, 500),
@@ -153,7 +176,7 @@ export async function saveOrderSettingsV2(
           current.pickup_instructions ??
           "",
       ).slice(0, 2000),
-      delivery_enabled: Boolean(deliveryEnabled),
+      delivery_enabled: deliveryEnabled,
       delivery_price: money(
         raw.deliveryPrice ?? raw.delivery_price ?? current.delivery_price ?? 0,
         "стоимость доставки",

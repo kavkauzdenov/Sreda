@@ -134,6 +134,10 @@ export function ProductEditorWizard({
             detail.stock_quantity != null
               ? String(detail.stock_quantity)
               : "",
+          lowStockThreshold:
+            detail.low_stock_threshold != null
+              ? Number(detail.low_stock_threshold)
+              : null,
           useVariants: detail.use_variants === true,
           variantPricesEnabled: detail.variant_prices_enabled === true,
           groups: optionGroups.map((g) => ({
@@ -225,6 +229,10 @@ export function ProductEditorWizard({
           : false,
         track_inventory:
           state.productType === "service" ? false : state.trackInventory,
+        low_stock_threshold:
+          state.productType === "service" || !state.trackInventory
+            ? null
+            : state.lowStockThreshold,
         images: imageIds,
         product_type: state.productType,
       };

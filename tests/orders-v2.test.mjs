@@ -1027,3 +1027,250 @@ test("orders v2: settings save owner-only (operator 403)", async () => {
     (e) => e.code === "FORBIDDEN" && e.status === 403,
   );
 });
+
+async function advanceToReady(f, orderId) {
+  await f.orders.transitionStatus(f.uid, f.publicId, orderId, {
+    status: "accepted",
+  });
+  await f.orders.transitionStatus(f.uid, f.publicId, orderId, {
+    status: "assembling",
+  });
+  await f.orders.transitionStatus(f.uid, f.publicId, orderId, {
+    status: "ready",
+  });
+}
+
+test("orders v2: pickup ready → delivered is 409", async () => {
+  const f = await fixture();
+  const p = await product(f, { name: "Pickup item", price: "50" });
+  const order = await f.orders.checkout(
+    f.b.id,
+    checkoutBody({
+      fulfillment: "pickup",
+      cart_items: [{ product_id: p.id, quantity: 1 }],
+    }),
+    f.uid,
+  );
+  await advanceToReady(f, order.id);
+  const detail = await f.orders.get(f.uid, f.publicId, order.id);
+  assert.deepEqual(detail.next_statuses, ["handed_over", "cancelled"]);
+  await assert.rejects(
+    () =>
+      f.orders.transitionStatus(f.uid, f.publicId, order.id, {
+        status: "delivered",
+      }),
+    (e) => e.status === 409 && e.code === "INVALID_STATUS_TRANSITION",
+  );
+  await f.orders.transitionStatus(f.uid, f.publicId, order.id, {
+    status: "handed_over",
+  });
+  await f.orders.transitionStatus(f.uid, f.publicId, order.id, {
+    status: "completed",
+  });
+});
+
+test("orders v2: delivery ready → handed_over is 409", async () => {
+  const f = await fixture();
+  const p = await product(f, { name: "Delivery item", price: "50" });
+  const order = await f.orders.checkout(
+    f.b.id,
+    checkoutBody({
+      fulfillment: "delivery",
+      delivery_address: "ул. Тест 2",
+      cart_items: [{ product_id: p.id, quantity: 1 }],
+    }),
+    f.uid,
+  );
+  await advanceToReady(f, order.id);
+  const detail = await f.orders.get(f.uid, f.publicId, order.id);
+  assert.deepEqual(detail.next_statuses, ["delivered", "cancelled"]);
+  await assert.rejects(
+    () =>
+      f.orders.transitionStatus(f.uid, f.publicId, order.id, {
+        status: "handed_over",
+      }),
+    (e) => e.status === 409 && e.code === "INVALID_STATUS_TRANSITION",
+  );
+  await f.orders.transitionStatus(f.uid, f.publicId, order.id, {
+    status: "delivered",
+  });
+  await f.orders.transitionStatus(f.uid, f.publicId, order.id, {
+    status: "completed",
+  });
+});
+
+test("orders v2: variant adjust enables track_inventory and checkout deducts", async () => {
+  const f = await fixture();
+  const p = await f.catalog.saveProduct(f.uid, f.publicId, {
+    name: "Variant stock bug",
+    price: "300",
+    use_variants: true,
+    track_inventory: false,
+    availability: "in_stock",
+    variants: [
+      {
+        label: "L",
+        availability: "in_stock",
+        stock_quantity: null,
+        active: true,
+      },
+    ],
+  });
+  const detail = await f.catalog.getProduct(f.uid, f.publicId, p.id);
+  assert.equal(detail.track_inventory, false);
+  const variantId = detail.variants[0].id;
+
+  await adjustInventory(db, f.uid, f.publicId, {
+    productId: p.id,
+    variantId,
+    quantity: 5,
+  });
+
+  const afterAdjust = await f.catalog.getProduct(f.uid, f.publicId, p.id);
+  assert.equal(afterAdjust.track_inventory, true);
+  assert.equal(afterAdjust.variants[0].stock_quantity, 5);
+
+  await f.orders.checkout(
+    f.b.id,
+    checkoutBody({
+      cart_items: [{ product_id: p.id, variant_id: variantId, quantity: 2 }],
+    }),
+    f.uid,
+  );
+
+  const afterCheckout = await f.catalog.getProduct(f.uid, f.publicId, p.id);
+  assert.equal(afterCheckout.variants[0].stock_quantity, 3);
+});
+
+test("orders v2: inventory adjust rejects mismatched variant / service", async () => {
+  const f = await fixture();
+  const plain = await product(f, { name: "Plain", price: "10", stock: 2 });
+  const service = await product(f, {
+    name: "Svc",
+    price: "10",
+    type: "service",
+  });
+  const withVariants = await f.catalog.saveProduct(f.uid, f.publicId, {
+    name: "With vars",
+    price: "20",
+    use_variants: true,
+    track_inventory: true,
+    variants: [
+      { label: "A", availability: "quantity", stock_quantity: 1, active: true },
+      {
+        label: "B",
+        availability: "quantity",
+        stock_quantity: 1,
+        active: false,
+      },
+    ],
+  });
+  const detail = await f.catalog.getProduct(f.uid, f.publicId, withVariants.id);
+  const activeVar = detail.variants.find((v) => v.active)?.id;
+  const inactiveVar = detail.variants.find((v) => !v.active)?.id;
+  assert.ok(activeVar);
+  assert.ok(inactiveVar);
+
+  await assert.rejects(
+    () =>
+      adjustInventory(db, f.uid, f.publicId, {
+        productId: withVariants.id,
+        quantity: 3,
+      }),
+    (e) => e.code === "INVALID_STOCK",
+  );
+  await assert.rejects(
+    () =>
+      adjustInventory(db, f.uid, f.publicId, {
+        productId: plain.id,
+        variantId: activeVar,
+        quantity: 1,
+      }),
+    (e) => e.code === "INVALID_STOCK" || e.code === "VARIANT_NOT_FOUND",
+  );
+  await assert.rejects(
+    () =>
+      adjustInventory(db, f.uid, f.publicId, {
+        productId: withVariants.id,
+        variantId: inactiveVar,
+        quantity: 2,
+      }),
+    (e) => e.code === "INVALID_STOCK",
+  );
+  await assert.rejects(
+    () =>
+      adjustInventory(db, f.uid, f.publicId, {
+        productId: service.id,
+        quantity: 1,
+      }),
+    (e) => e.code === "INVALID_STOCK",
+  );
+});
+
+test("orders v2: inventory state filter rejects unknown values", async () => {
+  const f = await fixture();
+  await assert.rejects(
+    () => listInventory(db, f.uid, f.publicId, { state: "hacked" }),
+    (e) => e.status === 400 && e.code === "INVALID_FILTER",
+  );
+  const ok = await listInventory(db, f.uid, f.publicId, { state: "in_stock" });
+  assert.ok(Array.isArray(ok.items));
+});
+
+test("orders v2: settings reject string booleans", async () => {
+  const f = await fixture();
+  await assert.rejects(
+    () =>
+      saveOrderSettingsV2(db, f.uid, f.publicId, {
+        pickupEnabled: "false",
+      }),
+    (e) => e.status === 400 && e.code === "INVALID_SETTINGS",
+  );
+  await assert.rejects(
+    () =>
+      saveOrderSettingsV2(db, f.uid, f.publicId, {
+        deliveryEnabled: "true",
+      }),
+    (e) => e.status === 400 && e.code === "INVALID_SETTINGS",
+  );
+  const ok = await saveOrderSettingsV2(db, f.uid, f.publicId, {
+    pickupEnabled: true,
+    deliveryEnabled: false,
+  });
+  assert.equal(ok.pickupEnabled, true);
+  assert.equal(ok.deliveryEnabled, false);
+});
+
+test("orders v2: low_stock_threshold create/edit + inventory low state", async () => {
+  const f = await fixture();
+  const p = await f.catalog.saveProduct(f.uid, f.publicId, {
+    name: "Threshold tea",
+    price: "40",
+    track_inventory: true,
+    availability: "quantity",
+    stock_quantity: 5,
+    low_stock_threshold: 3,
+  });
+  let detail = await f.catalog.getProduct(f.uid, f.publicId, p.id);
+  assert.equal(detail.low_stock_threshold, 3);
+
+  await f.catalog.saveProduct(
+    f.uid,
+    f.publicId,
+    {
+      name: "Threshold tea",
+      price: "40",
+      track_inventory: true,
+      availability: "quantity",
+      stock_quantity: 2,
+      low_stock_threshold: 3,
+    },
+    p.id,
+  );
+  detail = await f.catalog.getProduct(f.uid, f.publicId, p.id);
+  assert.equal(detail.stock_quantity, 2);
+  assert.equal(detail.low_stock_threshold, 3);
+
+  const inv = await listInventory(db, f.uid, f.publicId, { state: "low" });
+  assert.ok(inv.items.some((i) => i.productId === p.id && i.state === "low"));
+});

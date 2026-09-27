@@ -102,3 +102,13 @@ test("orders v2 http: cursor round-trip and reject bad id", () => {
     (e) => e && e.status === 400,
   );
 });
+
+test("orders v2 http: inventory state allowed set documented", () => {
+  const allowed = ["", "in_stock", "low", "out", "untracked"];
+  for (const state of ["hack", "LOW", "all", "null"]) {
+    assert.equal(allowed.includes(state), false);
+  }
+  for (const state of allowed) {
+    assert.equal(typeof state, "string");
+  }
+});

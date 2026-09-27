@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { BusinessModeSettings } from "@/components/orders-v2/BusinessModeSettings";
 import { FulfillmentSettings } from "@/components/orders-v2/FulfillmentSettings";
 import { OrderBehaviorSettings } from "@/components/orders-v2/OrderBehaviorSettings";
+import { OrderChannelSettings } from "@/components/orders-v2/OrderChannelSettings";
 import type { BusinessMode, OrderSettings } from "@/components/orders-v2/types";
 import {
   getOrderSettings,
@@ -129,6 +130,7 @@ export function OrderSettingsView({
         onChange={setValue}
         disabled={busy || !canEdit}
       />
+      <OrderChannelSettings businessId={businessId} />
 
       {canEdit ? (
         <div className="client-dialog__actions">

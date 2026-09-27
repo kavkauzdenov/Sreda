@@ -330,6 +330,7 @@ export function OrderDetail({
       <OrderStatusPipeline
         status={detail.status}
         fulfillment={detail.fulfillment}
+        orderNumber={detail.order_number}
         busy={busy}
         onTransition={(next) => void transition(next)}
       />
