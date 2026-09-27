@@ -406,6 +406,7 @@ export function LeadDetail({
                           className="lead-detail__attachment-preview"
                         >
                           {/* Authenticated same-origin preview; full link keeps download behavior. */}
+                          {/* eslint-disable-next-line @next/next/no-img-element -- authenticated same-origin attachment preview */}
                           <img
                             src={file.url + "?inline=1"}
                             alt={file.name || "Вложение заявки"}
