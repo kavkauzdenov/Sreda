@@ -6,7 +6,6 @@ import { PGlite } from "@electric-sql/pglite";
 import { migrate } from "../src/server/db/migrate.ts";
 import {
   ClientService,
-  matchClient,
   clientActivity,
 } from "../src/server/clients/service.ts";
 import { listClientsV2 } from "../src/server/clients/list.ts";

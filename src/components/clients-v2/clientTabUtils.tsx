@@ -20,8 +20,11 @@ export function useClientTabPage(
 
   useEffect(() => {
     let active = true;
-    setItems(null);
-    setError("");
+    queueMicrotask(() => {
+      if (!active) return;
+      setItems(null);
+      setError("");
+    });
     void getClientTabPage(businessId, clientId, tab)
       .then((page) => {
         if (!active) return;

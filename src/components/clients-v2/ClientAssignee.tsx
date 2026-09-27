@@ -28,7 +28,7 @@ export function ClientAssignee({
   const [error, setError] = useState("");
 
   useEffect(() => {
-    setValue(assignedUser?.id ?? "");
+    queueMicrotask(() => setValue(assignedUser?.id ?? ""));
   }, [assignedUser?.id]);
 
   useEffect(() => {

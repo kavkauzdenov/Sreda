@@ -19,6 +19,44 @@ type Side = {
   bookingCount: number;
 };
 
+function DuplicateSideCard({
+  side,
+  label,
+  timezone,
+}: {
+  side: Side;
+  label: string;
+  timezone: string;
+}) {
+  return (
+    <div className="client-duplicate-dialog__side">
+      <h3>{label}</h3>
+      <p>
+        <strong>{side.name}</strong>
+      </p>
+      <p>Телефон: {side.phone || "—"}</p>
+      <p>Email: {side.email || "—"}</p>
+      <p>
+        Каналы:{" "}
+        {side.identities.length
+          ? side.identities.map((i) => i.username || i.kind).join(", ")
+          : "—"}
+      </p>
+      <p>
+        Первый контакт: {formatRelativeDateTimeInZone(side.firstSeenAt, timezone)}
+      </p>
+      <p>
+        Последний контакт:{" "}
+        {formatRelativeDateTimeInZone(side.lastSeenAt, timezone)}
+      </p>
+      <p>
+        Заявки {side.leadCount} · Заказы {side.orderCount} · Записи{" "}
+        {side.bookingCount}
+      </p>
+    </div>
+  );
+}
+
 export function ClientDuplicateDialog({
   businessId,
   detail,
@@ -46,8 +84,11 @@ export function ClientDuplicateDialog({
   useEffect(() => {
     if (!otherId) return;
     let alive = true;
-    setLeft(null);
-    setRight(null);
+    queueMicrotask(() => {
+      if (!alive) return;
+      setLeft(null);
+      setRight(null);
+    });
     const url = `/api/v1/businesses/${encodeURIComponent(businessId)}/clients/${encodeURIComponent(detail.client.id)}?view=compare&other=${encodeURIComponent(otherId)}`;
     void apiRequest<{ clientA: Side; clientB: Side }>(url)
       .then((data) => {
@@ -109,37 +150,6 @@ export function ClientDuplicateDialog({
     }
   }
 
-  function SideCard({ side, label }: { side: Side; label: string }) {
-    return (
-      <div className="client-duplicate-dialog__side">
-        <h3>{label}</h3>
-        <p>
-          <strong>{side.name}</strong>
-        </p>
-        <p>Телефон: {side.phone || "—"}</p>
-        <p>Email: {side.email || "—"}</p>
-        <p>
-          Каналы:{" "}
-          {side.identities.length
-            ? side.identities.map((i) => i.username || i.kind).join(", ")
-            : "—"}
-        </p>
-        <p>
-          Первый контакт:{" "}
-          {formatRelativeDateTimeInZone(side.firstSeenAt, timezone)}
-        </p>
-        <p>
-          Последний контакт:{" "}
-          {formatRelativeDateTimeInZone(side.lastSeenAt, timezone)}
-        </p>
-        <p>
-          Заявки {side.leadCount} · Заказы {side.orderCount} · Записи{" "}
-          {side.bookingCount}
-        </p>
-      </div>
-    );
-  }
-
   if (!candidates.length) {
     return (
       <div className="client-dialog-overlay" role="presentation" onClick={onClose}>
@@ -186,8 +196,16 @@ export function ClientDuplicateDialog({
         {left && right ? (
           <>
             <div className="client-duplicate-dialog__grid">
-              <SideCard side={left} label="Текущий клиент" />
-              <SideCard side={right} label="Возможный дубль" />
+              <DuplicateSideCard
+                side={left}
+                label="Текущий клиент"
+                timezone={timezone}
+              />
+              <DuplicateSideCard
+                side={right}
+                label="Возможный дубль"
+                timezone={timezone}
+              />
             </div>
             <div className="client-dialog__actions">
               {canMerge ? (

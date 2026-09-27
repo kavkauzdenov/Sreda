@@ -209,14 +209,18 @@ function Calendar({
     if (deepBookingId) {
       const found = bookings.find((b) => b.id === deepBookingId);
       if (found) {
-        setSelected(found);
-        setDeepLinked(true);
+        queueMicrotask(() => {
+          setSelected(found);
+          setDeepLinked(true);
+        });
       }
       return;
     }
     if (deepClientId) {
-      setClient(deepClientId);
-      setDeepLinked(true);
+      queueMicrotask(() => {
+        setClient(deepClientId);
+        setDeepLinked(true);
+      });
     }
   }, [bookings, deepBookingId, deepClientId, deepLinked]);
   useEffect(() => {

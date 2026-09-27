@@ -13,10 +13,6 @@ export function ClientSearch({
 }) {
   const [draft, setDraft] = useState(value);
 
-  useEffect(() => {
-    setDraft(value);
-  }, [value]);
-
   const commit = useEffectEvent((next: string) => {
     if (next === value) return;
     onChange(next);
@@ -27,6 +23,11 @@ export function ClientSearch({
     return () => window.clearTimeout(timer);
   }, [draft]);
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDraft(value), 0);
+    return () => window.clearTimeout(timer);
+  }, [value]);
+
   return (
     <label className="field clients-search">
       <span className="field__label">Поиск</span>
@@ -36,6 +37,7 @@ export function ClientSearch({
         value={draft}
         disabled={disabled}
         placeholder="Имя, телефон, email, Telegram или VK…"
+        maxLength={100}
         onChange={(e) => setDraft(e.target.value)}
       />
     </label>

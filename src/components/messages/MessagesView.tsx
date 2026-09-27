@@ -86,7 +86,10 @@ function Inbox({
   const [files, setFiles] = useState<FileItem[]>([]),
     [uploading, setUploading] = useState(false);
   const [conversations, setConversations] = useState<Conversation[]>([]),
-    [selected, setSelected] = useState(""),
+    [selected, setSelected] = useState(() => {
+      if (typeof window === "undefined") return "";
+      return new URLSearchParams(window.location.search).get("conversation") || "";
+    }),
     [messages, setMessages] = useState<Message[]>([]),
     [text, setText] = useState(""),
     [error, setError] = useState(""),
@@ -95,10 +98,10 @@ function Inbox({
     [filter, setFilter] = useState(""),
     [platformFilter, setPlatformFilter] = useState(""),
     [page, setPage] = useState(0),
-    [messagePage, setMessagePage] = useState(0),
-    [deepLinked, setDeepLinked] = useState(false);
+    [messagePage, setMessagePage] = useState(0);
   const requestKey = useRef("");
   const search = useSearchParams();
+  void search;
   const base = `/api/v1/businesses/${businessId}/conversations`;
   const current = conversations.find((c) => c.id === selected);
   const listQuery =
@@ -108,14 +111,6 @@ function Inbox({
     "&page=" +
     page +
     (platformFilter ? "&platform=" + platformFilter : "");
-  useEffect(() => {
-    if (deepLinked) return;
-    const fromQuery = search.get("conversation") || "";
-    if (fromQuery) {
-      setSelected(fromQuery);
-      setDeepLinked(true);
-    }
-  }, [search, deepLinked]);
   useEffect(() => {
     let active = true;
     async function refresh() {

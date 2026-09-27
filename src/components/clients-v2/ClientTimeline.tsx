@@ -23,8 +23,11 @@ export function ClientTimeline({
 
   useEffect(() => {
     let active = true;
-    setItems(null);
-    setError("");
+    queueMicrotask(() => {
+      if (!active) return;
+      setItems(null);
+      setError("");
+    });
     void getClientTimeline(businessId, clientId)
       .then((page) => {
         if (!active) return;

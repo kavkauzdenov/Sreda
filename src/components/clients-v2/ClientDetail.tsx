@@ -53,8 +53,11 @@ export function ClientDetail({
 
   useEffect(() => {
     let active = true;
-    setLoading(true);
-    setError("");
+    queueMicrotask(() => {
+      if (!active) return;
+      setLoading(true);
+      setError("");
+    });
     void getClientDetail(businessId, clientId)
       .then((data) => {
         if (!active) return;
@@ -75,7 +78,7 @@ export function ClientDetail({
   }, [businessId, clientId, refreshKey]);
 
   useEffect(() => {
-    setTab("overview");
+    queueMicrotask(() => setTab("overview"));
   }, [clientId]);
 
   useEffect(() => {

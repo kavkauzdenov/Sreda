@@ -127,22 +127,13 @@ function ClientsWorkspaceBody({
     key: string;
     message: string;
   } | null>(null);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(
+    () => searchParams.get("client") || searchParams.get("id") || null,
+  );
   const [moreBusy, setMoreBusy] = useState(false);
-  const [deepLinked, setDeepLinked] = useState(false);
   const sequence = useRef(0);
 
   const key = `${attempt}:${filters.search}:${filters.channel}:${filters.activity}:${filters.hasLeads}:${filters.hasOrders}:${filters.hasBookings}:${filters.hasOpenConversation}:${filters.hasNotes}:${filters.tagId}:${filters.assignedUserId}:${filters.newOnly}`;
-
-  useEffect(() => {
-    if (deepLinked) return;
-    const fromQuery =
-      searchParams.get("client") || searchParams.get("id") || "";
-    if (fromQuery) {
-      setSelected(fromQuery);
-      setDeepLinked(true);
-    }
-  }, [searchParams, deepLinked]);
 
   useEffect(() => {
     const version = ++sequence.current;
