@@ -351,12 +351,28 @@ test("production HTTPS account and workspace lifecycle", { timeout: 120000 }, as
         200,
       );
 
+      // Operator create without assignedUserId → unassigned, then claim.
       const unassigned = await request(base, {
         method: "POST",
         cookie: operator.cookie,
         body: { name: "Claim Me" },
       });
       assert.equal(unassigned.status, 201, unassigned.text);
+      const unassignedDetail = await request(
+        `${base}/${unassigned.json.id}?view=v2`,
+        { cookie },
+      );
+      assert.equal(unassignedDetail.status, 200, unassignedDetail.text);
+      assert.equal(unassignedDetail.json.assignedUser ?? null, null);
+      assert.equal(unassignedDetail.json.client.assignedAt ?? null, null);
+
+      const forbiddenNullAssign = await request(base, {
+        method: "POST",
+        cookie: operator.cookie,
+        body: { name: "Null Assign", assignedUserId: null },
+      });
+      assert.equal(forbiddenNullAssign.status, 403, forbiddenNullAssign.text);
+
       const claim = await request(`${base}/${unassigned.json.id}`, {
         method: "POST",
         cookie: operator.cookie,

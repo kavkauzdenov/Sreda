@@ -67,21 +67,25 @@ async function minTouchTarget(page, scope = ".clients-page") {
   }, scope);
 }
 
+/**
+ * Same registration/recovery flow as verify.yml
+ * "Prepare auth storage for responsive audit".
+ */
 async function registerAndBusiness(page) {
   const suffix = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
   const user = `clv2${suffix}`.slice(0, 28);
   const pass = "AcceptTest!2026cl";
   const res = await page.goto(baseURL + "/register", {
-    waitUntil: "networkidle",
+    waitUntil: "domcontentloaded",
     timeout: 90_000,
   });
   if (!res || res.status() >= 500) {
     throw new Error(`NETWORK_UNAVAILABLE: register ${res?.status()}`);
   }
   await page.locator("#account-login").waitFor({ state: "visible", timeout: 30_000 });
-  await page.waitForTimeout(800);
+  await page.waitForTimeout(400);
   await page.locator("#account-login").click();
-  await page.locator("#account-login").pressSequentially(user, { delay: 12 });
+  await page.locator("#account-login").fill(user);
   await page.locator("#account-password").fill(pass);
   await page.locator("#account-confirmation").fill(pass);
   await page.getByRole("button", { name: /создать аккаунт/i }).click();
@@ -101,10 +105,9 @@ async function registerAndBusiness(page) {
     const name = page.locator("#business-name");
     if (await name.count()) {
       await name.waitFor({ state: "visible", timeout: 20_000 });
-      await page.waitForTimeout(500);
+      await page.waitForTimeout(300);
       await name.click();
-      await name.fill("");
-      await name.pressSequentially(`Clients V2 ${suffix}`, { delay: 12 });
+      await name.fill(`Clients V2 ${suffix}`);
       const createPromise = page.waitForResponse(
         (r) =>
           r.url().includes("/api/v1/businesses") &&
@@ -140,7 +143,8 @@ test.describe("Clients V2 UI audit", () => {
     page,
     browserName,
   }) => {
-    test.setTimeout(240_000);
+    // Register + 5 viewports + dialog/detail/mobile cover a lot of wall time in CI.
+    test.setTimeout(420_000);
     try {
       await registerAndBusiness(page);
     } catch (error) {
@@ -152,7 +156,7 @@ test.describe("Clients V2 UI audit", () => {
     }
 
     await page.goto(baseURL + "/clients", {
-      waitUntil: "networkidle",
+      waitUntil: "domcontentloaded",
       timeout: 60_000,
     });
     await expect(page.locator("h1")).toContainText(/Клиенты/i, {
@@ -161,13 +165,13 @@ test.describe("Clients V2 UI audit", () => {
 
     for (const vp of VIEWPORTS) {
       await page.setViewportSize(vp);
-      await page.waitForTimeout(300);
+      await page.waitForTimeout(120);
       expect(await bodyOverflowX(page)).toBe(false);
       const shot = path.join(
         outDir,
         `clients_${vp.width}_${browserName}_light.png`,
       );
-      await page.screenshot({ path: shot, fullPage: true });
+      await page.screenshot({ path: shot, fullPage: false });
       const touch = await minTouchTarget(page);
       expect(touch).toBeGreaterThanOrEqual(43.5);
     }
@@ -201,7 +205,7 @@ test.describe("Clients V2 UI audit", () => {
 
     await page.screenshot({
       path: path.join(outDir, `clients_new_dialog_${browserName}.png`),
-      fullPage: true,
+      fullPage: false,
     });
     await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);
@@ -219,23 +223,23 @@ test.describe("Clients V2 UI audit", () => {
       const tab = page.getByRole("tab", { name }).or(page.getByRole("button", { name }));
       if (await tab.count()) {
         await tab.first().click().catch(() => undefined);
-        await page.waitForTimeout(150);
+        await page.waitForTimeout(80);
       }
     }
 
     await page.screenshot({
       path: path.join(outDir, `clients_detail_${browserName}.png`),
-      fullPage: true,
+      fullPage: false,
     });
 
     // Dark theme
     await page.evaluate(() => {
       document.documentElement.setAttribute("data-theme", "dark");
     });
-    await page.waitForTimeout(200);
+    await page.waitForTimeout(100);
     await page.screenshot({
       path: path.join(outDir, `clients_1440_${browserName}_dark.png`),
-      fullPage: true,
+      fullPage: false,
     });
     expect(await bodyOverflowX(page)).toBe(false);
 
@@ -244,7 +248,7 @@ test.describe("Clients V2 UI audit", () => {
     const clientMatch = clientUrl.match(/client=([0-9a-f-]{36})/i);
     if (clientMatch) {
       await page.goto(baseURL + `/clients?client=${clientMatch[1]}`, {
-        waitUntil: "networkidle",
+        waitUntil: "domcontentloaded",
         timeout: 60_000,
       });
       await expect(
@@ -252,16 +256,28 @@ test.describe("Clients V2 UI audit", () => {
       ).toBeVisible({ timeout: 20_000 });
     }
 
-    // Mobile detail layer
+    // Mobile/tablet detail layer — dialog/drawer semantics (not desktop panel)
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.waitForTimeout(300);
+    await page.waitForTimeout(200);
     expect(await bodyOverflowX(page)).toBe(false);
+    const mobileDetail = page.locator(
+      '.client-detail--dialog[role="dialog"], .client-detail--drawer[role="dialog"]',
+    );
+    await expect(mobileDetail).toBeVisible({ timeout: 15_000 });
+    await expect(mobileDetail).toHaveAttribute("aria-modal", "true");
+    await expect(mobileDetail).toHaveAttribute("aria-label", /.+/);
     const touch = await minTouchTarget(page);
     expect(touch).toBeGreaterThanOrEqual(43.5);
 
     await page.setViewportSize({ width: 320, height: 568 });
-    await page.waitForTimeout(200);
+    await page.waitForTimeout(120);
     expect(await bodyOverflowX(page)).toBe(false);
     expect(await minTouchTarget(page)).toBeGreaterThanOrEqual(43.5);
+    await expect(
+      page.locator('.client-detail--dialog[role="dialog"]'),
+    ).toBeVisible();
+    await expect(
+      page.locator('.client-detail--dialog[role="dialog"]'),
+    ).toHaveAttribute("aria-modal", "true");
   });
 });
