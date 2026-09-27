@@ -35,7 +35,7 @@ export function ProductCard({
         "orders-product-card" + (product.active ? "" : " is-hidden")
       }
     >
-      <div className="orders-product-card__media" aria-hidden={!imageId}>
+      <div className="orders-product-card__media">
         {imageId ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
@@ -44,7 +44,11 @@ export function ProductCard({
             alt=""
           />
         ) : (
-          <div className="orders-product-card__placeholder" role="img" aria-label="Нет фото">
+          <div
+            className="orders-product-card__placeholder"
+            role="img"
+            aria-label="Нет фото"
+          >
             Нет фото
           </div>
         )}

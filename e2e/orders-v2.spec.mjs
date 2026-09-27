@@ -701,7 +701,10 @@ test.describe("Orders V2 UI audit", () => {
     await expect(page.getByText(/telegram/i).first()).toBeVisible();
     await expect(page.getByText(/^vk$/i).first()).toBeVisible();
     await expect(
-      page.getByRole("link", { name: /подключить/i }).first(),
+      page
+        .locator(".orders-channel-status a, .orders-settings a")
+        .filter({ hasText: /подключить/i })
+        .first(),
     ).toHaveAttribute("href", /connections/);
 
     const save = page.getByRole("button", { name: /сохранить настройки/i });
