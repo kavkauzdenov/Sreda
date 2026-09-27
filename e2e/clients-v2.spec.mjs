@@ -160,19 +160,36 @@ async function boot(page) {
   return true;
 }
 
-/** Create a client via UI and wait for detail. Returns client id from URL when present. */
+/** Create a client via UI; waits for create dialog to close. Returns client id. */
 async function createClientViaUi(page, name = "Аудит Клиент") {
   const newBtn = page.getByRole("button", { name: /новый клиент/i });
   await expect(newBtn).toBeVisible();
   await newBtn.click();
   await expect(page.getByRole("dialog")).toBeVisible();
   await page.getByLabel(/^Имя/i).fill(name);
+  const createPromise = page.waitForResponse(
+    (r) => {
+      if (r.request().method() !== "POST") return false;
+      const u = r.url();
+      return (
+        /\/api\/v1\/businesses\/[^/]+\/clients\/?(\?|$)/.test(u) &&
+        !u.includes("action=")
+      );
+    },
+    { timeout: 30_000 },
+  );
   await page.getByRole("button", { name: /^Создать$/i }).click();
+  const res = await createPromise;
+  const body = await res.json().catch(() => ({}));
+  expect(res.ok()).toBeTruthy();
+  await expect(page.locator(".client-dialog-overlay")).toHaveCount(0, {
+    timeout: 10_000,
+  });
   await expect(
     page.locator(".client-detail, .client-detail--dialog"),
   ).toBeVisible({ timeout: 20_000 });
-  const match = page.url().match(/client=([0-9a-f-]{36})/i);
-  return match ? match[1] : null;
+  const fromUrl = page.url().match(/client=([0-9a-f-]{36})/i);
+  return body.id || (fromUrl ? fromUrl[1] : null);
 }
 
 test.describe("Clients V2 UI audit", () => {
@@ -241,12 +258,9 @@ test.describe("Clients V2 UI audit", () => {
     await createClientViaUi(page, "Аудит Клиент Tabs");
 
     for (const name of [/Обзор/i, /История/i, /Заметки/i]) {
-      const tab = page
-        .getByRole("tab", { name })
-        .or(page.getByRole("button", { name }));
-      if (await tab.count()) {
-        await tab.first().click();
-      }
+      const tab = page.getByRole("tab", { name });
+      await expect(tab).toBeVisible();
+      await tab.click();
     }
 
     await page.screenshot({
@@ -298,17 +312,19 @@ test.describe("Clients V2 UI audit", () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await createClientViaUi(page, "Аудит Mobile Dialog");
 
-    await page.setViewportSize({ width: 768, height: 1024 });
+    // Tablet band: >900px and ≤1279px → drawer + aria-modal
+    await page.setViewportSize({ width: 1024, height: 768 });
     await page.waitForTimeout(200);
     expect(await bodyOverflowX(page)).toBe(false);
     const tabletDetail = page.locator(
-      '.client-detail--drawer[role="dialog"], .client-detail--dialog[role="dialog"]',
+      '.client-detail--drawer[role="dialog"]',
     );
     await expect(tabletDetail).toBeVisible({ timeout: 15_000 });
     await expect(tabletDetail).toHaveAttribute("aria-modal", "true");
     await expect(tabletDetail).toHaveAttribute("aria-label", /.+/);
     expect(await minTouchTarget(page)).toBeGreaterThanOrEqual(43.5);
 
+    // Mobile ≤900px → dialog + aria-modal
     await page.setViewportSize({ width: 390, height: 844 });
     await page.waitForTimeout(200);
     expect(await bodyOverflowX(page)).toBe(false);

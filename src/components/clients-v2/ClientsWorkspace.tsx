@@ -133,6 +133,24 @@ function ClientsWorkspaceBody({
   const [moreBusy, setMoreBusy] = useState(false);
   const sequence = useRef(0);
 
+  // Keep shareable ?client= deep-link in sync with selection (no remount).
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    const current =
+      url.searchParams.get("client") || url.searchParams.get("id");
+    if ((selected || null) === (current || null)) return;
+    if (selected) {
+      url.searchParams.set("client", selected);
+      url.searchParams.delete("id");
+    } else {
+      url.searchParams.delete("client");
+      url.searchParams.delete("id");
+    }
+    const next = url.pathname + url.search + url.hash;
+    window.history.replaceState(window.history.state, "", next);
+  }, [selected]);
+
   const key = `${attempt}:${filters.search}:${filters.channel}:${filters.activity}:${filters.hasLeads}:${filters.hasOrders}:${filters.hasBookings}:${filters.hasOpenConversation}:${filters.hasNotes}:${filters.tagId}:${filters.assignedUserId}:${filters.newOnly}`;
 
   useEffect(() => {
@@ -299,6 +317,7 @@ function ClientsWorkspaceBody({
           canAssignOthers={canAssignOthers}
           onClose={() => onNewOpenChange(false)}
           onCreated={(id) => {
+            onNewOpenChange(false);
             setSelected(id);
             refresh();
           }}

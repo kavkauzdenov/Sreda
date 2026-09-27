@@ -60,6 +60,7 @@ export function NewClientDialog({
         note: note.trim() || undefined,
       });
       onCreated((result as { id: string }).id);
+      onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не удалось создать.");
     } finally {
