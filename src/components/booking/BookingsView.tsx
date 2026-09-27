@@ -160,11 +160,14 @@ function Calendar({
     [clientPhone, setClientPhone] = useState(""),
     [reschedule, setReschedule] = useState<Booking | null>(null),
     [cancel, setCancel] = useState<Booking | null>(null),
-    [selected, setSelected] = useState<Booking | null>(null);
+    [selected, setSelected] = useState<Booking | null>(null),
+    [deepLinked, setDeepLinked] = useState(false);
   const requestKey = useRef("");
   const configRef = useRef<HTMLElement | null>(null);
   const search = useSearchParams();
   const focusConfig = search.get("tab") === "config";
+  const deepBookingId = search.get("booking") || "";
+  const deepClientId = search.get("client") || "";
   const [solutionStatus, setSolutionStatus] = useState<string | null>(null);
   const [forceWizard, setForceWizard] = useState(false);
   const [wizardStep, setWizardStep] = useState(1);
@@ -201,6 +204,21 @@ function Calendar({
       alive = false;
     };
   }, [base, bookingUrl]);
+  useEffect(() => {
+    if (deepLinked) return;
+    if (deepBookingId) {
+      const found = bookings.find((b) => b.id === deepBookingId);
+      if (found) {
+        setSelected(found);
+        setDeepLinked(true);
+      }
+      return;
+    }
+    if (deepClientId) {
+      setClient(deepClientId);
+      setDeepLinked(true);
+    }
+  }, [bookings, deepBookingId, deepClientId, deepLinked]);
   useEffect(() => {
     let alive = true;
     void Promise.all([

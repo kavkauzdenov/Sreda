@@ -5,6 +5,7 @@ import {
 } from "@/components/attachments/AttachmentPicker";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { apiRequest } from "@/lib/apiClient";
 import { useBusinessContext } from "@/hooks/useBusinessContext";
 import {
@@ -94,8 +95,10 @@ function Inbox({
     [filter, setFilter] = useState(""),
     [platformFilter, setPlatformFilter] = useState(""),
     [page, setPage] = useState(0),
-    [messagePage, setMessagePage] = useState(0);
+    [messagePage, setMessagePage] = useState(0),
+    [deepLinked, setDeepLinked] = useState(false);
   const requestKey = useRef("");
+  const search = useSearchParams();
   const base = `/api/v1/businesses/${businessId}/conversations`;
   const current = conversations.find((c) => c.id === selected);
   const listQuery =
@@ -105,6 +108,14 @@ function Inbox({
     "&page=" +
     page +
     (platformFilter ? "&platform=" + platformFilter : "");
+  useEffect(() => {
+    if (deepLinked) return;
+    const fromQuery = search.get("conversation") || "";
+    if (fromQuery) {
+      setSelected(fromQuery);
+      setDeepLinked(true);
+    }
+  }, [search, deepLinked]);
   useEffect(() => {
     let active = true;
     async function refresh() {

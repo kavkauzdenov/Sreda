@@ -210,7 +210,18 @@ function OrdersPanel({
   const [selected, setSelected] = useState<string | null>(null);
   const [detail, setDetail] = useState<OrderDetail | null>(null);
   const [busy, setBusy] = useState(false);
+  const [deepLinked, setDeepLinked] = useState(false);
+  const search = useSearchParams();
   const base = `/api/v1/businesses/${businessId}/orders`;
+
+  useEffect(() => {
+    if (deepLinked) return;
+    const fromQuery = search.get("order") || "";
+    if (fromQuery) {
+      setSelected(fromQuery);
+      setDeepLinked(true);
+    }
+  }, [search, deepLinked]);
 
   useEffect(() => {
     let alive = true;

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useBusinessContext } from "@/hooks/useBusinessContext";
 import { BusinessSwitcher } from "@/components/dashboard/BusinessSwitcher";
 import { LoadingPanel } from "@/components/dashboard/LoadingPanel";
@@ -116,7 +117,9 @@ function LeadWorkspace({
   const [selected, setSelected] = useState<string | null>(null);
   const [moreBusy, setMoreBusy] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+  const [deepLinked, setDeepLinked] = useState(false);
   const sequence = useRef(0);
+  const searchParams = useSearchParams();
 
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 900px)");
@@ -125,6 +128,15 @@ function LeadWorkspace({
     mq.addEventListener("change", sync);
     return () => mq.removeEventListener("change", sync);
   }, []);
+
+  useEffect(() => {
+    if (deepLinked) return;
+    const fromQuery = searchParams.get("lead") || searchParams.get("id") || "";
+    if (fromQuery) {
+      setSelected(fromQuery);
+      setDeepLinked(true);
+    }
+  }, [searchParams, deepLinked]);
 
   useEffect(() => {
     const version = ++sequence.current;
