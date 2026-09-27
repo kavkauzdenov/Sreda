@@ -110,6 +110,7 @@ export function LeadFormBuilder({
   const [pendingPreset, setPendingPreset] = useState<LeadFormPresetId | null>(
     null,
   );
+  const [draggedId, setDraggedId] = useState<string | null>(null);
 
   const publish = useCallback(
     (rows: LeadFormField[]) => {
@@ -183,6 +184,30 @@ export function LeadFormBuilder({
     ordered.splice(index, 1);
     ordered.splice(next, 0, item);
     void reorder(ordered);
+  }
+
+  function dropOn(targetId: string) {
+    if (!draggedId || draggedId === targetId || busy || !canEdit) {
+      setDraggedId(null);
+      return;
+    }
+    const dragged = fields.find((field) => field.id === draggedId);
+    const target = fields.find((field) => field.id === targetId);
+    if (!dragged || !target || dragged.fieldKey === "name") {
+      setDraggedId(null);
+      return;
+    }
+    const without = fields.filter((field) => field.id !== draggedId);
+    let targetIndex = without.findIndex((field) => field.id === targetId);
+    if (targetIndex < 0) {
+      setDraggedId(null);
+      return;
+    }
+    // Never insert before the system name field.
+    if (without[0]?.fieldKey === "name") targetIndex = Math.max(1, targetIndex);
+    without.splice(targetIndex, 0, dragged);
+    setDraggedId(null);
+    void reorder(without.map((field) => field.id));
   }
 
   async function applyPreset(presetId: LeadFormPresetId, replace: boolean) {
@@ -450,7 +475,22 @@ export function LeadFormBuilder({
             const isName = field.fieldKey === "name";
             const isEditing = editingId === field.id;
             return (
-              <li key={field.id}>
+              <li
+                key={field.id}
+                draggable={canEdit && !busy && !isEditing && !isName}
+                className={draggedId === field.id ? "is-dragging" : undefined}
+                onDragStart={() => {
+                  if (!isName) setDraggedId(field.id);
+                }}
+                onDragEnd={() => setDraggedId(null)}
+                onDragOver={(event) => {
+                  if (draggedId && !isName) event.preventDefault();
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  if (!isName) dropOn(field.id);
+                }}
+              >
                 {isEditing ? (
                   <div className="lead-form-builder__edit">
                     <label className="field">
@@ -539,6 +579,15 @@ export function LeadFormBuilder({
                 ) : (
                   <>
                     <span>
+                      {canEdit && !isName ? (
+                        <span
+                          className="lead-form-builder__drag-handle"
+                          aria-hidden="true"
+                          title="Перетащите поле"
+                        >
+                          ⋮⋮
+                        </span>
+                      ) : null}
                       <strong>{field.label}</strong>
                       <small>
                         {typeLabel(field.fieldType)}
