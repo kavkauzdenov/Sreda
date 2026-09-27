@@ -324,6 +324,9 @@ export class LeadService {
       .where("business_id", "=", businessId)
       .execute();
     const labelByKey = new Map(fieldRows.map((f) => [f.field_key, f.label]));
+    const typeByKey = new Map(
+      fieldRows.map((f) => [f.field_key, f.field_type]),
+    );
 
     const history = await this.db
       .selectFrom("lead_status_history")
@@ -355,11 +358,60 @@ export class LeadService {
       lead.answers && typeof lead.answers === "object"
         ? (lead.answers as Record<string, unknown>)
         : {};
-    const answerFields = Object.entries(answers).map(([key, value]) => ({
-      key,
-      label: labelByKey.get(key) || key,
-      value,
-    }));
+
+    const attachmentIds = [
+      ...new Set(
+        Object.entries(answers).flatMap(([key, value]) => {
+          if (typeByKey.get(key) !== "attachment") return [];
+          const values = Array.isArray(value) ? value : [value];
+          return values.filter(
+            (item): item is string =>
+              typeof item === "string" &&
+              /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+                item,
+              ),
+          );
+        }),
+      ),
+    ];
+    const attachmentRows = attachmentIds.length
+      ? await this.db
+          .selectFrom("attachment")
+          .select(["id", "filename", "type"])
+          .where("business_id", "=", businessId)
+          .where("id", "in", attachmentIds)
+          .execute()
+      : [];
+    const attachmentById = new Map(
+      attachmentRows.map((row) => [row.id, row]),
+    );
+
+    const answerFields = Object.entries(answers).map(([key, value]) => {
+      if (typeByKey.get(key) !== "attachment") {
+        return {
+          key,
+          label: labelByKey.get(key) || key,
+          value,
+        };
+      }
+      const values = Array.isArray(value) ? value : [value];
+      const files = values
+        .filter((item): item is string => typeof item === "string")
+        .map((id) => attachmentById.get(id))
+        .filter((row): row is NonNullable<typeof row> => Boolean(row))
+        .map((row) => ({
+          id: row.id,
+          name: row.filename,
+          type: row.type,
+          url:
+            `/api/v1/businesses/${encodeURIComponent(publicId)}/attachments/${encodeURIComponent(row.id)}`,
+        }));
+      return {
+        key,
+        label: labelByKey.get(key) || key,
+        value: files,
+      };
+    });
 
     return {
       ...this.toLead(
