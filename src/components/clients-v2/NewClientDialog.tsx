@@ -7,13 +7,11 @@ import { createClient, getClientAssignees } from "@/services/clients.service";
 export function NewClientDialog({
   businessId,
   canAssignOthers,
-  currentUserId,
   onClose,
   onCreated,
 }: {
   businessId: string;
   canAssignOthers: boolean;
-  currentUserId?: string;
   onClose: () => void;
   onCreated: (id: string) => void;
 }) {
@@ -31,10 +29,11 @@ export function NewClientDialog({
   const dialogRef = useRef<HTMLFormElement>(null);
 
   useEffect(() => {
+    if (!canAssignOthers) return;
     void getClientAssignees(businessId)
       .then(setAssignees)
       .catch(() => undefined);
-  }, [businessId]);
+  }, [businessId, canAssignOthers]);
 
   useDialogFocusTrap(dialogRef, onClose);
 
@@ -48,13 +47,15 @@ export function NewClientDialog({
         .split(",")
         .map((t) => t.trim())
         .filter(Boolean);
+      // Operator must not send assignedUserId — client stays unassigned;
+      // claim is a separate authenticated backend action.
       const result = await createClient(businessId, {
         name: name.trim(),
         phone: phone.trim() || undefined,
         email: email.trim() || undefined,
-        assignedUserId: canAssignOthers
-          ? assignedUserId || null
-          : currentUserId || null,
+        ...(canAssignOthers
+          ? { assignedUserId: assignedUserId || null }
+          : {}),
         tags: tagList.length ? tagList : undefined,
         note: note.trim() || undefined,
       });

@@ -95,16 +95,35 @@ export function ClientDetail({
     onListRefresh?.();
   }
 
+  const isModal = variant === "dialog" || variant === "drawer";
   const className =
     variant === "dialog"
       ? "client-detail client-detail--dialog"
       : variant === "drawer"
         ? "client-detail client-detail--drawer"
         : "panel client-detail";
+  const modalProps = isModal
+    ? {
+        role: "dialog" as const,
+        "aria-modal": true as const,
+        "aria-label": detail
+          ? `Клиент ${detail.client.name}`
+          : loading
+            ? "Загрузка карточки клиента"
+            : "Карточка клиента",
+      }
+    : detail
+      ? { "aria-label": `Клиент ${detail.client.name}` }
+      : {};
 
   if (loading) {
     return (
-      <section className={className} aria-busy="true" ref={rootRef}>
+      <section
+        className={className}
+        aria-busy="true"
+        ref={rootRef}
+        {...modalProps}
+      >
         <div className="clients-skeleton">
           <div className="clients-skeleton__row" />
           <div className="clients-skeleton__row" />
@@ -116,7 +135,7 @@ export function ClientDetail({
 
   if (error || !detail) {
     return (
-      <section className={className} ref={rootRef}>
+      <section className={className} ref={rootRef} {...modalProps}>
         <p className="account-error" role="alert">
           {error || "Клиент не найден."}
         </p>
@@ -135,11 +154,7 @@ export function ClientDetail({
   }
 
   return (
-    <section
-      className={className}
-      ref={rootRef}
-      aria-label={`Клиент ${detail.client.name}`}
-    >
+    <section className={className} ref={rootRef} {...modalProps}>
       <ClientDetailHeader
         detail={detail}
         timezone={timezone}

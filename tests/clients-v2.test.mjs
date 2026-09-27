@@ -998,3 +998,24 @@ test("clients v2: create booking for existing client", async () => {
   const after = await getClientDetailV2(db, uid, publicId, clientId);
   assert.ok(after.stats.bookingCount >= 1);
 });
+
+test("clients v2: operator creates client without assignee then claims", async () => {
+  const owner = await fixture("owner");
+  const operator = await addMember(owner.b.id, "operator");
+  const svc = new ClientService(db);
+  // No assignedUserId in payload — must succeed and stay unassigned.
+  const created = await svc.save(operator, owner.publicId, {
+    name: "Операторский клиент",
+    phone: "+79995556600",
+  });
+  const row = await db
+    .selectFrom("client")
+    .select(["assigned_user_id", "name"])
+    .where("id", "=", created.id)
+    .executeTakeFirstOrThrow();
+  assert.equal(row.assigned_user_id, null);
+  assert.equal(row.name, "Операторский клиент");
+
+  const claimed = await claimClient(db, operator, owner.publicId, created.id);
+  assert.equal(claimed.assignedUser?.id, operator);
+});

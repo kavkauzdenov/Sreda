@@ -3933,20 +3933,6 @@ ul {
   min-height: 44px;
   min-width: 44px;
 }
-.client-tag button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 44px;
-  min-height: 44px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-  border-radius: 8px;
-}
 .clients-workspace.has-detail {
   grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
 }
@@ -4342,14 +4328,18 @@ ul {
   font-size: 0.8rem;
 }
 .client-tag button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 0;
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
   padding: 0;
-  min-width: 22px;
-  min-height: 22px;
+  min-width: 44px;
+  min-height: 44px;
   line-height: 1;
+  border-radius: 8px;
 }
 .client-timeline,
 .client-entity-list {
