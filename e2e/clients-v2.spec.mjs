@@ -1,7 +1,6 @@
 /**
- * Clients V2 UI audit — list/detail layout, responsive, light/dark, a11y.
- * Requires reachable app via E2E_BASE_URL / AUDIT_BASE_URL.
- * Prefer AUDIT_STORAGE_STATE (same register/recovery flow as UI gate auth).
+ * Clients V2 UI audit — split into independent tests.
+ * Prefer AUDIT_STORAGE_STATE (UI gate register → recovery → business).
  * Must not skip when the CI isolated app is healthy.
  */
 import { test, expect } from "playwright/test";
@@ -71,10 +70,7 @@ async function minTouchTarget(page, scope = ".clients-page") {
   }, scope);
 }
 
-/**
- * Same registration/recovery flow as verify.yml
- * "Prepare auth storage for responsive audit".
- */
+/** Same register/recovery/business flow as verify.yml auth storage step. */
 async function registerAndBusiness(page) {
   const suffix = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
   const user = `clv2${suffix}`.slice(0, 28);
@@ -104,7 +100,7 @@ async function registerAndBusiness(page) {
     { timeout: 45_000 },
   );
 
-  if (page.url().includes("/business/new") || page.url().includes("business/new")) {
+  if (page.url().includes("business/new")) {
     const name = page.locator("#business-name");
     await name.waitFor({ state: "visible", timeout: 20_000 });
     await page.waitForTimeout(800);
@@ -150,6 +146,35 @@ async function openClients(page) {
   });
 }
 
+async function boot(page) {
+  try {
+    await ensureAuthed(page);
+    await openClients(page);
+  } catch (error) {
+    if (isNetworkUnavailable(error)) {
+      test.skip(true, String(error));
+      return false;
+    }
+    throw error;
+  }
+  return true;
+}
+
+/** Create a client via UI and wait for detail. Returns client id from URL when present. */
+async function createClientViaUi(page, name = "Аудит Клиент") {
+  const newBtn = page.getByRole("button", { name: /новый клиент/i });
+  await expect(newBtn).toBeVisible();
+  await newBtn.click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await page.getByLabel(/^Имя/i).fill(name);
+  await page.getByRole("button", { name: /^Создать$/i }).click();
+  await expect(
+    page.locator(".client-detail, .client-detail--dialog"),
+  ).toBeVisible({ timeout: 20_000 });
+  const match = page.url().match(/client=([0-9a-f-]{36})/i);
+  return match ? match[1] : null;
+}
+
 test.describe("Clients V2 UI audit", () => {
   test.beforeAll(() => {
     fs.mkdirSync(outDir, { recursive: true });
@@ -159,18 +184,9 @@ test.describe("Clients V2 UI audit", () => {
     test.use({ storageState: storageStatePath });
   }
 
-  test("responsive viewports + touch targets", async ({ page, browserName }) => {
-    test.setTimeout(180_000);
-    try {
-      await ensureAuthed(page);
-      await openClients(page);
-    } catch (error) {
-      if (isNetworkUnavailable(error)) {
-        test.skip(true, String(error));
-        return;
-      }
-      throw error;
-    }
+  test("workspace responsive + touch targets", async ({ page, browserName }) => {
+    test.setTimeout(120_000);
+    if (!(await boot(page))) return;
 
     for (const vp of VIEWPORTS) {
       await page.setViewportSize(vp);
@@ -187,21 +203,12 @@ test.describe("Clients V2 UI audit", () => {
     }
   });
 
-  test("new-client dialog a11y + detail + mobile dialog semantics", async ({
+  test("new client dialog + focus trap + Escape", async ({
     page,
     browserName,
   }) => {
-    test.setTimeout(180_000);
-    try {
-      await ensureAuthed(page);
-      await openClients(page);
-    } catch (error) {
-      if (isNetworkUnavailable(error)) {
-        test.skip(true, String(error));
-        return;
-      }
-      throw error;
-    }
+    test.setTimeout(90_000);
+    if (!(await boot(page))) return;
 
     await page.setViewportSize({ width: 1440, height: 900 });
     const newBtn = page.getByRole("button", { name: /новый клиент/i });
@@ -224,20 +231,21 @@ test.describe("Clients V2 UI audit", () => {
     });
     await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);
+  });
 
-    await newBtn.click();
-    await page.getByLabel(/^Имя/i).fill("Аудит Клиент");
-    await page.getByRole("button", { name: /^Создать$/i }).click();
-    await expect(
-      page.locator(".client-detail, .client-detail--dialog"),
-    ).toBeVisible({ timeout: 20_000 });
+  test("create/select client + tabs", async ({ page, browserName }) => {
+    test.setTimeout(90_000);
+    if (!(await boot(page))) return;
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await createClientViaUi(page, "Аудит Клиент Tabs");
 
     for (const name of [/Обзор/i, /История/i, /Заметки/i]) {
       const tab = page
         .getByRole("tab", { name })
         .or(page.getByRole("button", { name }));
       if (await tab.count()) {
-        await tab.first().click().catch(() => undefined);
+        await tab.first().click();
       }
     }
 
@@ -245,33 +253,67 @@ test.describe("Clients V2 UI audit", () => {
       path: path.join(outDir, `clients_detail_${browserName}.png`),
       fullPage: false,
     });
+    expect(await bodyOverflowX(page)).toBe(false);
+  });
 
+  test("dark theme", async ({ page, browserName }) => {
+    test.setTimeout(90_000);
+    if (!(await boot(page))) return;
+
+    await page.setViewportSize({ width: 1440, height: 900 });
     await page.evaluate(() => {
       document.documentElement.setAttribute("data-theme", "dark");
     });
+    await page.waitForTimeout(100);
     await page.screenshot({
       path: path.join(outDir, `clients_1440_${browserName}_dark.png`),
       fullPage: false,
     });
     expect(await bodyOverflowX(page)).toBe(false);
+    expect(await minTouchTarget(page)).toBeGreaterThanOrEqual(43.5);
+  });
 
-    const clientUrl = page.url();
-    const clientMatch = clientUrl.match(/client=([0-9a-f-]{36})/i);
-    if (clientMatch) {
-      await page.goto(baseURL + `/clients?client=${clientMatch[1]}`, {
-        waitUntil: "domcontentloaded",
-        timeout: 60_000,
-      });
-      await expect(
-        page.locator(".client-detail, .client-detail--dialog"),
-      ).toBeVisible({ timeout: 20_000 });
-    }
+  test("client deep-link", async ({ page }) => {
+    test.setTimeout(90_000);
+    if (!(await boot(page))) return;
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const clientId = await createClientViaUi(page, "Аудит Deep Link");
+    expect(clientId).toBeTruthy();
+
+    await page.goto(baseURL + `/clients?client=${clientId}`, {
+      waitUntil: "domcontentloaded",
+      timeout: 60_000,
+    });
+    await expect(
+      page.locator(".client-detail, .client-detail--dialog"),
+    ).toBeVisible({ timeout: 20_000 });
+    expect(await bodyOverflowX(page)).toBe(false);
+  });
+
+  test("mobile/tablet detail dialog semantics", async ({ page }) => {
+    test.setTimeout(120_000);
+    if (!(await boot(page))) return;
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await createClientViaUi(page, "Аудит Mobile Dialog");
+
+    await page.setViewportSize({ width: 768, height: 1024 });
+    await page.waitForTimeout(200);
+    expect(await bodyOverflowX(page)).toBe(false);
+    const tabletDetail = page.locator(
+      '.client-detail--drawer[role="dialog"], .client-detail--dialog[role="dialog"]',
+    );
+    await expect(tabletDetail).toBeVisible({ timeout: 15_000 });
+    await expect(tabletDetail).toHaveAttribute("aria-modal", "true");
+    await expect(tabletDetail).toHaveAttribute("aria-label", /.+/);
+    expect(await minTouchTarget(page)).toBeGreaterThanOrEqual(43.5);
 
     await page.setViewportSize({ width: 390, height: 844 });
     await page.waitForTimeout(200);
     expect(await bodyOverflowX(page)).toBe(false);
     const mobileDetail = page.locator(
-      '.client-detail--dialog[role="dialog"], .client-detail--drawer[role="dialog"]',
+      '.client-detail--dialog[role="dialog"]',
     );
     await expect(mobileDetail).toBeVisible({ timeout: 15_000 });
     await expect(mobileDetail).toHaveAttribute("aria-modal", "true");
@@ -279,14 +321,10 @@ test.describe("Clients V2 UI audit", () => {
     expect(await minTouchTarget(page)).toBeGreaterThanOrEqual(43.5);
 
     await page.setViewportSize({ width: 320, height: 568 });
-    await page.waitForTimeout(120);
+    await page.waitForTimeout(150);
     expect(await bodyOverflowX(page)).toBe(false);
+    await expect(mobileDetail).toBeVisible();
+    await expect(mobileDetail).toHaveAttribute("aria-modal", "true");
     expect(await minTouchTarget(page)).toBeGreaterThanOrEqual(43.5);
-    await expect(
-      page.locator('.client-detail--dialog[role="dialog"]'),
-    ).toBeVisible();
-    await expect(
-      page.locator('.client-detail--dialog[role="dialog"]'),
-    ).toHaveAttribute("aria-modal", "true");
   });
 });

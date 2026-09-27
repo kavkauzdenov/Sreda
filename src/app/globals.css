@@ -4256,10 +4256,13 @@ ul {
   -webkit-overflow-scrolling: touch;
   border-bottom: 1px solid var(--border);
   padding-bottom: 2px;
+  min-width: 0;
+  max-width: 100%;
 }
 .client-tabs button {
   flex: 0 0 auto;
   min-height: 44px;
+  min-width: 44px;
   padding: 8px 12px;
   border: 0;
   border-bottom: 2px solid transparent;
@@ -4383,12 +4386,18 @@ ul {
   display: grid;
   align-items: stretch;
   padding: 0;
+  overflow: hidden;
+  max-width: 100vw;
 }
 .client-detail--dialog {
   background: var(--bg-surface);
   padding: 16px 18px 28px;
   overflow: auto;
   height: 100%;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   display: grid;
   gap: 16px;
   align-content: start;
@@ -4396,10 +4405,13 @@ ul {
 .client-detail--drawer {
   justify-self: end;
   width: min(440px, 100%);
+  max-width: 100%;
+  min-width: 0;
   height: 100%;
   background: var(--bg-surface);
   padding: 16px 18px 28px;
   overflow: auto;
+  box-sizing: border-box;
   display: grid;
   gap: 16px;
   align-content: start;
