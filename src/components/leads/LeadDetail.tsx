@@ -56,7 +56,9 @@ function formatAnswerValue(value: unknown): string {
   }
 }
 
-function isAttachment(value: unknown): value is { url: string; name?: string } {
+function isAttachment(
+  value: unknown,
+): value is { id?: string; url: string; name?: string; type?: string } {
   return (
     typeof value === "object" &&
     value !== null &&
@@ -279,9 +281,26 @@ export function LeadDetail({
                     : [row.value];
                   return values.filter(isAttachment).map((file, i) => (
                     <li key={`${row.key}-${i}`}>
-                      <a href={file.url} target="_blank" rel="noreferrer">
-                        {file.name || "Файл"}
-                      </a>
+                      {file.type === "image" ? (
+                        <a
+                          href={file.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="lead-detail__attachment-preview"
+                        >
+                          {/* Authenticated same-origin preview; full link keeps download behavior. */}
+                          <img
+                            src={file.url + "?inline=1"}
+                            alt={file.name || "Вложение заявки"}
+                            loading="lazy"
+                          />
+                          <span>{file.name || "Изображение"}</span>
+                        </a>
+                      ) : (
+                        <a href={file.url} target="_blank" rel="noreferrer">
+                          {file.name || "Файл"}
+                        </a>
+                      )}
                     </li>
                   ));
                 })}
