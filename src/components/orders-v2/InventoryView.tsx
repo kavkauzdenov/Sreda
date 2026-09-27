@@ -34,7 +34,6 @@ export function InventoryView({ businessId }: { businessId: string }) {
 
   useEffect(() => {
     let alive = true;
-    setLoading(true);
     void getInventory(businessId, { search, state })
       .then((result) => {
         if (!alive) return;
@@ -151,6 +150,7 @@ export function InventoryView({ businessId }: { businessId: string }) {
 
       {editing ? (
         <StockEditor
+          key={`${editing.productId}:${editing.variantId ?? "base"}:${editing.stockQuantity ?? "x"}`}
           businessId={businessId}
           row={editing}
           onClose={() => setEditing(null)}

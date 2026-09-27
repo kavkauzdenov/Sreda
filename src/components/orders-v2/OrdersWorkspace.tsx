@@ -145,6 +145,7 @@ function OrdersWorkspaceBody({
   const [tab, setTab] = useState<OrdersTab>(() =>
     parseTab(searchParams.get("tab"), ["orders", "catalog", "inventory", "settings"]),
   );
+  const activeTab = allowedTabs.includes(tab) ? tab : "orders";
 
   const [filters, setFilters] = useState<OrderFilterValues>({
     ...EMPTY_ORDER_FILTERS,
@@ -182,10 +183,6 @@ function OrdersWorkspaceBody({
     };
   }, [businessId]);
 
-  useEffect(() => {
-    if (!allowedTabs.includes(tab)) setTab("orders");
-  }, [allowedTabs, tab]);
-
   // Deep-link: ?client= opens create dialog once.
   useEffect(() => {
     if (presetClientId) onCreateOpenChange(true);
@@ -203,7 +200,7 @@ function OrdersWorkspaceBody({
       else url.searchParams.delete("order");
       dirty = true;
     }
-    const desiredTab = tab === "orders" ? null : tab;
+    const desiredTab = activeTab === "orders" ? null : activeTab;
     if ((desiredTab || null) !== (tabParam || null)) {
       if (desiredTab) url.searchParams.set("tab", desiredTab);
       else url.searchParams.delete("tab");
@@ -215,12 +212,12 @@ function OrdersWorkspaceBody({
       "",
       url.pathname + url.search + url.hash,
     );
-  }, [selected, tab]);
+  }, [selected, activeTab]);
 
   const key = `${attempt}:${filters.search}:${filters.status}:${filters.source}:${filters.fulfillment}:${filters.date}:${filters.assignedUserId}`;
 
   useEffect(() => {
-    if (tab !== "orders") return;
+    if (activeTab !== "orders") return;
     const version = ++sequence.current;
     void getOrderPage(businessId, filters)
       .then((result) => {
@@ -246,7 +243,7 @@ function OrdersWorkspaceBody({
     return () => {
       sequence.current = version + 1;
     };
-  }, [businessId, filters, key, tab]);
+  }, [businessId, filters, key, activeTab]);
 
   const listError = failure?.key === key ? failure.message : null;
   const current = page?.key === key && !listError ? page : null;
@@ -288,8 +285,8 @@ function OrdersWorkspaceBody({
     }
   }
 
-  const showSidePanel = selected && layout === "desktop" && tab === "orders";
-  const showOverlay = selected && layout !== "desktop" && tab === "orders";
+  const showSidePanel = selected && layout === "desktop" && activeTab === "orders";
+  const showOverlay = selected && layout !== "desktop" && activeTab === "orders";
 
   const periodLabel =
     filters.date === "today"
@@ -311,7 +308,7 @@ function OrdersWorkspaceBody({
           onCreateOpenChange(true);
         }}
         tabs={allowedTabs}
-        activeTab={tab}
+        activeTab={activeTab}
         onTabChange={(next) => {
           setSelected(null);
           setTab(next);
@@ -320,7 +317,7 @@ function OrdersWorkspaceBody({
       />
       <SolutionSetupBanner code="orders" />
 
-      {tab === "orders" ? (
+      {activeTab === "orders" ? (
         <>
           <OrdersSummaryCards businessId={businessId} />
           <OrderFilters
@@ -406,13 +403,13 @@ function OrdersWorkspaceBody({
         </>
       ) : null}
 
-      {tab === "catalog" ? (
+      {activeTab === "catalog" ? (
         <CatalogView businessId={businessId} businessMode={businessMode} />
       ) : null}
-      {tab === "inventory" ? (
+      {activeTab === "inventory" ? (
         <InventoryView businessId={businessId} />
       ) : null}
-      {tab === "settings" ? (
+      {activeTab === "settings" ? (
         <OrderSettingsView
           businessId={businessId}
           canEdit={canAssignOthers}

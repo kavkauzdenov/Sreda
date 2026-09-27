@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useDialogFocusTrap } from "@/hooks/useDialogFocusTrap";
 import type { InventoryRow } from "@/components/orders-v2/types";
 import { adjustInventory } from "@/services/orders.service";
@@ -26,10 +26,6 @@ export function StockEditor({
   const [error, setError] = useState("");
 
   useDialogFocusTrap(dialogRef, onClose);
-
-  useEffect(() => {
-    setQuantity(row.stockQuantity != null ? String(row.stockQuantity) : "0");
-  }, [row.stockQuantity]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();

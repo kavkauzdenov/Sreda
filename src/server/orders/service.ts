@@ -1926,7 +1926,10 @@ export class OrderService {
           subtotal,
           delivery_fee: deliveryFeeStr,
           items_snapshot: JSON.stringify(
-            snapshot.map(({ remaining: _r, ...line }) => line),
+            snapshot.map(({ remaining, ...line }) => {
+              void remaining;
+              return line;
+            }),
           ),
           source,
           request_key: key,

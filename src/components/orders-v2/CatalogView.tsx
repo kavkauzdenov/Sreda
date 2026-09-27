@@ -44,7 +44,6 @@ export function CatalogView({
 
   useEffect(() => {
     let alive = true;
-    setLoading(true);
     void Promise.all([listCategories(businessId), listProducts(businessId)])
       .then(([cats, rows]) => {
         if (!alive) return;

@@ -40,7 +40,6 @@ export function OrderSettingsView({
 
   useEffect(() => {
     let alive = true;
-    setLoading(true);
     void getOrderSettings(businessId)
       .then((data) => {
         if (!alive) return;
