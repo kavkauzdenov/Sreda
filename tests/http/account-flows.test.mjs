@@ -166,13 +166,19 @@ test("production HTTPS account and workspace lifecycle", { timeout: 120000 }, as
     });
     await t.test("solution setup persists through routes and Telegram remains disabled until deployment", async () => {
       const base = `/api/v1/businesses/${business.id}`;
-      const draft = { version: 1, step: 3, channels: ["telegram"], fields: ["name", "phone"] };
+      // Legacy V1 payload is accepted and converted to V2 on read/write.
+      const draftV1 = { version: 1, step: 3, channels: ["telegram"], fields: ["name", "phone"] };
       const empty = await request(base + "/lead-setup", { cookie: owner.cookie });
       assert.equal(empty.status, 200); assert.equal(empty.json.revision, 0);
-      const saved = await request(base + "/lead-setup", { method: "POST", cookie: owner.cookie, body: { draft, revision: 0 } });
+      const saved = await request(base + "/lead-setup", { method: "POST", cookie: owner.cookie, body: { draft: draftV1, revision: 0 } });
       assert.equal(saved.status, 200, saved.text); assert.equal(saved.json.revision, 1);
-      assert.deepEqual((await request(base + "/lead-setup", { cookie: owner.cookie })).json.draft, draft);
-      assert.equal((await request(base + "/lead-setup", { method: "POST", cookie: owner.cookie, body: { draft, revision: 0 } })).status, 409);
+      const loaded = (await request(base + "/lead-setup", { cookie: owner.cookie })).json.draft;
+      assert.equal(loaded.version, 2);
+      assert.deepEqual(loaded.channels, ["telegram"]);
+      assert.equal(loaded.setupStep, 6);
+      assert.equal(loaded.completed, true);
+      assert.equal(typeof loaded.buttonLabel, "string");
+      assert.equal((await request(base + "/lead-setup", { method: "POST", cookie: owner.cookie, body: { draft: draftV1, revision: 0 } })).status, 409);
       assert.equal((await request(base + "/solutions", { cookie: owner.cookie })).json[0].status, "setup_required");
       assert.equal((await request(base + "/telegram/start", { method: "POST", cookie: owner.cookie, body: {} })).status, 503);
       assert.equal((await request("/api/telegram/00000000-0000-0000-0000-000000000000", { method: "POST", body: { update_id: 1 } })).status, 503);
