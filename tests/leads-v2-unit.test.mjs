@@ -147,14 +147,22 @@ test("validateLeadAnswer: date invalid", () => {
   assert.match(r.message, /дат/i);
 });
 
-test("validateLeadAnswer: date formats accepted", () => {
-  assert.equal(
-    validateLeadAnswer(field({ fieldType: "date" }), "2026-12-25").ok,
-    true,
+test("validateLeadAnswer: date formats accepted and normalized", () => {
+  assert.deepEqual(
+    validateLeadAnswer(field({ fieldType: "date" }), "2026-12-25"),
+    { ok: true, value: "2026-12-25" },
+  );
+  assert.deepEqual(
+    validateLeadAnswer(field({ fieldType: "date" }), "25.12.2026"),
+    { ok: true, value: "2026-12-25" },
+  );
+  assert.deepEqual(
+    validateLeadAnswer(field({ fieldType: "date" }), "25.12.26"),
+    { ok: true, value: "2026-12-25" },
   );
   assert.equal(
-    validateLeadAnswer(field({ fieldType: "date" }), "25.12.2026").ok,
-    true,
+    validateLeadAnswer(field({ fieldType: "date" }), "31.02.2026").ok,
+    false,
   );
 });
 
