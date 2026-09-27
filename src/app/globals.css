@@ -4152,7 +4152,7 @@ ul {
 .account-story .brand small { color: #d2dacf; }
 .account-story__copy { margin-top:clamp(56px,10vh,120px); }
 .account-story__copy p { color:#d8e2d4; max-width:420px; }
-.account-story__art { width:125%; max-width:none; margin:10px -12% -8%; align-self:center; mix-blend-mode:screen; opacity:.92; }
+.account-story__art { width: 100%; max-width: 280px; margin: 0 auto; align-self: center; mix-blend-mode: screen; opacity: .92; }
 .account-form-pane { background: var(--auth-bg); padding:40px clamp(24px,5vw,88px); }
 .account-form-shell {
   width:100%;
