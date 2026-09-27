@@ -7,6 +7,9 @@ import { migrate } from "../src/server/db/migrate.ts";
 import { LeadFormService } from "../src/server/leads/forms.ts";
 import { LeadService } from "../src/server/leads/service.ts";
 import { getLeadReadiness } from "../src/server/leads/readiness.ts";
+import { ensureLeadSetupV2 } from "../src/server/leads/setup.ts";
+import { SolutionService } from "../src/server/solutions/service.ts";
+import { newLeadSetupV2 } from "../src/lib/leadSetupV2.ts";
 
 const db = new Kysely({ dialect: new PGliteDialect({ pglite: new PGlite() }) });
 before(() => migrate(db, new URL("../migrations", import.meta.url).pathname));
@@ -145,7 +148,7 @@ test("LeadFormService: cannot change name type", async () => {
   assert.equal(updated.label, "Ваше имя");
 });
 
-test("LeadFormService: reorder fields", async () => {
+test("LeadFormService: reorder fields keeps system name first", async () => {
   const f = await fixture();
   await seedNameField(f.b.id);
   const phone = await f.forms.save(f.owner, f.b.public_id, {
@@ -165,13 +168,35 @@ test("LeadFormService: reorder fields", async () => {
   const before = await f.forms.list(f.owner, f.b.public_id, true);
   const name = before.find((row) => row.fieldKey === "name");
   const reordered = await f.forms.reorder(f.owner, f.b.public_id, [
-    msg.id,
     name.id,
+    msg.id,
     phone.id,
   ]);
   assert.deepEqual(
     reordered.map((r) => r.fieldKey),
-    ["message", "name", "phone"],
+    ["name", "message", "phone"],
+  );
+  await assert.rejects(
+    () =>
+      f.forms.reorder(f.owner, f.b.public_id, [
+        msg.id,
+        name.id,
+        phone.id,
+      ]),
+    (err) =>
+      err &&
+      typeof err === "object" &&
+      err.status === 400 &&
+      /Имя/.test(String(err.message)),
+  );
+  await assert.rejects(
+    () =>
+      f.forms.reorder(f.owner, f.b.public_id, [
+        name.id,
+        phone.id,
+        phone.id,
+      ]),
+    (err) => err && typeof err === "object" && err.status === 400,
   );
 });
 
@@ -200,6 +225,87 @@ test("LeadFormService: applyPreset needsConfirm when fields exist; replace=true 
   const active = await f.forms.list(f.owner, f.b.public_id, true);
   assert.ok(active.some((r) => r.fieldKey === "name"));
   assert.ok(active.some((r) => r.fieldKey === "phone"));
+});
+
+test("ensureLeadSetupV2 preserves existing custom fields during legacy conversion", async () => {
+  const f = await fixture();
+  await db
+    .insertInto("lead_setup")
+    .values({
+      business_id: f.b.id,
+      draft: JSON.stringify({
+        version: 1,
+        step: 2,
+        channels: ["telegram"],
+        fields: ["name", "phone"],
+        title: "Оставить заявку",
+      }),
+      revision: 1,
+    })
+    .execute();
+  await seedNameField(f.b.id);
+  await f.forms.save(f.owner, f.b.public_id, {
+    fieldKey: "car_brand",
+    label: "Марка автомобиля",
+    fieldType: "text",
+    required: true,
+    position: 1,
+  });
+
+  const before = await f.forms.list(f.owner, f.b.public_id, true);
+  assert.ok(before.some((row) => row.fieldKey === "car_brand"));
+
+  const converted = await ensureLeadSetupV2(db, f.b.id);
+  assert.equal(converted.setup.version, 2);
+
+  const after = await f.forms.list(f.owner, f.b.public_id, true);
+  assert.ok(after.some((row) => row.fieldKey === "car_brand"));
+  assert.equal(after[0].fieldKey, "name");
+});
+
+test("getLeadReadiness rejects expired entitlement", async () => {
+  const f = await fixture();
+  await db
+    .updateTable("business_solution")
+    .set({ expires_at: new Date(Date.now() - 60_000) })
+    .where("business_id", "=", f.b.id)
+    .where("solution_code", "=", "leads")
+    .execute();
+  const readiness = await getLeadReadiness(db, f.b.id);
+  assert.equal(
+    readiness.checks.find((check) => check.code === "ENTITLEMENT")?.ok,
+    false,
+  );
+});
+
+test("SolutionService does not persist completed setup when readiness fails", async () => {
+  const f = await fixture();
+  await seedNameField(f.b.id);
+  const draft = {
+    ...newLeadSetupV2(),
+    channels: ["telegram"],
+    setupStep: 6,
+    completed: true,
+  };
+  const svc = new SolutionService(db);
+  await assert.rejects(
+    () =>
+      svc.save(f.owner, f.b.public_id, {
+        revision: 0,
+        draft,
+      }),
+    (err) =>
+      err &&
+      typeof err === "object" &&
+      err.status === 400 &&
+      err.code === "NOT_READY",
+  );
+  const stored = await db
+    .selectFrom("lead_setup")
+    .select("business_id")
+    .where("business_id", "=", f.b.id)
+    .executeTakeFirst();
+  assert.equal(stored, undefined);
 });
 
 test("getLeadReadiness checks FORM_FIELDS and CHANNELS", async () => {
