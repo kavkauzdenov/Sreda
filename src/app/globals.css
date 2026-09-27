@@ -4118,6 +4118,12 @@ ul {
   overflow-wrap: anywhere;
   word-break: break-word;
 }
+.client-detail__identity .account-footnote {
+  margin: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 .client-detail__status {
   display: inline-flex;
   align-items: center;
@@ -4272,10 +4278,13 @@ ul {
   gap: 4px;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
   border-bottom: 1px solid var(--border);
   padding-bottom: 2px;
   min-width: 0;
+  width: 100%;
   max-width: 100%;
+  box-sizing: border-box;
 }
 .client-tabs button {
   flex: 0 0 auto;
@@ -4415,7 +4424,7 @@ ul {
   align-items: stretch;
   justify-items: stretch;
   padding: 0;
-  overflow: hidden;
+  overflow: clip;
   width: 100%;
   max-width: 100%;
   box-sizing: border-box;
@@ -4423,7 +4432,7 @@ ul {
 .client-detail--dialog {
   background: var(--bg-surface);
   padding: 16px 18px 28px;
-  overflow-x: hidden;
+  overflow-x: clip;
   overflow-y: auto;
   height: 100%;
   width: 100%;
@@ -4442,7 +4451,7 @@ ul {
   height: 100%;
   background: var(--bg-surface);
   padding: 16px 18px 28px;
-  overflow-x: hidden;
+  overflow-x: clip;
   overflow-y: auto;
   box-sizing: border-box;
   display: grid;

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, Suspense } from "react";
+import { createPortal } from "react-dom";
 import { useSearchParams } from "next/navigation";
 import { useBusinessContext } from "@/hooks/useBusinessContext";
 import { LoadingPanel } from "@/components/dashboard/LoadingPanel";
@@ -286,30 +287,33 @@ function ClientsWorkspaceBody({
         </div>
       )}
 
-      {showOverlay ? (
-        <div
-          className="client-detail-overlay"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setSelected(null);
-          }}
-        >
-          <ClientDetail
-            key={selected}
-            businessId={businessId}
-            clientId={selected!}
-            timezone={timezone}
-            canMerge={canMerge}
-            canAssignOthers={canAssignOthers}
-            variant={layout === "mobile" ? "dialog" : "drawer"}
-            onClose={() => setSelected(null)}
-            onListRefresh={refresh}
-            onMerged={(targetId) => {
-              setSelected(targetId);
-              refresh();
-            }}
-          />
-        </div>
-      ) : null}
+      {showOverlay && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              className="client-detail-overlay"
+              onClick={(e) => {
+                if (e.target === e.currentTarget) setSelected(null);
+              }}
+            >
+              <ClientDetail
+                key={selected}
+                businessId={businessId}
+                clientId={selected!}
+                timezone={timezone}
+                canMerge={canMerge}
+                canAssignOthers={canAssignOthers}
+                variant={layout === "mobile" ? "dialog" : "drawer"}
+                onClose={() => setSelected(null)}
+                onListRefresh={refresh}
+                onMerged={(targetId) => {
+                  setSelected(targetId);
+                  refresh();
+                }}
+              />
+            </div>,
+            document.body,
+          )
+        : null}
 
       {newOpen ? (
         <NewClientDialog
