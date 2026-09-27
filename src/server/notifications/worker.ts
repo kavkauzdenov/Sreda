@@ -162,8 +162,15 @@ export async function notificationValid(
   // remain a core invariant. Do not queue a Telegram staff message when the
   // business has not enabled it in the Leads setup.
   if (platform === "telegram" && event.type === "lead.created") {
-    const { setup } = await loadLeadSetupV2(tx, event.business_id);
-    if (!setup.notifications.staffTelegram) return false;
+    const loaded = await loadLeadSetupV2(tx, event.business_id);
+    const rawVersion =
+      loaded.raw && typeof loaded.raw === "object"
+        ? (loaded.raw as { version?: unknown }).version
+        : null;
+    // Enforce the switch only for persisted V2 setup. Legacy/no-setup businesses
+    // keep their previous verified staff-notification behavior.
+    if (rawVersion === 2 && !loaded.setup.notifications.staffTelegram)
+      return false;
   }
   const member = await tx
     .selectFrom("business_member")
