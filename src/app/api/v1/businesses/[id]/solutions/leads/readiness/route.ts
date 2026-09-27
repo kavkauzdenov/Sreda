@@ -14,7 +14,7 @@ export async function GET(
     const runtime = getRuntime();
     const user = await createApplication(runtime).requireUser(request.headers);
     const publicId = (await params).id;
-    const b = await requireBusiness(runtime.db, user.id, publicId, "leads.read");
+    const b = await requireBusiness(runtime.db, user.id, publicId, "leads.write");
     return json(await getLeadReadiness(runtime.db, b.id));
   });
 }
