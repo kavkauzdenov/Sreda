@@ -255,6 +255,105 @@ test.describe("Orders V2 UI audit", () => {
     await expectNoBodyOverflow(page, "filters");
   });
 
+  test("select order detail + status transition", async ({ page, browserName }) => {
+    test.setTimeout(120_000);
+    if (!(await boot(page))) return;
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    const seeded = await page.evaluate(async () => {
+      const businesses = await fetch("/api/v1/businesses").then((r) => r.json());
+      const biz = Array.isArray(businesses) ? businesses[0] : null;
+      const businessId = biz?.id;
+      if (!businessId) return { error: "no-business" };
+      await fetch(`/api/v1/businesses/${encodeURIComponent(businessId)}/solutions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ code: "orders", enabled: true }),
+      });
+      const productRes = await fetch(
+        `/api/v1/businesses/${encodeURIComponent(businessId)}/products`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            name: "E2E Товар",
+            price: "199",
+            availability: "in_stock",
+          }),
+        },
+      );
+      if (!productRes.ok) {
+        return { error: `product ${productRes.status}` };
+      }
+      const product = await productRes.json();
+      const orderRes = await fetch(
+        `/api/v1/businesses/${encodeURIComponent(businessId)}/orders`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            platform: "web",
+            customer_name: "E2E Клиент",
+            customer_phone: "+79998887766",
+            fulfillment: "pickup",
+            request_key: `e2e-${Date.now()}`,
+            cart_items: [{ product_id: product.id, quantity: 1 }],
+          }),
+        },
+      );
+      if (!orderRes.ok) {
+        return { error: `order ${orderRes.status}` };
+      }
+      const order = await orderRes.json();
+      return { businessId, orderId: order.id, orderNumber: order.order_number };
+    });
+
+    expect(seeded.error, JSON.stringify(seeded)).toBeUndefined();
+    expect(seeded.orderId).toBeTruthy();
+
+    await page.goto(
+      baseURL + `/orders?order=${encodeURIComponent(seeded.orderId)}`,
+      { waitUntil: "domcontentloaded", timeout: 60_000 },
+    );
+
+    const detail = page.locator(
+      ".client-detail, .client-detail--dialog, .client-detail--drawer, .orders-detail",
+    );
+    await expect(
+      page.getByRole("heading", { name: /заказ|e2e/i }).first(),
+    ).toBeVisible({ timeout: 25_000 });
+    await expect(page.getByText(/E2E Клиент/i).first()).toBeVisible({
+      timeout: 15_000,
+    });
+
+    // Primary status action from new → accepted.
+    const accept = page
+      .getByRole("button", { name: /перевести в «принят»/i })
+      .first();
+    if (await accept.isVisible().catch(() => false)) {
+      const patchPromise = page.waitForResponse(
+        (r) =>
+          r.request().method() === "PATCH" &&
+          r.url().includes(`/orders/${seeded.orderId}`),
+        { timeout: 30_000 },
+      );
+      await accept.click();
+      const patchRes = await patchPromise;
+      expect(patchRes.ok()).toBeTruthy();
+      await expect(page.getByText(/принят/i).first()).toBeVisible({
+        timeout: 15_000,
+      });
+    }
+
+    await page.screenshot({
+      path: path.join(outDir, `orders_detail_status_${browserName}.png`),
+      fullPage: false,
+    });
+    await expectNoBodyOverflow(page, "order detail");
+    void detail;
+  });
+
   test("manual create order dialog", async ({ page, browserName }) => {
     test.setTimeout(90_000);
     if (!(await boot(page))) return;
