@@ -87,7 +87,8 @@ export function parseLeadSetupV2(raw: unknown): LeadSetupV2 {
       firstResponseSlaMinutes: sla,
     },
     notifications: {
-      inApp: notifications.inApp !== false,
+      // In-app notifications are part of the core lead workflow and are always on.
+      inApp: true,
       staffTelegram: notifications.staffTelegram === true,
       email: false, // only enable when email infra is confirmed elsewhere
     },
