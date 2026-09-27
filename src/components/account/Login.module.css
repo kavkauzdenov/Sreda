@@ -34,7 +34,7 @@
 }
 .header { grid-column: 1 / -1; position: relative; z-index: 1; }
 .brand { display: inline-flex; align-items: center; gap: 10px; color: #f4f6f8; min-width: 0; }
-.brand span { font-size: 22px; font-weight: 700; letter-spacing: -.4px; white-space: nowrap; }
+  .brand span { font-size: 22px; font-weight: 700; letter-spacing: -.4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .story { align-self: start; padding-top: clamp(70px, 12vh, 130px); }
 .story h1 { font-size: clamp(42px, 4.4vw, 64px); font-weight: 700; line-height: 1.08; letter-spacing: -1.8px; }
 .story p { margin-top: 15px; font-size: clamp(18px, 1.7vw, 24px); line-height: 1.45; color: #A2ABB3; max-width: 28ch; }
@@ -56,10 +56,15 @@
   letter-spacing: -1px;
   text-align: center;
   color: var(--auth-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
 }
 .card .intro { margin: 0 0 32px; color: var(--auth-muted); text-align: center; font-size: 17px; line-height: 1.5; }
-.card label { margin: 24px 0 8px; font-size: 14px; font-weight: 650; color: var(--auth-text); }
+.card label { margin: 24px 0 8px; font-size: 14px; font-weight: 650; color: var(--auth-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card input {
+  width: 100%;
   height: 54px;
   min-height: 54px;
   border: 1px solid var(--auth-field-border);
@@ -68,25 +73,28 @@
   color: var(--auth-text);
   background: var(--auth-field-bg);
   font-size: 16px;
+  box-sizing: border-box;
 }
 .card input::placeholder { color: var(--auth-placeholder); opacity: 1; font-size: 14px; }
 .card input:focus-visible { outline: 2px solid #F6C344; outline-offset: 2px; }
 .password { position: relative; }
-.card .password input { padding-right: 54px; }
-.reveal {
-  position: absolute;
-  right: 5px;
-  top: 5px;
-  width: 44px;
-  height: 44px;
-  display: grid;
-  place-items: center;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--auth-muted);
-}
-.reveal:hover { background: #F6C34422; }
+  .card .password input { padding-right: 60px; }
+  .reveal {
+    position: absolute;
+    right: 2px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 44px;
+    height: 44px;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--auth-muted);
+    z-index: 1;
+  }
+  .reveal:hover { background: #F6C34422; }
 .recover { display: block; width: fit-content; padding: 10px 0; margin-top: 3px; font-size: 14px; line-height: 1.6; color: var(--auth-muted); }
 .recover:hover, .footer a:hover { text-decoration: underline; text-underline-offset: 3px; }
 .card .submit {
@@ -121,22 +129,23 @@
   }
   .header { min-height: clamp(120px, 18svh, 160px); padding: calc(26px + env(safe-area-inset-top)) 0 0; }
   .brand { gap: 8px; }
-  .brand span { font-size: 18px; letter-spacing: -.3px; }
+  .brand span { font-size: 18px; letter-spacing: -.3px; overflow: hidden; text-overflow: ellipsis; }
   .story { display: none; }
   .formPane { display: block; padding: 0; width: 100%; }
   .shell { margin: 0 auto; max-width: 460px; border-radius: 20px; padding: 28px 24px 24px; }
-  .card h2 { font-size: 28px; text-align: left; letter-spacing: -1px; }
+  .card h2 { font-size: 28px; text-align: left; letter-spacing: -1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .card .intro { font-size: 15px; margin-bottom: 24px; text-align: left; }
-  .card label { margin-top: 18px; }
+  .card label { margin-top: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .card fieldset > label:first-child { margin-top: 0; }
-  .card input { height: 50px; min-height: 50px; }
-  .reveal { top: 3px; right: 4px; }
+  .card input { height: 50px; min-height: 50px; min-width: 0; }
+  .reveal { top: 50%; transform: translateY(-50%); right: 4px; }
   .card .submit { min-height: 54px; margin-top: 13px; font-size: 17px; }
   .card .footer { margin-top: 22px; font-size: 14px; }
 }
 @media (max-width: 359px) {
   .page { padding-left: 12px; padding-right: 12px; }
   .shell { padding: 24px 20px 20px; }
+  .card h2 { font-size: 26px; white-space: normal; line-height: 1.3; }
 }
 .card input:-webkit-autofill,
 .card input:-webkit-autofill:hover,

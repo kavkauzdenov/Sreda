@@ -26,7 +26,7 @@ export function Brand({
         priority
       />
       <span className="brand__text">
-        <strong>{APP_NAME}</strong>
+        <span style={{ fontWeight: 700 }}>{APP_NAME}</span>
         {!compact && showTagline && <small>{APP_TAGLINE}</small>}
       </span>
     </Link>
