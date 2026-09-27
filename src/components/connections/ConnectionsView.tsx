@@ -450,7 +450,9 @@ function Connections({ id }: { id: string }) {
           return (
             <article className="connection-item" key={platform}>
               <div className="connection-item__header">
-                <div className="connection-item__icon platform-icon platform-icon--{platform}">
+                <div
+                  className={`connection-item__icon platform-icon platform-icon--${platform}`}
+                >
                   <b>{platform === "telegram" ? "TG" : "VK"}</b>
                 </div>
                 <div className="connection-item__info">
@@ -582,7 +584,9 @@ function Connections({ id }: { id: string }) {
           return (
             <article className="connection-item" key={platform}>
               <div className="connection-item__header">
-                <div className="connection-item__icon platform-icon platform-icon--{platform}">
+                <div
+                  className={`connection-item__icon platform-icon platform-icon--${platform}`}
+                >
                   <b>{platform === "whatsapp" ? "WA" : "IG"}</b>
                 </div>
                 <div className="connection-item__info">

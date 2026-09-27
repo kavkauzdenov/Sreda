@@ -30,6 +30,12 @@ export function SetupChecklist({
 }) {
   const [busy, setBusy] = useState(false);
   const [local, setLocal] = useState(progress);
+  const [progressRef, setProgressRef] = useState(progress);
+  // Sync when parent progress changes (e.g. after industry PATCH / remount).
+  if (progress !== progressRef) {
+    setProgressRef(progress);
+    setLocal(progress);
+  }
 
   const source: SetupStep[] =
     variant === "compact" ? readinessSetupSteps() : setupStepsForIndustry(industry);

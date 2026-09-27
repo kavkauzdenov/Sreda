@@ -34,7 +34,8 @@
 }
 .header { grid-column: 1 / -1; position: relative; z-index: 1; }
 .brand { display: inline-flex; align-items: center; gap: 10px; color: #f4f6f8; min-width: 0; }
-  .brand span { font-size: 22px; font-weight: 700; letter-spacing: -.4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.brand strong,
+.brand span { font-size: 22px; font-weight: 700; letter-spacing: -.4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .story { align-self: start; padding-top: clamp(70px, 12vh, 130px); }
 .story h1 { font-size: clamp(42px, 4.4vw, 64px); font-weight: 700; line-height: 1.08; letter-spacing: -1.8px; }
 .story p { margin-top: 15px; font-size: clamp(18px, 1.7vw, 24px); line-height: 1.45; color: #A2ABB3; max-width: 28ch; }
@@ -129,6 +130,7 @@
   }
   .header { min-height: clamp(120px, 18svh, 160px); padding: calc(26px + env(safe-area-inset-top)) 0 0; }
   .brand { gap: 8px; }
+  .brand strong,
   .brand span { font-size: 18px; letter-spacing: -.3px; overflow: hidden; text-overflow: ellipsis; }
   .story { display: none; }
   .formPane { display: block; padding: 0; width: 100%; }

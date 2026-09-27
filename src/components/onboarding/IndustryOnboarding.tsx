@@ -392,6 +392,9 @@ const step = deriveStep(data, forceEdit);
           progress={data.setup_progress}
           industry={data.industry}
           readiness={data.readiness}
+          onProgressChange={(progress) =>
+            setData((prev) => (prev ? { ...prev, setup_progress: progress } : prev))
+          }
         />
       </>
     ), (

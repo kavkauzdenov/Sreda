@@ -16,7 +16,6 @@ import { LoadingPanel } from "./LoadingPanel";
 import { DetailDialog } from "./DetailDialog";
 import { SolutionModule, solutionState } from "./SolutionModule";
 import { PlatformBadge } from "@/components/ui/PlatformBadge";
-import { SetupChecklist } from "@/components/onboarding/SetupChecklist";
 import {
   useDashboardData,
   type WorkspaceSolutionItem,
@@ -144,25 +143,32 @@ export function DashboardView() {
       ? { done: setup.done, total: setup.total }
       : null;
   const nextSetupHint = (() => {
-    if (!industryHint?.industry || industryHint.onboardingDone) return null;
-    const done = new Set(
-      (setup?.steps ?? []).filter((s) => s.done).map((s) => s.id),
-    );
-    if (
-      !done.has("schedule") &&
-      ["beauty", "education", "rental", "sport_health", "automotive"].includes(
-        industryHint.industry,
-      )
-    )
-      return "Настройте расписание, чтобы открыть онлайн-запись.";
-    if (!done.has("telegram"))
-      return "Подключите Telegram, чтобы клиенты могли писать боту.";
-    if (
-      !done.has("catalog") &&
-      ["retail", "food"].includes(industryHint.industry)
-    )
-      return "Заполните каталог товаров.";
-    return "Продолжите настройку бизнеса.";
+    if (!setup?.next || industryHint?.onboardingDone) return null;
+    const next = setup.next;
+    switch (next.id) {
+      case "telegram":
+        return "Подключите Telegram, чтобы клиенты могли писать боту.";
+      case "schedule":
+        return "Настройте расписание, чтобы открыть онлайн-запись.";
+      case "catalog":
+        return "Заполните каталог товаров.";
+      case "services":
+        return "Добавьте услуги, чтобы открыть запись.";
+      case "specialists":
+        return `${next.label}.`;
+      case "leads":
+        return "Настройте приём заявок.";
+      case "solutions":
+        return "Подключите решение под ваш сценарий.";
+      case "industry":
+        return "Выберите направление бизнеса.";
+      case "ai":
+        return "Заполните AI-профиль для подсказок.";
+      case "orders":
+        return "Проверьте приём заказов.";
+      default:
+        return `${next.label}.`;
+    }
   })();
 
   const show = (value: Selection) => {
@@ -379,25 +385,8 @@ export function DashboardView() {
               </p>
             </section>
           ) : null}
-          {!isDemoMode &&
-          data.businessId &&
-          industryHint?.id === data.businessId &&
-          !industryHint.onboardingDone ? (
-            <SetupChecklist
-              businessId={data.businessId}
-              progress={industryHint.progress}
-              industry={industryHint.industry}
-              variant="compact"
-              readiness={{
-                hasIndustry: !!industryHint.industry,
-                hasActiveSolution: data.workspaceItems.some(
-                  (item) =>
-                    item.status === "active" || item.status === "setup_required",
-                ),
-                hasConnection: !!industryHint.readiness.hasConnection,
-              }}
-            />
-          ) : null}
+          {/* Compact checklist removed: the dashboard-onboarding-card above is
+              the single source of truth (same resolveSetupSteps / industry steps). */}
           {recommendHint ? (
             <p className="account-notice" role="status">
               {recommendHint}
