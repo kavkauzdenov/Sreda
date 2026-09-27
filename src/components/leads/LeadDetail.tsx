@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { X } from "lucide-react";
 import { PlatformBadge } from "@/components/ui/PlatformBadge";
@@ -89,6 +89,46 @@ export function LeadDetail({
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<LeadStatus>("new");
   const [loading, setLoading] = useState(true);
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (variant !== "dialog") return;
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+
+    const focusableSelector =
+      'button:not([disabled]), a[href], select:not([disabled]), input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+    const firstFocusable = () =>
+      dialog.querySelector<HTMLElement>(focusableSelector);
+
+    firstFocusable()?.focus();
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const items = Array.from(
+        dialog.querySelectorAll<HTMLElement>(focusableSelector),
+      ).filter((item) => item.offsetParent !== null);
+      if (!items.length) return;
+      const first = items[0]!;
+      const last = items[items.length - 1]!;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [variant, onClose]);
 
   useEffect(() => {
     let active = true;
@@ -403,7 +443,13 @@ export function LeadDetail({
 
   if (variant === "dialog") {
     return (
-      <div className="lead-detail lead-detail--dialog" role="dialog" aria-modal="true" aria-labelledby="lead-detail-title">
+      <div
+        ref={dialogRef}
+        className="lead-detail lead-detail--dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="lead-detail-title"
+      >
         <header className="lead-detail__toolbar">
           <h2 id="lead-detail-title" className="sr-only">
             Заявка
