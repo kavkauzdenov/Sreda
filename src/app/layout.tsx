@@ -32,7 +32,14 @@ export const metadata: Metadata = {
   },
   description: APP_DESCRIPTION,
   icons: {
-    icon: BRAND_ASSETS.favicon,
+    icon: [
+      {
+        url: BRAND_ASSETS.favicon,
+        type: "image/svg+xml",
+        sizes: "any",
+      },
+    ],
+    shortcut: BRAND_ASSETS.favicon,
   },
   alternates: {
     canonical: "/",
