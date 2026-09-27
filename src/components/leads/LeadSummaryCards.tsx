@@ -31,29 +31,34 @@ export function LeadSummaryCards({
 }) {
   const [counts, setCounts] = useState<Record<string, number> | null>(null);
   const [error, setError] = useState("");
+  const [loadingKey, setLoadingKey] = useState(`${businessId}:${period}`);
 
   useEffect(() => {
     let active = true;
-    setCounts(null);
-    setError("");
+    const key = `${businessId}:${period}`;
     void apiRequest<SummaryResponse>(
       `/api/v1/businesses/${encodeURIComponent(businessId)}/leads?summary=1&days=${period}`,
     )
       .then((data) => {
         if (!active) return;
         setCounts(data.counts ?? data.analytics?.byStatus ?? {});
+        setError("");
+        setLoadingKey(key);
       })
       .catch((e: unknown) => {
         if (!active) return;
+        setCounts(null);
         setError(
           e instanceof Error ? e.message : "Не удалось загрузить сводку.",
         );
+        setLoadingKey(key);
       });
     return () => {
       active = false;
     };
   }, [businessId, period]);
 
+  const stale = loadingKey !== `${businessId}:${period}`;
   const total = Number(counts?.total ?? 0);
   const neu = Number(counts?.new ?? 0);
   const processing = Number(counts?.processing ?? 0);
@@ -82,7 +87,7 @@ export function LeadSummaryCards({
         <p className="account-error" role="alert">
           {error}
         </p>
-      ) : !counts ? (
+      ) : !counts || stale ? (
         <p className="account-footnote">Загружаем сводку…</p>
       ) : (
         <ul className="leads-summary__cards">

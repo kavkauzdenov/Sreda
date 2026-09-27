@@ -816,14 +816,28 @@ export class SolutionService {
               !c.ok &&
               (c.code === "CHANNEL_TELEGRAM" || c.code === "CHANNEL_VK"),
           );
-          if (!leadReadiness.setup.completed || !leadReadiness.ready) {
+          const channelMissing =
+            channelFail &&
+            /Подключите/.test(channelFail.message || "");
+          const channelBroken =
+            channelFail && !channelMissing;
+          if (!leadReadiness.setup.completed) {
             readinessIncomplete = true;
             note =
               leadReadiness.checks.find((c) => !c.ok)?.message ||
               cardState.label;
-          } else if (channelFail) {
+          } else if (channelMissing) {
+            // Selected channel not connected yet — keep setup-in-progress UX.
+            readinessIncomplete = true;
+            note = channelFail?.message || "Подключите выбранные каналы.";
+          } else if (channelBroken) {
             channelError = true;
-            note = channelFail.message || "Требует внимания";
+            note = channelFail?.message || "Требует внимания";
+          } else if (!leadReadiness.ready) {
+            readinessIncomplete = true;
+            note =
+              leadReadiness.checks.find((c) => !c.ok)?.message ||
+              cardState.label;
           } else if (ready) {
             note = "Каналы приёма заявок и обработчики отвечают.";
           } else if (channels.some((c) => states.get(c)?.error)) {

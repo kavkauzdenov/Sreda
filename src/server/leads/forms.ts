@@ -140,7 +140,10 @@ export async function syncLeadFormFields(
   draft: LeadSetupDraft,
 ) {
   const now = new Date();
-  const selected = LEAD_FIELDS.filter((f) => draft.fields.includes(f.id));
+  const selected = [
+    ...LEAD_FIELDS.filter((f) => f.id === "name" && draft.fields.includes(f.id)),
+    ...LEAD_FIELDS.filter((f) => f.id !== "name" && draft.fields.includes(f.id)),
+  ];
   const keys = selected.map((f) => f.id);
   const existing = await tx
     .selectFrom("lead_form_field")

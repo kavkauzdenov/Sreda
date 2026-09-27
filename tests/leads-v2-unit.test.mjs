@@ -186,6 +186,7 @@ test("allowedLeadTransitions covers all statuses", () => {
   assert.deepEqual(allowedLeadTransitions("processing").sort(), [
     "closed",
     "completed",
+    "new",
     "rejected",
     "waiting_customer",
   ]);

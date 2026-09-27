@@ -54,7 +54,12 @@ export function validateLeadAnswer(
     case "address":
     case "message":
     case "textarea": {
-      const max = field.fieldType === "name" ? 100 : field.fieldType === "textarea" || field.fieldType === "message" ? 2000 : 500;
+      const max =
+        field.fieldType === "name"
+          ? 100
+          : field.fieldType === "textarea" || field.fieldType === "message"
+            ? 2000
+            : 900;
       if (text.length > max)
         return { ok: false, message: `Слишком длинный ответ (макс. ${max}).` };
       return { ok: true, value: text };

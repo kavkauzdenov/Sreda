@@ -4,7 +4,7 @@ import type { InboundAttachment } from "../attachments/service.ts";
 import { MAX_ATTACHMENT } from "../attachments/storage.ts";
 import type { OutboxButton } from "./types.ts";
 import { createLead } from "../leads/service.ts";
-import { loadLeadSetupV2 } from "../leads/setup.ts";
+import { ensureLeadSetupV2 } from "../leads/setup.ts";
 import {
   assertFormSnapshot,
   keyboardForField,
@@ -106,7 +106,8 @@ export async function leadsFlow(
   const { queue, save, showMenu, current, startLead } = helpers;
 
   const ready = await isLeadCustomerReady(tx, businessId, platform);
-  const { setup } = await loadLeadSetupV2(tx, businessId);
+  // Ensure legacy v1 drafts are converted and fields projected once.
+  const { setup } = await ensureLeadSetupV2(tx, businessId);
   const buttonLabel = ready.buttonLabel || setup.buttonLabel;
 
   // Start new questionnaire with frozen field snapshot.

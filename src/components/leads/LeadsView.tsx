@@ -323,6 +323,7 @@ function LeadWorkspace({ businessId }: { businessId: string }) {
 
           {selected && !isMobile ? (
             <LeadDetail
+              key={selected}
               businessId={businessId}
               leadId={selected}
               onClose={() => setSelected(null)}
@@ -337,6 +338,7 @@ function LeadWorkspace({ businessId }: { businessId: string }) {
       {selected && isMobile ? (
         <div className="lead-detail-overlay">
           <LeadDetail
+            key={selected}
             businessId={businessId}
             leadId={selected}
             onClose={() => setSelected(null)}

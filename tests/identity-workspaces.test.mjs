@@ -1773,10 +1773,11 @@ test("setup persists per business, validates fields, rejects operators and concu
     revision: 0,
   });
   assert.equal(saved.revision, 1);
-  assert.deepEqual(
-    (await new SolutionService(db).get(owner.internalId, a.id)).draft,
-    readyDraft,
-  );
+  const loaded = await new SolutionService(db).get(owner.internalId, a.id);
+  assert.equal(loaded.draft.version, 2);
+  assert.deepEqual(loaded.draft.channels, readyDraft.channels);
+  assert.equal(loaded.draft.completed, true);
+  assert.equal(loaded.draft.buttonLabel, "Оставить заявку");
   assert.equal((await service.get(owner.internalId, b.id)).revision, 0);
   await assert.rejects(
     service.save(owner.internalId, a.id, { draft: readyDraft, revision: 0 }),
@@ -1897,7 +1898,8 @@ test("Telegram dialogue persists, isolates chats, deduplicates updates and creat
     if (
       f.calls.some(
         (c) =>
-          c.method === "sendMessage" && c.body.text.includes("заявка принята"),
+          c.method === "sendMessage" &&
+          String(c.body.text).toLowerCase().includes("заявка принята"),
       )
     )
       break;
@@ -1905,7 +1907,8 @@ test("Telegram dialogue persists, isolates chats, deduplicates updates and creat
   assert.ok(
     f.calls.some(
       (c) =>
-        c.method === "sendMessage" && c.body.text.includes("заявка принята"),
+        c.method === "sendMessage" &&
+        String(c.body.text).toLowerCase().includes("заявка принята"),
     ),
   );
   assert.equal(

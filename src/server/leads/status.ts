@@ -3,7 +3,7 @@ import { AppError } from "../http/errors.ts";
 
 const ALLOWED: Record<LeadStatus, LeadStatus[]> = {
   new: ["processing", "rejected", "closed"],
-  processing: ["waiting_customer", "completed", "rejected", "closed"],
+  processing: ["waiting_customer", "completed", "rejected", "closed", "new"],
   waiting_customer: ["processing", "completed", "closed"],
   completed: [],
   rejected: [],

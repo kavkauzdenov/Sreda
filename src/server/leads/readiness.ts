@@ -33,17 +33,13 @@ export async function getLeadReadiness(
   const { setup, revision } = await loadLeadSetupV2(db, businessId);
 
   const now = new Date();
+  void now;
   const entitlement = await db
     .selectFrom("business_solution")
     .select(["status", "expires_at", "solution_code"])
     .where("business_id", "=", businessId)
     .where("solution_code", "in", ["leads", "sol_leads"])
     .executeTakeFirst();
-
-  const entitled =
-    entitlement &&
-    ["active", "trial"].includes(entitlement.status) &&
-    (!entitlement.expires_at || entitlement.expires_at > now);
 
   // Entitlement is granted on launch — for readiness we allow "can launch" without it,
   // but flag if disabled/paused after activation.

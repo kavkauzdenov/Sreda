@@ -134,7 +134,7 @@ export class LeadService {
     const { setup } = await loadLeadSetupV2(this.db, businessId);
     const sla = setup.processing.firstResponseSlaMinutes;
     // API dates have millisecond precision; cursor ordering must use the same precision.
-    const created = sql<Date>`date_trunc('milliseconds', created_at)`;
+    const created = sql<Date>`date_trunc('milliseconds', lead.created_at)`;
     let query = this.db
       .selectFrom("lead")
       .leftJoin("user", "user.id", "lead.processing_by")

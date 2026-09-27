@@ -124,17 +124,16 @@ function WizardBody({
   business: Business;
   price: number;
 }) {
-  const [draft, setDraft] = useState<LeadSetupV2 | null>(null);
+  const [draft, setDraft] = useState<LeadSetupV2 | null>(() =>
+    isDemoMode ? newLeadSetupV2() : null,
+  );
   const [revision, setRevision] = useState(0);
   const [failure, setFailure] = useState("");
   const [fields, setFields] = useState<LeadFormField[]>([]);
   const [staffTelegramAvailable, setStaffTelegramAvailable] = useState(false);
 
   useEffect(() => {
-    if (isDemoMode) {
-      setDraft(newLeadSetupV2());
-      return;
-    }
+    if (isDemoMode) return;
     let cancelled = false;
     void apiRequest<{ draft: LeadSetupV2; revision: number }>(
       `/api/v1/businesses/${encodeURIComponent(business.id)}/lead-setup`,

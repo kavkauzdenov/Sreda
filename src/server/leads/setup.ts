@@ -196,14 +196,15 @@ export async function ensureLeadSetupV2(
     .where("business_id", "=", businessId)
     .where("active", "=", true)
     .execute();
-  if (!active.length) {
-    try {
-      const v1 = parseLeadSetupDraft(JSON.stringify(loaded.raw));
-      if (!v1.fields.includes("name")) v1.fields = ["name", ...v1.fields];
-      // syncLeadFormFields needs a Transaction-like Db; cast is fine for Kysely.
-      await syncLeadFormFields(db, businessId, v1);
-    } catch {
-      // Keep metadata conversion even if field sync fails validation.
+  try {
+    const v1 = parseLeadSetupDraft(JSON.stringify(loaded.raw));
+    if (!v1.fields.includes("name")) v1.fields = ["name", ...v1.fields];
+    // Idempotent upsert — safe when some fields already exist.
+    await syncLeadFormFields(db, businessId, v1);
+  } catch {
+    // Keep metadata conversion even if field sync fails validation.
+    if (!active.length) {
+      // no-op
     }
   }
   await ensureNameField(db, businessId);

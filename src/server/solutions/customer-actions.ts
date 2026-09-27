@@ -1,5 +1,6 @@
 import type { Kysely, Transaction } from "kysely";
 import type { Database } from "../db/schema.ts";
+import { ensureLeadSetupV2 } from "../leads/setup.ts";
 import { normalizeSolutionCode } from "./catalog.ts";
 import { isLeadCustomerReady } from "../leads/readiness.ts";
 
@@ -104,6 +105,8 @@ export async function getAvailableCustomerActions(
   let leadTitle: string | null = null;
 
   if (codes.has("leads")) {
+    // Idempotent v1→v2 + field projection so menu and bot share one SoT.
+    await ensureLeadSetupV2(db, businessId);
     const leadReady = await isLeadCustomerReady(db, businessId, platform);
     if (leadReady.ready) {
       leadTitle = leadReady.buttonLabel?.trim() || "Оставить заявку";

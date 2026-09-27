@@ -89,10 +89,6 @@ export function LeadDetail({
 
   useEffect(() => {
     let active = true;
-    setLoading(true);
-    setError("");
-    setActionError("");
-    setNotice("");
     void apiRequest<LeadDetailData>(
       `/api/v1/businesses/${encodeURIComponent(businessId)}/leads/${encodeURIComponent(leadId)}`,
     )
@@ -100,10 +96,14 @@ export function LeadDetail({
         if (!active) return;
         setDetail(data);
         setStatus(data.status);
+        setError("");
+        setActionError("");
+        setNotice("");
         setLoading(false);
       })
       .catch((e: unknown) => {
         if (!active) return;
+        setDetail(null);
         setError(
           e instanceof Error ? e.message : "Не удалось загрузить заявку.",
         );

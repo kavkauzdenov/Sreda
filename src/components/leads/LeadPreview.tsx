@@ -65,7 +65,6 @@ export function LeadPreview({
             role="tab"
             className="button button--outline"
             aria-selected={active === channel}
-            aria-pressed={active === channel}
             onClick={() => setTab(channel)}
           >
             <PlatformBadge platform={channel} compact />
