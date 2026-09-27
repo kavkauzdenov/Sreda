@@ -141,10 +141,7 @@ export function LeadDetail({
   }, [variant, onClose]);
 
   useEffect(() => {
-    if (!canAssign || isDemoMode) {
-      setAssignees([]);
-      return;
-    }
+    if (!canAssign || isDemoMode) return;
     let active = true;
     void apiRequest<LeadAssignee[]>(
       `/api/v1/businesses/${encodeURIComponent(businessId)}/leads?view=assignees`,
@@ -159,6 +156,9 @@ export function LeadDetail({
       active = false;
     };
   }, [businessId, canAssign]);
+
+  const assigneeOptions =
+    canAssign && !isDemoMode ? assignees : [];
 
   useEffect(() => {
     let active = true;
@@ -439,7 +439,7 @@ export function LeadDetail({
                     onChange={(e) => setSelectedAssignee(e.target.value)}
                   >
                     <option value="">Выберите сотрудника</option>
-                    {assignees.map((assignee) => (
+                    {assigneeOptions.map((assignee) => (
                       <option key={assignee.id} value={assignee.id}>
                         {assignee.name}
                       </option>
