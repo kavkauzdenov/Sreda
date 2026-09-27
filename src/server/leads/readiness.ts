@@ -28,12 +28,14 @@ const SELECT_TYPES = new Set(["select", "multiselect"]);
 export async function getLeadReadiness(
   db: Db,
   businessId: string,
+  setupOverride?: ReturnType<typeof parseLeadSetupV2>,
 ): Promise<LeadReadiness> {
   const checks: LeadReadinessCheck[] = [];
-  const { setup, revision } = await loadLeadSetupV2(db, businessId);
+  const loaded = await loadLeadSetupV2(db, businessId);
+  const setup = setupOverride ?? loaded.setup;
+  const revision = loaded.revision;
 
   const now = new Date();
-  void now;
   const entitlement = await db
     .selectFrom("business_solution")
     .select(["status", "expires_at", "solution_code"])
@@ -43,14 +45,23 @@ export async function getLeadReadiness(
 
   // Entitlement is granted on launch — for readiness we allow "can launch" without it,
   // but flag if disabled/paused after activation.
-  if (entitlement?.status === "disabled" || entitlement?.status === "paused") {
+  const entitlementBlocked =
+    entitlement?.status === "disabled" ||
+    entitlement?.status === "paused" ||
+    entitlement?.status === "expired" ||
+    Boolean(entitlement?.expires_at && entitlement.expires_at <= now);
+  if (entitlementBlocked) {
     checks.push({
       code: "ENTITLEMENT",
       ok: false,
-      message: "Решение выключено. Включите его в разделе «Решения».",
+      message:
+        entitlement?.status === "paused"
+          ? "Решение приостановлено. Возобновите его в разделе «Решения»."
+          : "Решение недоступно. Включите его в разделе «Решения».",
       cta: { label: "Открыть решения", href: "/solutions" },
     });
   } else {
+    // Absence is allowed before first launch: entitlement is granted during launch.
     checks.push({ code: "ENTITLEMENT", ok: true });
   }
 
@@ -190,11 +201,6 @@ export async function getLeadReadiness(
 }
 
 export function leadSolutionCardState(readiness: LeadReadiness, entitled: boolean) {
-  if (!entitled && !readiness.setup.completed) {
-    if (readiness.setup.setupStep === 0 && readiness.checks.every((c) => c.code === "ENTITLEMENT" || !c.ok === false)) {
-      // fall through
-    }
-  }
   if (entitled && readiness.ready && readiness.setup.completed) {
     return {
       state: "active" as const,
