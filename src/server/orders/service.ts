@@ -1631,13 +1631,13 @@ export class OrderService {
         typeof body.external_user_id === "string"
           ? body.external_user_id.slice(0, 200)
           : "";
-      const customerName = text(
+      let customerName = text(
         body.customer_name ?? body.name,
         1,
         120,
         "Укажите имя.",
       );
-      const customerPhone = phone(body.customer_phone ?? body.phone);
+      let customerPhone = phone(body.customer_phone ?? body.phone);
       const orderFulfillment = fulfillment(body.fulfillment);
       const deliveryAddress =
         orderFulfillment === "delivery"
@@ -1650,6 +1650,29 @@ export class OrderService {
           : optionalText(body.delivery_address, 500);
       const comment = optionalText(body.comment, 2000);
       const conversationId = optionalId(body.conversation_id);
+      const explicitClientId = optionalId(body.client_id ?? body.clientId);
+
+      let clientId: string | null = null;
+      if (explicitClientId) {
+        const existingClient = await tx
+          .selectFrom("client")
+          .select(["id", "name", "phone"])
+          .where("business_id", "=", businessId)
+          .where("id", "=", explicitClientId)
+          .where("archived_at", "is", null)
+          .executeTakeFirst();
+        if (!existingClient)
+          throw new AppError(404, "CLIENT_NOT_FOUND", "Клиент не найден.");
+        clientId = existingClient.id;
+        if (existingClient.name) customerName = existingClient.name.slice(0, 120);
+        if (existingClient.phone) {
+          try {
+            customerPhone = phone(existingClient.phone);
+          } catch {
+            /* keep body phone if stored value is unexpected */
+          }
+        }
+      }
 
       const hashPayload = {
         source,
@@ -1660,6 +1683,7 @@ export class OrderService {
         delivery_address: deliveryAddress,
         comment,
         cart: body.cart_items ?? null,
+        client_id: clientId,
       };
       const hash = createHash("sha256")
         .update(JSON.stringify(hashPayload))
@@ -1723,21 +1747,23 @@ export class OrderService {
       if (!cartItems.length)
         throw new AppError(400, "CART_EMPTY", "Корзина пуста.");
 
-      const identities: {
-        kind: "telegram" | "vk" | "phone";
-        value: string;
-        username?: string | null;
-      }[] = [{ kind: "phone", value: customerPhone }];
-      if (source === "telegram" && externalUserId)
-        identities.push({ kind: "telegram", value: externalUserId });
-      if (source === "vk" && externalUserId)
-        identities.push({ kind: "vk", value: externalUserId });
+      if (!clientId) {
+        const identities: {
+          kind: "telegram" | "vk" | "phone";
+          value: string;
+          username?: string | null;
+        }[] = [{ kind: "phone", value: customerPhone }];
+        if (source === "telegram" && externalUserId)
+          identities.push({ kind: "telegram", value: externalUserId });
+        if (source === "vk" && externalUserId)
+          identities.push({ kind: "vk", value: externalUserId });
 
-      const clientId = await matchClient(tx, businessId, {
-        name: customerName,
-        phone: customerPhone,
-        identities,
-      });
+        clientId = await matchClient(tx, businessId, {
+          name: customerName,
+          phone: customerPhone,
+          identities,
+        });
+      }
 
       const snapshot: {
         product_id: string;
@@ -1922,7 +1948,11 @@ export class OrderService {
     const b = await requireBusiness(this.db, userId, publicId, "orders.write");
     let q = this.db
       .selectFrom("order as o")
-      .innerJoin("client as c", "c.id", "o.client_id")
+      .innerJoin("client as c", (join) =>
+        join
+          .onRef("c.id", "=", "o.client_id")
+          .onRef("c.business_id", "=", "o.business_id"),
+      )
       .selectAll("o")
       .select(["c.name as client_name", "c.phone as client_phone"])
       .where("o.business_id", "=", b.id)
@@ -1963,7 +1993,11 @@ export class OrderService {
     const b = await requireBusiness(this.db, userId, publicId, "orders.write");
     const order = await this.db
       .selectFrom("order as o")
-      .innerJoin("client as c", "c.id", "o.client_id")
+      .innerJoin("client as c", (join) =>
+        join
+          .onRef("c.id", "=", "o.client_id")
+          .onRef("c.business_id", "=", "o.business_id"),
+      )
       .selectAll("o")
       .select(["c.name as client_name", "c.phone as client_phone"])
       .where("o.business_id", "=", b.id)

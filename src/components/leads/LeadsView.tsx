@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useBusinessContext } from "@/hooks/useBusinessContext";
 import { BusinessSwitcher } from "@/components/dashboard/BusinessSwitcher";
 import { LoadingPanel } from "@/components/dashboard/LoadingPanel";
@@ -113,7 +114,10 @@ function LeadWorkspace({
     key: string;
     message: string;
   } | null>(null);
-  const [selected, setSelected] = useState<string | null>(null);
+  const searchParams = useSearchParams();
+  const [selected, setSelected] = useState<string | null>(
+    () => searchParams.get("lead") || searchParams.get("id") || null,
+  );
   const [moreBusy, setMoreBusy] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const sequence = useRef(0);
@@ -295,7 +299,11 @@ function LeadWorkspace({
                         <span>{row.message || "Без сообщения"}</span>
                       </span>
                       <span className="leads-record__meta">
-                        <PlatformBadge platform={row.source} />
+                        {(row.source as string) === "manual" ? (
+                          <span>Вручную</span>
+                        ) : (
+                          <PlatformBadge platform={row.source} />
+                        )}
                         <LeadStatusBadge status={row.status} />
                         <time dateTime={row.createdAt}>
                           {formatRelativeDateTime(row.createdAt)}

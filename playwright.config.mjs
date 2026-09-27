@@ -24,7 +24,7 @@ export default defineConfig({
     {
       name: "webkit",
       use: { browserName: "webkit" },
-      testMatch: /ui-system\.spec\.mjs/,
+      testMatch: /(ui-system|clients-v2)\.spec\.mjs/,
     },
   ],
 });

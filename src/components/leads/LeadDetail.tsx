@@ -320,7 +320,11 @@ export function LeadDetail({
                 </span>
               ) : null}
             </div>
-            <PlatformBadge platform={detail.source} />
+            {(detail.source as string) === "manual" ? (
+              <span>Вручную</span>
+            ) : (
+              <PlatformBadge platform={detail.source} />
+            )}
           </div>
 
           {detail.possibleDuplicate ? (

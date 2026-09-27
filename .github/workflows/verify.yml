@@ -101,24 +101,8 @@ jobs:
           E2E_BASE_URL: ${{ steps.app.outputs.origin }}
           AUDIT_BASE_URL: ${{ steps.app.outputs.origin }}
         run: npx playwright test e2e/ui-system.spec.mjs --project=webkit
-      - name: Playwright contrast computed styles
-        env:
-          E2E_BASE_URL: ${{ steps.app.outputs.origin }}
-          AUDIT_BASE_URL: ${{ steps.app.outputs.origin }}
-        run: npx playwright test e2e/contrast-computed.spec.mjs --project=chromium
-      - name: Leads V2 authenticated UI audit
-        env:
-          AUDIT_BASE_URL: ${{ steps.app.outputs.origin }}
-          AUDIT_OUTPUT: artifacts/leads-v2-ui-audit
-          AUDIT_IGNORE_HTTPS_ERRORS: "1"
-        run: |
-          mkdir -p artifacts/leads-v2-ui-audit
-          node scripts/leads-v2-ui-audit.mjs
-          test -f artifacts/leads-v2-ui-audit/report.json
-          PNG_COUNT=$(find artifacts/leads-v2-ui-audit -name '*.png' | wc -l | tr -d ' ')
-          test "$PNG_COUNT" -ge 10
-          echo "Leads V2 UI screenshots: $PNG_COUNT"
 
+      # Shared register → recovery-confirm → business create for Clients V2 + responsive audit.
       - name: Prepare auth storage for responsive audit
         id: auth
         env:
@@ -178,6 +162,45 @@ jobs:
           await browser.close();
           console.log("storage written (ephemeral)");
           JS
+      - name: Playwright Clients V2 (Chromium)
+        env:
+          E2E_BASE_URL: ${{ steps.app.outputs.origin }}
+          AUDIT_BASE_URL: ${{ steps.app.outputs.origin }}
+          AUDIT_STORAGE_STATE: artifacts/audit-storage.json
+          AUDIT_OUTPUT: artifacts/clients-v2-ui-audit
+          E2E_SCREENSHOT_DIR: artifacts/clients-v2-ui-audit
+          AUDIT_IGNORE_HTTPS_ERRORS: "1"
+        run: |
+          mkdir -p artifacts/clients-v2-ui-audit
+          npx playwright test e2e/clients-v2.spec.mjs --project=chromium
+      - name: Playwright Clients V2 (WebKit)
+        env:
+          E2E_BASE_URL: ${{ steps.app.outputs.origin }}
+          AUDIT_BASE_URL: ${{ steps.app.outputs.origin }}
+          AUDIT_STORAGE_STATE: artifacts/audit-storage.json
+          AUDIT_OUTPUT: artifacts/clients-v2-ui-audit
+          E2E_SCREENSHOT_DIR: artifacts/clients-v2-ui-audit
+          AUDIT_IGNORE_HTTPS_ERRORS: "1"
+        run: |
+          mkdir -p artifacts/clients-v2-ui-audit
+          npx playwright test e2e/clients-v2.spec.mjs --project=webkit
+      - name: Playwright contrast computed styles
+        env:
+          E2E_BASE_URL: ${{ steps.app.outputs.origin }}
+          AUDIT_BASE_URL: ${{ steps.app.outputs.origin }}
+        run: npx playwright test e2e/contrast-computed.spec.mjs --project=chromium
+      - name: Leads V2 authenticated UI audit
+        env:
+          AUDIT_BASE_URL: ${{ steps.app.outputs.origin }}
+          AUDIT_OUTPUT: artifacts/leads-v2-ui-audit
+          AUDIT_IGNORE_HTTPS_ERRORS: "1"
+        run: |
+          mkdir -p artifacts/leads-v2-ui-audit
+          node scripts/leads-v2-ui-audit.mjs
+          test -f artifacts/leads-v2-ui-audit/report.json
+          PNG_COUNT=$(find artifacts/leads-v2-ui-audit -name '*.png' | wc -l | tr -d ' ')
+          test "$PNG_COUNT" -ge 10
+          echo "Leads V2 UI screenshots: $PNG_COUNT"
       - name: Responsive audit (authenticated, PR build)
         env:
           AUDIT_BASE_URL: ${{ steps.app.outputs.origin }}
@@ -221,6 +244,7 @@ jobs:
           path: |
             artifacts/responsive-audit/
             artifacts/leads-v2-ui-audit/
+            artifacts/clients-v2-ui-audit/
             artifacts/ci-ui-app.json
             artifacts/ci-ui-app.log
           retention-days: 14

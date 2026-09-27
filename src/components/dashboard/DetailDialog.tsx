@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, type ReactNode } from "react";
 import { X } from "lucide-react";
+import { useDialogFocusTrap } from "@/hooks/useDialogFocusTrap";
 export function DetailDialog({
   title,
   children,
@@ -13,16 +14,12 @@ export function DetailDialog({
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const dialog = ref.current;
-    const previousFocus = document.activeElement as HTMLElement | null;
     dialog?.showModal();
-    const old = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
     return () => {
       dialog?.close();
-      document.body.style.overflow = old;
-      previousFocus?.focus();
     };
   }, []);
+  useDialogFocusTrap(ref, onClose);
   return (
     <dialog
       ref={ref}

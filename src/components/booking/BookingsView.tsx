@@ -160,11 +160,15 @@ function Calendar({
     [clientPhone, setClientPhone] = useState(""),
     [reschedule, setReschedule] = useState<Booking | null>(null),
     [cancel, setCancel] = useState<Booking | null>(null),
-    [selected, setSelected] = useState<Booking | null>(null);
+    [selected, setSelected] = useState<Booking | null>(null),
+    [deepLinked, setDeepLinked] = useState(false);
   const requestKey = useRef("");
   const configRef = useRef<HTMLElement | null>(null);
+  const createPanelRef = useRef<HTMLElement | null>(null);
   const search = useSearchParams();
   const focusConfig = search.get("tab") === "config";
+  const deepBookingId = search.get("booking") || "";
+  const deepClientId = search.get("client") || "";
   const [solutionStatus, setSolutionStatus] = useState<string | null>(null);
   const [forceWizard, setForceWizard] = useState(false);
   const [wizardStep, setWizardStep] = useState(1);
@@ -201,6 +205,56 @@ function Calendar({
       alive = false;
     };
   }, [base, bookingUrl]);
+  useEffect(() => {
+    if (deepLinked) return;
+    if (deepBookingId) {
+      const found = bookings.find((b) => b.id === deepBookingId);
+      if (found) {
+        queueMicrotask(() => {
+          setSelected(found);
+          setDeepLinked(true);
+        });
+      }
+      return;
+    }
+    if (deepClientId) {
+      queueMicrotask(() => {
+        setClient(deepClientId);
+        setDeepLinked(true);
+        requestAnimationFrame(() => {
+          const target = createPanelRef.current ?? configRef.current;
+          target?.scrollIntoView({ behavior: "smooth", block: "start" });
+          target
+            ?.querySelector<HTMLElement>(
+              "input, select, button, textarea",
+            )
+            ?.focus();
+        });
+      });
+    }
+  }, [bookings, deepBookingId, deepClientId, deepLinked]);
+  useEffect(() => {
+    if (!deepClientId) return;
+    if (clients.some((c) => c.id === deepClientId)) return;
+    let alive = true;
+    void apiRequest<{
+      client: { id: string; name: string };
+    }>(
+      `${base}/clients/${encodeURIComponent(deepClientId)}?view=v2`,
+    )
+      .then((data) => {
+        if (!alive || !data.client) return;
+        setClients((prev) =>
+          prev.some((c) => c.id === data.client.id)
+            ? prev
+            : [...prev, { id: data.client.id, name: data.client.name }],
+        );
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [base, deepClientId]);
   useEffect(() => {
     let alive = true;
     void Promise.all([
@@ -565,7 +619,7 @@ function Calendar({
               onPage={setPage}
             />
           </section>
-          <section className="panel crm-panel">
+          <section className="panel crm-panel" ref={createPanelRef}>
             <h2>{reschedule ? "Перенос записи" : "Создать запись"}</h2>
             <form
               onSubmit={(e) => {
@@ -604,6 +658,15 @@ function Calendar({
                       ))}
                     </select>
                   </label>
+                  {client ? (
+                    <p className="account-footnote">
+                      Выбран:{" "}
+                      <strong>
+                        {clients.find((c) => c.id === client)?.name ??
+                          "Клиент"}
+                      </strong>
+                    </p>
+                  ) : null}
                   {!client && (
                     <>
                       <label>

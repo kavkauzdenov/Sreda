@@ -263,6 +263,185 @@ test("production HTTPS account and workspace lifecycle", { timeout: 120000 }, as
       const restoredCookie = recovered.headers["set-cookie"].map(value => value.split(";")[0]).join("; ");
       assert.deepEqual((await request("/api/v1/account/pin", { cookie: restoredCookie })).json, { enabled: false });
     });
+    await t.test("Clients V2 HTTP: list detail timeline mutations claim and filters", async () => {
+      const actor = await account();
+      const createdBiz = await request("/api/v1/businesses", {
+        method: "POST",
+        cookie: actor.cookie,
+        body: { name: "Clients V2 HTTP", timezone: "Europe/Moscow" },
+        headers: { "idempotency-key": randomUUID() },
+      });
+      assert.equal(createdBiz.status, 201, createdBiz.text);
+      const bizId = createdBiz.json.id;
+      const cookie = actor.cookie;
+      const base = `/api/v1/businesses/${bizId}/clients`;
+
+      const foreign = await account();
+      const foreignBiz = await request("/api/v1/businesses", {
+        method: "POST",
+        cookie: foreign.cookie,
+        body: { name: "Other Biz", timezone: "UTC" },
+        headers: { "idempotency-key": randomUUID() },
+      });
+      assert.equal(foreignBiz.status, 201, foreignBiz.text);
+
+      const summary = await request(base + "?view=summary", { cookie });
+      assert.equal(summary.status, 200, summary.text);
+      assert.ok(typeof summary.json.total === "number");
+
+      const list = await request(base + "?view=v2&limit=20", { cookie });
+      assert.equal(list.status, 200, list.text);
+      assert.ok(Array.isArray(list.json.items));
+
+      const created = await request(base, {
+        method: "POST",
+        cookie,
+        body: { name: "HTTP Клиент", phone: "+79991230001" },
+      });
+      assert.equal(created.status, 201, created.text);
+      const clientId = created.json.id;
+      assert.ok(clientId);
+
+      const detail = await request(`${base}/${clientId}?view=v2`, { cookie });
+      assert.equal(detail.status, 200, detail.text);
+      assert.equal(detail.json.client.id, clientId);
+
+      const timeline = await request(
+        `${base}/${clientId}?view=timeline`,
+        { cookie },
+      );
+      assert.equal(timeline.status, 200, timeline.text);
+      assert.ok(Array.isArray(timeline.json.items));
+
+      const patched = await request(`${base}/${clientId}`, {
+        method: "PATCH",
+        cookie,
+        body: {
+          name: "HTTP Клиент 2",
+          updatedAt: detail.json.client.updatedAt,
+        },
+      });
+      assert.equal(patched.status, 200, patched.text);
+
+      const note = await request(`${base}/${clientId}`, {
+        method: "POST",
+        cookie,
+        body: { text: "HTTP заметка" },
+      });
+      assert.equal(note.status, 201, note.text);
+
+      const operator = await account();
+      const invite = await request(
+        `/api/v1/businesses/${bizId}/invitations`,
+        {
+          method: "POST",
+          cookie,
+          body: { userId: operator.user.id, role: "operator" },
+        },
+      );
+      assert.equal(invite.status, 201, invite.text);
+      assert.equal(
+        (
+          await request(`/api/v1/invitations/${invite.json.id}/accept`, {
+            method: "POST",
+            cookie: operator.cookie,
+            body: {},
+          })
+        ).status,
+        200,
+      );
+
+      // Operator create without assignedUserId → unassigned, then claim.
+      const unassigned = await request(base, {
+        method: "POST",
+        cookie: operator.cookie,
+        body: { name: "Claim Me" },
+      });
+      assert.equal(unassigned.status, 201, unassigned.text);
+      const unassignedDetail = await request(
+        `${base}/${unassigned.json.id}?view=v2`,
+        { cookie },
+      );
+      assert.equal(unassignedDetail.status, 200, unassignedDetail.text);
+      assert.equal(unassignedDetail.json.assignedUser ?? null, null);
+      assert.equal(unassignedDetail.json.client.assignedAt ?? null, null);
+
+      const forbiddenNullAssign = await request(base, {
+        method: "POST",
+        cookie: operator.cookie,
+        body: { name: "Null Assign", assignedUserId: null },
+      });
+      assert.equal(forbiddenNullAssign.status, 403, forbiddenNullAssign.text);
+
+      const claim = await request(`${base}/${unassigned.json.id}`, {
+        method: "POST",
+        cookie: operator.cookie,
+        body: { action: "claim" },
+      });
+      assert.equal(claim.status, 200, claim.text);
+      assert.ok(claim.json.assignedUser?.id);
+      assert.ok(claim.json.assignedUser?.name);
+
+      const twin = await request(base, {
+        method: "POST",
+        cookie,
+        body: { name: "Twin", phone: "+79991230001" },
+      });
+      assert.equal(twin.status, 201, twin.text);
+      const separate = await request(base, {
+        method: "POST",
+        cookie,
+        body: {
+          action: "duplicate_decision",
+          clientAId: clientId,
+          clientBId: twin.json.id,
+          decision: "separate",
+        },
+      });
+      assert.equal(separate.status, 200, separate.text);
+
+      const mergedBlocked = await request(base, {
+        method: "POST",
+        cookie,
+        body: {
+          action: "duplicate_decision",
+          clientAId: clientId,
+          clientBId: twin.json.id,
+          decision: "merged",
+        },
+      });
+      assert.equal(mergedBlocked.status, 400, mergedBlocked.text);
+      assert.equal(mergedBlocked.json.error.code, "INVALID_DECISION");
+
+      const mergeDenied = await request(`${base}/merge`, {
+        method: "POST",
+        cookie: operator.cookie,
+        body: {
+          source_client_id: twin.json.id,
+          target_client_id: clientId,
+        },
+      });
+      assert.equal(mergeDenied.status, 403, mergeDenied.text);
+
+      for (const [qs, code] of [
+        ["tagId=abc", "INVALID_FILTER"],
+        ["assignedUserId=abc", "INVALID_FILTER"],
+        ["activity=hacker", "INVALID_FILTER"],
+        ["channel=test", "INVALID_FILTER"],
+      ]) {
+        const bad = await request(`${base}?view=v2&${qs}`, { cookie });
+        assert.equal(bad.status, 400, `${qs} => ${bad.text}`);
+        assert.equal(bad.json.error.code, code);
+      }
+
+      const cross = await request(`${base}/${clientId}?view=v2`, {
+        cookie: foreign.cookie,
+      });
+      assert.ok(
+        cross.status === 404 || cross.status === 403,
+        `cross-tenant expected 404/403 got ${cross.status}`,
+      );
+    });
   } finally {
     await stopApp();
     if (proxy) { proxy.closeAllConnections(); await new Promise((resolve) => proxy.close(resolve)); }

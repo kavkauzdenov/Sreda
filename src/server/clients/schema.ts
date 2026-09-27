@@ -1,5 +1,6 @@
 import type { Generated } from "kysely";
-export interface ClientTables {
+
+export type ClientTables = {
   client: {
     id: string;
     business_id: string;
@@ -10,6 +11,9 @@ export interface ClientTables {
     last_seen_at: Generated<Date>;
     archived_at: Date | null;
     merged_into_id: string | null;
+    assigned_user_id: string | null;
+    assigned_at: Date | null;
+    profile_note: string | null;
     created_at: Generated<Date>;
     updated_at: Generated<Date>;
   };
@@ -40,6 +44,31 @@ export interface ClientTables {
     text: string;
     created_at: Generated<Date>;
   };
+  client_tag: {
+    id: string;
+    business_id: string;
+    name: string;
+    name_normalized: string;
+    color_key: string;
+    created_at: Generated<Date>;
+    updated_at: Generated<Date>;
+  };
+  client_tag_link: {
+    business_id: string;
+    client_id: string;
+    tag_id: string;
+    created_at: Generated<Date>;
+  };
+  client_duplicate_decision: {
+    id: string;
+    business_id: string;
+    client_a_id: string;
+    client_b_id: string;
+    decision: "separate" | "merged";
+    actor_user_id: string;
+    created_at: Generated<Date>;
+    updated_at: Generated<Date>;
+  };
   notification: {
     id: string;
     business_id: string;
@@ -58,4 +87,4 @@ export interface ClientTables {
     read_at: Date | null;
     resolved_at: Date | null;
   };
-}
+};

@@ -5,6 +5,7 @@ import {
 } from "@/components/attachments/AttachmentPicker";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { apiRequest } from "@/lib/apiClient";
 import { useBusinessContext } from "@/hooks/useBusinessContext";
 import {
@@ -84,8 +85,11 @@ function Inbox({
 }) {
   const [files, setFiles] = useState<FileItem[]>([]),
     [uploading, setUploading] = useState(false);
+  const search = useSearchParams();
   const [conversations, setConversations] = useState<Conversation[]>([]),
-    [selected, setSelected] = useState(""),
+    [selected, setSelected] = useState(
+      () => search.get("conversation") || "",
+    ),
     [messages, setMessages] = useState<Message[]>([]),
     [text, setText] = useState(""),
     [error, setError] = useState(""),
