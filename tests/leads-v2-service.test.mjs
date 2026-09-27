@@ -361,6 +361,51 @@ test("getLeadReadiness checks FORM_FIELDS and CHANNELS", async () => {
   );
 });
 
+test("LeadService.get resolves attachment answer metadata without exposing raw UUID only", async () => {
+  const f = await fixture();
+  await seedNameField(f.b.id);
+  await f.forms.save(f.owner, f.b.public_id, {
+    fieldKey: "photo",
+    label: "Фото",
+    fieldType: "attachment",
+    required: false,
+    position: 1,
+  });
+  const attachmentId = randomUUID();
+  await db
+    .insertInto("attachment")
+    .values({
+      id: attachmentId,
+      business_id: f.b.id,
+      type: "image",
+      provider: "storage",
+      storage_key: f.b.id + "/" + attachmentId,
+      connection_id: null,
+      external: {},
+      filename: "damage.jpg",
+      mime_type: "image/jpeg",
+      size_bytes: "1234",
+    })
+    .execute();
+  const lead = await f.leads.create(f.owner, f.b.public_id, {
+    source: "telegram",
+    name: "Иван",
+    phone: "+79991112233",
+    answers: {
+      name: "Иван",
+      photo: [attachmentId],
+    },
+  });
+  const detail = await f.leads.get(f.owner, f.b.public_id, lead.id);
+  const photo = detail.answerFields.find((row) => row.key === "photo");
+  assert.ok(photo);
+  assert.equal(Array.isArray(photo.value), true);
+  assert.equal(photo.value[0].id, attachmentId);
+  assert.equal(photo.value[0].name, "damage.jpg");
+  assert.equal(photo.value[0].type, "image");
+  assert.match(photo.value[0].url, new RegExp(attachmentId + "$"));
+});
+
 test("LeadService.updateStatus concurrent take: exactly one wins with 409", async () => {
   const f = await fixture();
   const userB = await addMember(f.b.id, "operator");
