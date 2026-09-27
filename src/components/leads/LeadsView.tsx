@@ -89,9 +89,10 @@ function LeadWorkspace({ businessId }: { businessId: string }) {
     source: "",
     from: "",
     until: "",
+    processingBy: "",
   });
   const [attempt, setAttempt] = useState(0);
-  const key = `${filters.status}:${attempt}:${filters.search}:${filters.source}:${filters.from}:${filters.until}`;
+  const key = `${filters.status}:${attempt}:${filters.search}:${filters.source}:${filters.processingBy}:${filters.from}:${filters.until}`;
   const [page, setPage] = useState<{
     key: string;
     rows: Lead[];
@@ -226,6 +227,7 @@ function LeadWorkspace({ businessId }: { businessId: string }) {
         onPeriodChange={setPeriod}
       />
       <LeadFilters
+        businessId={businessId}
         value={filters}
         onChange={(next) => {
           setSelected(null);
