@@ -188,6 +188,27 @@ export async function ensureLeadSetupV2(
   db: Db,
   businessId: string,
 ): Promise<{ setup: LeadSetupV2; revision: number }> {
+  const initial = await loadLeadSetupV2(db, businessId);
+  if (!initial.converted || !initial.raw) {
+    return { setup: initial.setup, revision: initial.revision };
+  }
+
+  // Conversion is a write operation even when triggered by a read path.
+  // Serialize it with every settings mutation through the business row lock.
+  if (!db.isTransaction) {
+    return (db as Kysely<Database>).transaction().execute((tx) =>
+      ensureLeadSetupV2(tx, businessId),
+    );
+  }
+
+  await db
+    .selectFrom("business")
+    .select("id")
+    .where("id", "=", businessId)
+    .forUpdate()
+    .executeTakeFirstOrThrow();
+
+  // Another transaction may have completed the conversion while we waited.
   const loaded = await loadLeadSetupV2(db, businessId);
   if (!loaded.converted || !loaded.raw) {
     return { setup: loaded.setup, revision: loaded.revision };
@@ -200,7 +221,7 @@ export async function ensureLeadSetupV2(
     .where("active", "=", true)
     .execute();
 
-  // Never let a metadata read overwrite an already configured V2/custom form.
+  // Never let metadata conversion overwrite an already configured V2/custom form.
   // Legacy v1 fields are projected only when the business has no active fields yet.
   if (!active.length) {
     try {
@@ -217,7 +238,7 @@ export async function ensureLeadSetupV2(
 
   const nextRevision = loaded.revision + 1;
   const draftJson = JSON.stringify(loaded.setup);
-  await db
+  const changed = await db
     .updateTable("lead_setup")
     .set({
       draft: draftJson,
@@ -225,7 +246,15 @@ export async function ensureLeadSetupV2(
       updated_at: new Date(),
     })
     .where("business_id", "=", businessId)
-    .execute();
+    .where("revision", "=", loaded.revision)
+    .executeTakeFirst();
+
+  // Defensive fallback: if a dialect reports no update after the lock,
+  // return the durable current version rather than inventing a revision.
+  if (!changed || Number(changed.numUpdatedRows) !== 1) {
+    const current = await loadLeadSetupV2(db, businessId);
+    return { setup: current.setup, revision: current.revision };
+  }
 
   return { setup: loaded.setup, revision: nextRevision };
 }
