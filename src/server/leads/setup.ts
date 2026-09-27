@@ -196,18 +196,21 @@ export async function ensureLeadSetupV2(
     .where("business_id", "=", businessId)
     .where("active", "=", true)
     .execute();
-  try {
-    const v1 = parseLeadSetupDraft(JSON.stringify(loaded.raw));
-    if (!v1.fields.includes("name")) v1.fields = ["name", ...v1.fields];
-    // Idempotent upsert — safe when some fields already exist.
-    await syncLeadFormFields(db, businessId, v1);
-  } catch {
-    // Keep metadata conversion even if field sync fails validation.
-    if (!active.length) {
-      // no-op
+
+  // Never let a metadata read overwrite an already configured V2/custom form.
+  // Legacy v1 fields are projected only when the business has no active fields yet.
+  if (!active.length) {
+    try {
+      const v1 = parseLeadSetupDraft(JSON.stringify(loaded.raw));
+      if (!v1.fields.includes("name")) v1.fields = ["name", ...v1.fields];
+      await syncLeadFormFields(db, businessId, v1);
+    } catch {
+      // Keep metadata conversion; readiness will surface an invalid/empty form.
     }
   }
+
   await ensureNameField(db, businessId);
+  await normalizeLeadFieldPositions(db, businessId);
 
   const nextRevision = loaded.revision + 1;
   const draftJson = JSON.stringify(loaded.setup);
@@ -288,6 +291,7 @@ export async function saveLeadSetupV2(
     // Ensure system name field always exists when completing setup.
     if (setup.completed || setup.setupStep >= 1) {
       await ensureNameField(tx, b.id);
+      await normalizeLeadFieldPositions(tx, b.id);
     }
 
     const draftJson = JSON.stringify(setup);
@@ -362,6 +366,30 @@ async function ensureNameField(tx: Db, businessId: string) {
       updated_at: new Date(),
     })
     .execute();
+}
+
+async function normalizeLeadFieldPositions(tx: Db, businessId: string) {
+  const rows = await tx
+    .selectFrom("lead_form_field")
+    .select(["id", "field_key", "position", "created_at"])
+    .where("business_id", "=", businessId)
+    .where("active", "=", true)
+    .orderBy("position")
+    .orderBy("created_at")
+    .execute();
+  const name = rows.find((row) => row.field_key === "name");
+  if (!name) return;
+  const ordered = [name, ...rows.filter((row) => row.id !== name.id)];
+  const now = new Date();
+  for (const [position, row] of ordered.entries()) {
+    if (row.position === position) continue;
+    await tx
+      .updateTable("lead_form_field")
+      .set({ position, updated_at: now })
+      .where("business_id", "=", businessId)
+      .where("id", "=", row.id)
+      .execute();
+  }
 }
 
 /** Keep legacy validateSetup working by accepting v1 or returning synthetic v1 from v2. */
