@@ -331,6 +331,101 @@ test("revoked employee loses binding and live assignments, other business and hi
   );
 });
 
+test("closing a conversation is atomic and channel failure does not leave CRM open", async () => {
+  const f = await fixture();
+  const svc = new CommunicationService(db);
+  const inbound = await svc.recordInbound({
+    businessId: f.b.id,
+    platform: "telegram",
+    externalUserId: "close-" + randomUUID(),
+    text: "Закройте диалог",
+    externalMessageId: randomUUID(),
+  });
+
+  const queued = await svc.closeConversation(
+    f.owner.id,
+    f.b.public_id,
+    inbound.conversationId,
+    {
+      message: "Спасибо, диалог закрыт.",
+      requestKey: randomUUID(),
+    },
+  );
+  assert.equal(queued.status, "closed");
+  assert.equal(queued.notification, "queued");
+
+  let row = await db
+    .selectFrom("communication_conversation")
+    .select(["status", "closed_at"])
+    .where("id", "=", inbound.conversationId)
+    .executeTakeFirstOrThrow();
+  assert.equal(row.status, "closed");
+  assert.ok(row.closed_at);
+
+  const closingMessage = await db
+    .selectFrom("communication_message")
+    .select(["delivery_status", "text"])
+    .where("id", "=", queued.messageId)
+    .executeTakeFirstOrThrow();
+  assert.equal(closingMessage.delivery_status, "queued");
+  assert.equal(closingMessage.text, "Спасибо, диалог закрыт.");
+
+  // A new inbound message reopens the closed conversation.
+  await svc.recordInbound({
+    businessId: f.b.id,
+    platform: "telegram",
+    externalUserId: (
+      await db
+        .selectFrom("communication_conversation")
+        .select("external_user_id")
+        .where("id", "=", inbound.conversationId)
+        .executeTakeFirstOrThrow()
+    ).external_user_id,
+    text: "Ещё вопрос",
+    externalMessageId: randomUUID(),
+  });
+  row = await db
+    .selectFrom("communication_conversation")
+    .select(["status", "closed_at"])
+    .where("id", "=", inbound.conversationId)
+    .executeTakeFirstOrThrow();
+  assert.equal(row.status, "open");
+  assert.equal(row.closed_at, null);
+
+  await db
+    .updateTable("telegram_runtime")
+    .set({ status: "error" })
+    .where("connection_id", "=", f.connections.telegram)
+    .execute();
+
+  const failed = await svc.closeConversation(
+    f.owner.id,
+    f.b.public_id,
+    inbound.conversationId,
+    {
+      message: "Диалог закрыт.",
+      requestKey: randomUUID(),
+    },
+  );
+  assert.equal(failed.status, "closed");
+  assert.equal(failed.notification, "failed");
+
+  row = await db
+    .selectFrom("communication_conversation")
+    .select(["status", "closed_at"])
+    .where("id", "=", inbound.conversationId)
+    .executeTakeFirstOrThrow();
+  assert.equal(row.status, "closed");
+  assert.ok(row.closed_at);
+
+  const failedMessage = await db
+    .selectFrom("communication_message")
+    .select("delivery_status")
+    .where("id", "=", failed.messageId)
+    .executeTakeFirstOrThrow();
+  assert.equal(failedMessage.delivery_status, "failed");
+});
+
 test("only the assigned employee can change a lead and reopening releases it", async () => {
   const f = await fixture(),
     other = await user(),
