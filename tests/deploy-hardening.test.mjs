@@ -45,7 +45,7 @@ test("release is immutable and backs up before migrations", () => {
 test("controlled deployment does not require Yandex Registry credentials", () => {
   const workflow = read(".github/workflows/deploy-yandex.yml");
   const release = read("deploy/release.sh");
-  assert.match(workflow, /IMAGE: biznesoty:\\\$\{\{ github\.sha \}\}/);
+  assert.match(workflow, /IMAGE: biznesoty:\$\{\{ github\.sha \}\}/);
   assert.match(workflow, /docker save "\$IMAGE"/);
   assert.match(workflow, /sha256sum -c biznesoty-image\.tar\.gz\.sha256/);
   assert.match(workflow, /docker load/);
