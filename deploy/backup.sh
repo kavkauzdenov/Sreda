@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 umask 077
+# Compose interpolates the app image even when only the db service is used.
+export SREDA_IMAGE="${SREDA_IMAGE:-biznesoty:backup-placeholder}"
 
 destination=${1:-}
 if [[ -n "$destination" && "$destination" != s3://* ]]; then
