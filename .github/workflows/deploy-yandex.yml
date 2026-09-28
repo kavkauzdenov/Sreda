@@ -51,5 +51,5 @@ jobs:
           [[ "$IMAGE" =~ ^cr\.yandex/[a-z0-9]+/sreda:[a-f0-9]{40}$ ]]
           [[ "$LOGIN" =~ ^[a-z_][a-z0-9_-]*$ ]]
           [[ "$HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]
-          scp -o BatchMode=yes -o StrictHostKeyChecking=yes deploy/compose.yml deploy/Caddyfile deploy/release.sh deploy/backup.sh "$LOGIN@$HOST:/opt/biznesoty/deploy/"
+          scp -o BatchMode=yes -o StrictHostKeyChecking=yes deploy/compose.yml deploy/Caddyfile deploy/release.sh deploy/backup.sh deploy/restore-drill.sh "$LOGIN@$HOST:/opt/biznesoty/deploy/"
           ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$LOGIN@$HOST" bash /opt/biznesoty/deploy/release.sh "$IMAGE"
