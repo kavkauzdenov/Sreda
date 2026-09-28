@@ -23,12 +23,14 @@ export function createSolutionHandler(options: {
   secret: string;
   telegramEnabled?: boolean;
   vkEnabled?: boolean;
+  metaEnabled?: boolean;
   telegram?: TelegramService;
 }) {
   const solutions = new SolutionService(
     options.db,
     options.telegramEnabled,
     options.vkEnabled,
+    options.metaEnabled,
   );
   return (
     request: Request,
