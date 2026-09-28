@@ -28,7 +28,11 @@ jobs:
           password: ${{ secrets.YC_REGISTRY_KEY }}
       - name: Build and push immutable image
         run: |
-          docker build -t "$IMAGE" .
+          BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          docker build \
+            --build-arg BUILD_SHA="$GITHUB_SHA" \
+            --build-arg BUILD_TIME="$BUILD_TIME" \
+            -t "$IMAGE" .
           docker push "$IMAGE"
       - name: Configure SSH
         env:
