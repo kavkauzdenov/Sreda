@@ -262,6 +262,7 @@ export class SolutionService {
         );
       }
       await assertCanGrantEntitlement({
+        db: this.db,
         businessId: id,
         solutionCode: "leads",
       });
@@ -295,6 +296,7 @@ export class SolutionService {
     await this.db.transaction().execute(async (tx) => {
       const id = await new SolutionService(tx).business(userId, publicId, true);
       await assertCanGrantEntitlement({
+        db: this.db,
         businessId: id,
         solutionCode: "leads",
       });
