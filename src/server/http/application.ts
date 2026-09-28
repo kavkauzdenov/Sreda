@@ -205,7 +205,24 @@ export function createApplication(options: {
         requireOrigin(request, options.origin);
         if (request.method === "POST") {
           const body = await readJson(request, 65536);
-          if (body && typeof body === "object" && (body as { internal?: unknown }).internal === true)
+          if (
+            body &&
+            typeof body === "object" &&
+            (body as { action?: unknown }).action === "close"
+          )
+            return json(
+              await options.communications.closeConversation(
+                user.id,
+                businessId,
+                conversationId,
+                body,
+              ),
+            );
+          if (
+            body &&
+            typeof body === "object" &&
+            (body as { internal?: unknown }).internal === true
+          )
             return json(
               await options.communications.addInternalNote(
                 user.id,
