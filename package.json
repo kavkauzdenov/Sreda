@@ -22,16 +22,16 @@
     "admin:bootstrap": "node --env-file-if-exists=.env.local --import tsx scripts/bootstrap-super-admin.mts"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1133.0",
-    "better-auth": "1.7.4",
+    "@aws-sdk/client-s3": "^3.1141.0",
+    "better-auth": "1.7.6",
     "exceljs": "^4.4.0",
-    "kysely": "0.29.5",
-    "lucide-react": "^1.44.0",
-    "next": "16.3.4",
-    "nodemailer": "10.0.6",
+    "kysely": "0.29.6",
+    "lucide-react": "^1.48.0",
+    "next": "16.3.6",
+    "nodemailer": "10.0.10",
     "pg": "8.23.0",
-    "react": "19.2.8",
-    "react-dom": "19.2.8",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
     "server-only": "0.0.1"
   },
   "devDependencies": {
