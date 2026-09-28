@@ -262,7 +262,7 @@ export class SolutionService {
         );
       }
       await assertCanGrantEntitlement({
-        db: this.db,
+        db: tx,
         businessId: id,
         solutionCode: "leads",
       });
@@ -368,6 +368,7 @@ export class SolutionService {
       const previousStatus = previous?.status;
       if (enabling) {
         await assertCanGrantEntitlement({
+          db: tx,
           businessId: id,
           solutionCode: code,
         });
