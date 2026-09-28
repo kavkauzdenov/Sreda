@@ -35,6 +35,11 @@ export interface Database
     locked_until: Date | null;
     updated_at: Generated<Date>;
   };
+  platform_admin_mfa_session: {
+    session_id: string;
+    user_id: string;
+    verified_at: Generated<Date>;
+  };
   worker_heartbeat: { name: string; seen_at: Date };
   lead_setup: {
     business_id: string;
