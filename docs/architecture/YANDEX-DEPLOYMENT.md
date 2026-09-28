@@ -35,7 +35,7 @@ DB healthcheck использует фактические `POSTGRES_USER` и `P
 
 Основные secrets:
 - `BETTER_AUTH_SECRET` — identity/auth;
-- `CONNECTION_ENCRYPTION_KEY` — новое шифрование Telegram/VK/Meta credentials;
+- `CONNECTION_ENCRYPTION_KEY` — новое шифрование Telegram/VK/Meta credentials; при первом hardened release автоматически создаётся на VM, если отсутствует, без вывода значения в лог;
 - `CONNECTION_ENCRYPTION_PREVIOUS_KEYS` — только на период ротации ключа;
 - provider/API/S3 credentials по используемым функциям.
 
