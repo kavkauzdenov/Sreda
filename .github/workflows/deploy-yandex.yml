@@ -22,7 +22,7 @@ jobs:
       IMAGE: biznesoty:${{ github.sha }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Require deployment branch to equal current main
         if: github.ref == 'refs/heads/deploy/production'
