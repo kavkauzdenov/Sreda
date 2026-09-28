@@ -12,11 +12,19 @@ import {
 import { notify, resolveByEventKey } from "../notifications/service.ts";
 import { assertEntitlement } from "../billing/entitlement.ts";
 import { evaluateLowStockCrossing } from "./low-stock.ts";
-import type {
-  CartPlatform,
-  OrderFulfillment,
-  OrderStatus,
-  ProductAvailability,
+import { recordMovement } from "./inventory.ts";
+import {
+  assertMinimumOrderAmount,
+  calculateDeliveryFee,
+  loadOrderSettingsForBusiness,
+} from "./settings.ts";
+import {
+  allowedStatusesForFulfillment,
+  type CartPlatform,
+  type OrderFulfillment,
+  type OrderStatus,
+  type ProductAvailability,
+  type ProductType,
 } from "./schema.ts";
 
 async function maybeEmitLowStock(
@@ -93,18 +101,6 @@ const ORDER_STATUSES: OrderStatus[] = [
   "completed",
   "cancelled",
 ];
-
-/** Allowed forward transitions; cancelled handled separately from early states. */
-const STATUS_FLOW: Record<OrderStatus, OrderStatus[]> = {
-  new: ["accepted", "cancelled"],
-  accepted: ["assembling", "cancelled"],
-  assembling: ["ready", "cancelled"],
-  ready: ["handed_over", "delivered", "cancelled"],
-  handed_over: ["completed"],
-  delivered: ["completed"],
-  completed: [],
-  cancelled: [],
-};
 
 function id(value: unknown) {
   if (typeof value !== "string" || !UUID_RE.test(value)) throw fail();
@@ -541,7 +537,7 @@ async function decrementStock(
   productId: string,
   variantId: string | null,
   quantity: number,
-): Promise<boolean> {
+): Promise<{ deducted: boolean; remaining: number | null }> {
   if (variantId) {
     const variant = await tx
       .selectFrom("product_variant")
@@ -561,6 +557,7 @@ async function decrementStock(
         "use_variants",
         "name",
         "low_stock_threshold",
+        "product_type",
       ])
       .where("business_id", "=", businessId)
       .where("id", "=", productId)
@@ -568,6 +565,8 @@ async function decrementStock(
       .executeTakeFirst();
     if (!product?.active)
       throw new AppError(409, "PRODUCT_UNAVAILABLE", "Товар недоступен.");
+    if (product.product_type === "service")
+      return { deducted: false, remaining: null };
     if (!product.use_variants)
       throw fail("Этот товар больше не использует варианты.");
     if (!variant.active)
@@ -616,9 +615,9 @@ async function decrementStock(
         nextStock: remaining,
         threshold: product.low_stock_threshold,
       });
-      return true;
+      return { deducted: true, remaining };
     }
-    return false;
+    return { deducted: false, remaining: variant.stock_quantity };
   }
 
   const product = await tx
@@ -630,6 +629,8 @@ async function decrementStock(
     .executeTakeFirst();
   if (!product?.active)
     throw new AppError(409, "PRODUCT_UNAVAILABLE", "Товар недоступен.");
+  if (product.product_type === "service")
+    return { deducted: false, remaining: null };
   if (product.use_variants)
     throw fail("Выберите вариант товара.");
   if (!isSellable(product.availability, product.stock_quantity))
@@ -665,9 +666,9 @@ async function decrementStock(
       nextStock: remaining,
       threshold: product.low_stock_threshold,
     });
-    return true;
+    return { deducted: true, remaining };
   }
-  return false;
+  return { deducted: false, remaining: product.stock_quantity };
 }
 
 /**
@@ -680,6 +681,7 @@ async function restoreStock(
   productId: string,
   variantId: string | null,
   quantity: number,
+  orderId?: string | null,
 ) {
   if (variantId) {
     const variant = await tx
@@ -723,6 +725,15 @@ async function restoreStock(
       },
       "system",
     );
+    await recordMovement(tx, {
+      businessId,
+      productId,
+      variantId,
+      delta: quantity,
+      remaining: stock,
+      reason: "order_cancelled",
+      orderId: orderId ?? null,
+    });
     return;
   }
 
@@ -755,6 +766,15 @@ async function restoreStock(
     { delta: quantity, remaining: stock, reason: "order_cancelled" },
     "system",
   );
+  await recordMovement(tx, {
+    businessId,
+    productId,
+    variantId: null,
+    delta: quantity,
+    remaining: stock,
+    reason: "order_cancelled",
+    orderId: orderId ?? null,
+  });
 }
 
 async function restoreOrderInventory(
@@ -776,6 +796,7 @@ async function restoreOrderInventory(
       item.product_id,
       item.variant_id,
       item.quantity,
+      orderId,
     );
   }
 }
@@ -1028,11 +1049,24 @@ export class CatalogService {
           ? body.availability
           : (existing?.availability ?? "in_stock"),
       );
-      const trackInventory = has("track_inventory")
-        ? body.track_inventory === true
-        : (existing?.track_inventory ?? false);
-      const stock =
-        mode === "quantity"
+      const productTypeRaw = has("product_type")
+        ? String(body.product_type ?? body.productType ?? "product")
+        : has("productType")
+          ? String(body.productType)
+          : (existing?.product_type ?? "product");
+      if (productTypeRaw !== "product" && productTypeRaw !== "service")
+        throw fail("Проверьте тип позиции.");
+      const productType = productTypeRaw as ProductType;
+      const isService = productType === "service";
+
+      const trackInventory = isService
+        ? false
+        : has("track_inventory")
+          ? body.track_inventory === true
+          : (existing?.track_inventory ?? false);
+      const stock = isService
+        ? null
+        : mode === "quantity"
           ? integer(
               has("stock_quantity")
                 ? (body.stock_quantity ?? 0)
@@ -1041,8 +1075,22 @@ export class CatalogService {
               1_000_000,
             )
           : null;
-      if (trackInventory && mode === "quantity" && stock === null)
+      if (!isService && trackInventory && mode === "quantity" && stock === null)
         throw fail("Укажите количество на складе.");
+
+      let lowStockThreshold: number | null = existing?.low_stock_threshold ?? null;
+      if (isService) {
+        lowStockThreshold = null;
+      } else if (has("low_stock_threshold") || has("lowStockThreshold")) {
+        const raw =
+          body.low_stock_threshold !== undefined
+            ? body.low_stock_threshold
+            : body.lowStockThreshold;
+        lowStockThreshold =
+          raw === null || raw === ""
+            ? null
+            : integer(raw, 0, 1_000_000);
+      }
 
       const currencyRaw = has("currency")
         ? String(body.currency ?? "RUB")
@@ -1085,15 +1133,21 @@ export class CatalogService {
           0,
           100000,
         ),
-        use_variants: has("use_variants")
-          ? body.use_variants === true
-          : (existing?.use_variants ?? false),
-        variant_prices_enabled: has("variant_prices_enabled")
-          ? body.variant_prices_enabled === true
-          : (existing?.variant_prices_enabled ?? false),
+        use_variants: isService
+          ? false
+          : has("use_variants")
+            ? body.use_variants === true
+            : (existing?.use_variants ?? false),
+        variant_prices_enabled: isService
+          ? false
+          : has("variant_prices_enabled")
+            ? body.variant_prices_enabled === true
+            : (existing?.variant_prices_enabled ?? false),
         track_inventory: trackInventory,
-        availability: mode,
+        availability: isService ? ("in_stock" as const) : mode,
         stock_quantity: stock,
+        low_stock_threshold: lowStockThreshold,
+        product_type: productType,
         updated_at: new Date(),
       };
       if (updating) {
@@ -1775,9 +1829,11 @@ export class OrderService {
         quantity: number;
         line_total: string;
         stock_deducted: boolean;
+        remaining: number | null;
       }[] = [];
       let currency: string | null = null;
       let totalCents = 0;
+      const orderId = randomUUID();
 
       for (const item of cartItems) {
         const product = await tx
@@ -1793,7 +1849,7 @@ export class OrderService {
             "MIXED_CURRENCY",
             "В одном заказе должны быть товары одной валюты.",
           );
-        const stockDeducted = await decrementStock(
+        const stockResult = await decrementStock(
           tx,
           businessId,
           item.product_id,
@@ -1825,12 +1881,22 @@ export class OrderService {
           unit_price: unit,
           quantity: item.quantity,
           line_total: lineTotal,
-          stock_deducted: stockDeducted,
+          stock_deducted: stockResult.deducted,
+          remaining: stockResult.remaining,
         });
       }
 
-      const orderId = randomUUID();
-      const total = (totalCents / 100).toFixed(2);
+      const settings = await loadOrderSettingsForBusiness(tx, businessId);
+      const subtotalAmount = totalCents / 100;
+      assertMinimumOrderAmount(settings, subtotalAmount);
+      const deliveryFee = calculateDeliveryFee(
+        settings,
+        orderFulfillment,
+        subtotalAmount,
+      );
+      const subtotal = subtotalAmount.toFixed(2);
+      const deliveryFeeStr = deliveryFee.toFixed(2);
+      const total = (subtotalAmount + deliveryFee).toFixed(2);
       const orderNumber = await allocateOrderNumber(tx, businessId);
       const order = await tx
         .insertInto("order")
@@ -1846,7 +1912,14 @@ export class OrderService {
           comment,
           currency: currency ?? "RUB",
           total,
-          items_snapshot: JSON.stringify(snapshot),
+          subtotal,
+          delivery_fee: deliveryFeeStr,
+          items_snapshot: JSON.stringify(
+            snapshot.map(({ remaining, ...line }) => {
+              void remaining;
+              return line;
+            }),
+          ),
           source,
           request_key: key,
           request_hash: hash,
@@ -1875,6 +1948,17 @@ export class OrderService {
             stock_deducted: line.stock_deducted,
           })
           .execute();
+        if (line.stock_deducted) {
+          await recordMovement(tx, {
+            businessId,
+            productId: line.product_id,
+            variantId: line.variant_id,
+            delta: -line.quantity,
+            remaining: line.remaining,
+            reason: "order_checkout",
+            orderId,
+          });
+        }
       }
 
       await writeStatusHistory(tx, businessId, orderId, null, "new", actor);
@@ -1923,7 +2007,7 @@ export class OrderService {
           total +
           " " +
           (currency ?? "RUB"),
-        "/orders?id=" + orderId,
+        "/orders?order=" + orderId,
       );
       await audit(tx, businessId, actor, "order_created", orderId, {
         source,
@@ -1998,8 +2082,13 @@ export class OrderService {
           .onRef("c.id", "=", "o.client_id")
           .onRef("c.business_id", "=", "o.business_id"),
       )
+      .leftJoin("user as u", "u.id", "o.assigned_user_id")
       .selectAll("o")
-      .select(["c.name as client_name", "c.phone as client_phone"])
+      .select([
+        "c.name as client_name",
+        "c.phone as client_phone",
+        "u.name as assigned_name",
+      ])
       .where("o.business_id", "=", b.id)
       .where("o.id", "=", id(orderId))
       .executeTakeFirst();
@@ -2020,7 +2109,19 @@ export class OrderService {
         .orderBy("created_at")
         .execute(),
     ]);
-    return { ...order, items, history };
+    const { assigned_name, ...rest } = order;
+    return {
+      ...rest,
+      assigned_user: order.assigned_user_id
+        ? { id: order.assigned_user_id, name: assigned_name || "Сотрудник" }
+        : null,
+      items,
+      history,
+      next_statuses: allowedStatusesForFulfillment(
+        order.status as OrderStatus,
+        order.fulfillment as OrderFulfillment,
+      ),
+    };
   }
 
   async transitionStatus(
@@ -2051,7 +2152,10 @@ export class OrderService {
       if (!ORDER_STATUSES.includes(next as OrderStatus))
         throw fail("Проверьте статус.");
       const to = next as OrderStatus;
-      const allowed = STATUS_FLOW[current.status];
+      const allowed = allowedStatusesForFulfillment(
+        current.status as OrderStatus,
+        current.fulfillment as OrderFulfillment,
+      );
       if (!allowed.includes(to))
         throw new AppError(
           409,

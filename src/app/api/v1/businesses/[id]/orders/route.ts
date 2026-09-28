@@ -12,3 +12,15 @@ export async function POST(
 ) {
   return ordersHandler(request, (await params).id, "orders");
 }
+export async function PATCH(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  return ordersHandler(request, (await params).id, "orders");
+}
+export async function PUT(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  return ordersHandler(request, (await params).id, "orders");
+}

@@ -442,6 +442,192 @@ test("production HTTPS account and workspace lifecycle", { timeout: 120000 }, as
         `cross-tenant expected 404/403 got ${cross.status}`,
       );
     });
+    await t.test("Orders V2 HTTP: summary list detail create status claim settings inventory", async () => {
+      const actor = await account();
+      const createdBiz = await request("/api/v1/businesses", {
+        method: "POST",
+        cookie: actor.cookie,
+        body: { name: "Orders V2 HTTP", timezone: "Europe/Moscow" },
+        headers: { "idempotency-key": randomUUID() },
+      });
+      assert.equal(createdBiz.status, 201, createdBiz.text);
+      const bizId = createdBiz.json.id;
+      const cookie = actor.cookie;
+      const base = `/api/v1/businesses/${bizId}`;
+
+      const activate = await request(base + "/solutions", {
+        method: "POST",
+        cookie,
+        body: { code: "orders", enabled: true },
+      });
+      assert.ok(
+        activate.status === 200 || activate.status === 201,
+        activate.text,
+      );
+
+      const foreign = await account();
+      const foreignBiz = await request("/api/v1/businesses", {
+        method: "POST",
+        cookie: foreign.cookie,
+        body: { name: "Orders Other", timezone: "UTC" },
+        headers: { "idempotency-key": randomUUID() },
+      });
+      assert.equal(foreignBiz.status, 201, foreignBiz.text);
+
+      const product = await request(base + "/products", {
+        method: "POST",
+        cookie,
+        body: {
+          name: "HTTP Товар",
+          price: "250",
+          track_inventory: true,
+          availability: "quantity",
+          stock_quantity: 10,
+        },
+      });
+      assert.equal(product.status, 201, product.text);
+      const productId = product.json.id;
+
+      const summary = await request(base + "/orders?view=summary", { cookie });
+      assert.equal(summary.status, 200, summary.text);
+      assert.ok(typeof summary.json.newCount === "number");
+      assert.ok(typeof summary.json.inProgressCount === "number");
+
+      const listEmpty = await request(base + "/orders?view=v2&limit=20", {
+        cookie,
+      });
+      assert.equal(listEmpty.status, 200, listEmpty.text);
+      assert.ok(Array.isArray(listEmpty.json.items));
+
+      const created = await request(base + "/orders", {
+        method: "POST",
+        cookie,
+        body: {
+          platform: "web",
+          customer_name: "HTTP Покупатель",
+          customer_phone: "+79991230099",
+          fulfillment: "pickup",
+          request_key: "http-order-" + randomUUID(),
+          cart_items: [{ product_id: productId, quantity: 1 }],
+        },
+      });
+      assert.equal(created.status, 201, created.text);
+      const orderId = created.json.id;
+      assert.ok(orderId);
+
+      const detail = await request(`${base}/orders/${orderId}`, { cookie });
+      assert.equal(detail.status, 200, detail.text);
+      assert.equal(detail.json.id, orderId);
+      assert.equal(detail.json.status, "new");
+
+      const list = await request(base + "/orders?view=v2&limit=20", { cookie });
+      assert.equal(list.status, 200, list.text);
+      assert.ok(list.json.items.some((o) => o.id === orderId));
+
+      const status = await request(`${base}/orders/${orderId}`, {
+        method: "PATCH",
+        cookie,
+        body: { status: "accepted" },
+      });
+      assert.equal(status.status, 200, status.text);
+      assert.equal(status.json.status, "accepted");
+
+      const operator = await account();
+      const invite = await request(`${base}/invitations`, {
+        method: "POST",
+        cookie,
+        body: { userId: operator.user.id, role: "operator" },
+      });
+      assert.equal(invite.status, 201, invite.text);
+      assert.equal(
+        (
+          await request(`/api/v1/invitations/${invite.json.id}/accept`, {
+            method: "POST",
+            cookie: operator.cookie,
+            body: {},
+          })
+        ).status,
+        200,
+      );
+
+      const unassigned = await request(base + "/orders", {
+        method: "POST",
+        cookie,
+        body: {
+          platform: "web",
+          customer_name: "Claim Me",
+          customer_phone: "+79991230100",
+          fulfillment: "pickup",
+          request_key: "http-claim-" + randomUUID(),
+          cart_items: [{ product_id: productId, quantity: 1 }],
+        },
+      });
+      assert.equal(unassigned.status, 201, unassigned.text);
+
+      const claim = await request(`${base}/orders/${unassigned.json.id}`, {
+        method: "POST",
+        cookie: operator.cookie,
+        body: { action: "claim" },
+      });
+      assert.equal(claim.status, 200, claim.text);
+      assert.ok(claim.json.assignedUser?.id);
+
+      const settingsGet = await request(base + "/orders?view=settings", {
+        cookie,
+      });
+      assert.equal(settingsGet.status, 200, settingsGet.text);
+      assert.ok(typeof settingsGet.json.pickupEnabled === "boolean");
+
+      const settingsPatch = await request(base + "/orders?view=settings", {
+        method: "PATCH",
+        cookie,
+        body: { deliveryPrice: "175", pickupEnabled: true, deliveryEnabled: true },
+      });
+      assert.equal(settingsPatch.status, 200, settingsPatch.text);
+      assert.equal(settingsPatch.json.deliveryPrice, "175.00");
+
+      const settingsOpDenied = await request(base + "/orders?view=settings", {
+        method: "PATCH",
+        cookie: operator.cookie,
+        body: { deliveryPrice: "1" },
+      });
+      assert.equal(settingsOpDenied.status, 403, settingsOpDenied.text);
+
+      const inventoryGet = await request(base + "/orders?view=inventory", {
+        cookie,
+      });
+      assert.equal(inventoryGet.status, 200, inventoryGet.text);
+      assert.ok(Array.isArray(inventoryGet.json.items));
+
+      const inventoryPatch = await request(base + "/orders?view=inventory", {
+        method: "PATCH",
+        cookie,
+        body: { productId, delta: 2 },
+      });
+      assert.equal(inventoryPatch.status, 200, inventoryPatch.text);
+      assert.ok(typeof inventoryPatch.json.stockQuantity === "number");
+
+      for (const [qs, code] of [
+        ["status=hacker", "INVALID_FILTER"],
+        ["source=sms", "INVALID_FILTER"],
+        ["fulfillment=drone", "INVALID_FILTER"],
+        ["assignedUserId=abc", "INVALID_FILTER"],
+        ["limit=0", "INVALID_FILTER"],
+        ["cursor=!!!", "INVALID_CURSOR"],
+      ]) {
+        const bad = await request(`${base}/orders?view=v2&${qs}`, { cookie });
+        assert.equal(bad.status, 400, `${qs} => ${bad.text}`);
+        assert.equal(bad.json.error.code, code);
+      }
+
+      const cross = await request(`${base}/orders/${orderId}`, {
+        cookie: foreign.cookie,
+      });
+      assert.ok(
+        cross.status === 404 || cross.status === 403,
+        `cross-tenant expected 404/403 got ${cross.status}`,
+      );
+    });
   } finally {
     await stopApp();
     if (proxy) { proxy.closeAllConnections(); await new Promise((resolve) => proxy.close(resolve)); }

@@ -3,6 +3,10 @@ import type { Database } from "../db/schema.ts";
 import { AppError } from "../http/errors.ts";
 import { normalizeIdentity } from "../clients/service.ts";
 import { CatalogService, OrderService } from "../orders/service.ts";
+import {
+  availableFulfillments,
+  loadOrderSettingsForBusiness,
+} from "../orders/settings.ts";
 import { formatMoney } from "../../lib/money.ts";
 import {
   getCustomerProfile,
@@ -354,13 +358,38 @@ export async function ordersFlow(
   };
 
   const askFulfillment = async () => {
+    const settings = await loadOrderSettingsForBusiness(tx, businessId);
+    const options = availableFulfillments(settings);
+    if (options.length === 0) {
+      await queue(
+        "Сейчас нельзя оформить заказ: доставка и самовывоз отключены.",
+        ["Корзина", "Главное меню"],
+      );
+      return;
+    }
+    if (options.length === 1 && options[0] === "delivery") {
+      answers.fulfillment = "delivery";
+      await save("checkout_address");
+      await queue("Адрес доставки?", ["← Назад", "Главное меню"]);
+      return;
+    }
+    if (options.length === 1 && options[0] === "pickup") {
+      answers.fulfillment = "pickup";
+      answers.address = "";
+      await save("checkout_comment");
+      await queue("Комментарий к заказу?\nМожно пропустить: /skip.", [
+        "/skip",
+        "← Назад",
+        "Главное меню",
+      ]);
+      return;
+    }
     await save("checkout_fulfillment");
-    await queue("Доставка или самовывоз?", [
-      "Доставка",
-      "Самовывоз",
-      "← Назад",
-      "Главное меню",
-    ]);
+    const buttons: OutboxButton[] = [];
+    if (options.includes("delivery")) buttons.push("Доставка");
+    if (options.includes("pickup")) buttons.push("Самовывоз");
+    buttons.push("← Назад", "Главное меню");
+    await queue("Доставка или самовывоз?", buttons);
   };
 
   const startCheckout = async () => {
@@ -843,13 +872,15 @@ export async function ordersFlow(
   }
 
   if (mode === "checkout_fulfillment") {
-    if (text === "Доставка") {
+    const settings = await loadOrderSettingsForBusiness(tx, businessId);
+    const options = availableFulfillments(settings);
+    if (text === "Доставка" && options.includes("delivery")) {
       answers.fulfillment = "delivery";
       await save("checkout_address");
       await queue("Адрес доставки?", ["← Назад", "Главное меню"]);
       return true;
     }
-    if (text === "Самовывоз") {
+    if (text === "Самовывоз" && options.includes("pickup")) {
       answers.fulfillment = "pickup";
       answers.address = "";
       await save("checkout_comment");
@@ -860,12 +891,16 @@ export async function ordersFlow(
       ]);
       return true;
     }
-    await queue("Выберите доставку или самовывоз.", [
-      "Доставка",
-      "Самовывоз",
-      "← Назад",
-      "Главное меню",
-    ]);
+    const buttons: OutboxButton[] = [];
+    if (options.includes("delivery")) buttons.push("Доставка");
+    if (options.includes("pickup")) buttons.push("Самовывоз");
+    buttons.push("← Назад", "Главное меню");
+    await queue(
+      options.length
+        ? "Выберите доставку или самовывоз."
+        : "Сейчас нельзя оформить заказ: доставка и самовывоз отключены.",
+      buttons.length > 2 ? buttons : ["Корзина", "Главное меню"],
+    );
     return true;
   }
 

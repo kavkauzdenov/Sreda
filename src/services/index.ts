@@ -5,3 +5,4 @@ export * from "./connections.service";
 export * from "./leads.service";
 export * from "./posts.service";
 export * from "./billing.service";
+export * from "./orders.service";

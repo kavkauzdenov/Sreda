@@ -6,6 +6,10 @@ import { allowed, type Permission } from "../access/permissions.ts";
 import { audit } from "../audit/service.ts";
 import { normalizeSolutionCode } from "../solutions/catalog.ts";
 import { OrderService } from "../orders/service.ts";
+import {
+  allowedStatusesForFulfillment,
+  type OrderStatus,
+} from "../orders/schema.ts";
 import { BookingService } from "../booking/service.ts";
 import {
   ChannelAdminBindingService,
@@ -50,6 +54,28 @@ const ORDER_NEXT: Record<string, string[]> = {
   completed: [],
   cancelled: [],
 };
+
+function nextOrderStatuses(
+  status: string,
+  fulfillment: string,
+): string[] {
+  if (
+    status === "new" ||
+    status === "accepted" ||
+    status === "assembling" ||
+    status === "ready" ||
+    status === "handed_over" ||
+    status === "delivered" ||
+    status === "completed" ||
+    status === "cancelled"
+  ) {
+    return allowedStatusesForFulfillment(
+      status as OrderStatus,
+      fulfillment === "delivery" ? "delivery" : "pickup",
+    );
+  }
+  return ORDER_NEXT[status] ?? [];
+}
 
 const BTN = {
   home: "🏠 Меню управления",
@@ -931,7 +957,7 @@ async function handleOrders(
         .executeTakeFirst();
       if (!order)
         throw new AppError(404, "ORDER_NOT_FOUND", "Заказ не найден.");
-      const next = ORDER_NEXT[order.status] ?? [];
+      const next = nextOrderStatuses(order.status, order.fulfillment);
       await setChannelAdminSession(tx, {
         connectionId: input.connectionId,
         externalUserId: input.userId,

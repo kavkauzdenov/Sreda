@@ -343,7 +343,7 @@ for (const theme of ["light", "dark"]) {
       );
       expect(connBtn).toBeGreaterThanOrEqual(UI_CHROME_MIN);
 
-      // Orders — status chip or segment
+      // Orders V2 — primary tab / create CTA (legacy .crm-segment removed)
       await page.goto(baseURL + "/orders", {
         waitUntil: "domcontentloaded",
         timeout: 60_000,
@@ -352,9 +352,9 @@ for (const theme of ["light", "dark"]) {
       await page.waitForTimeout(400);
       const segment = await requireSample(
         page,
-        ".crm-segment .button--primary, .crm-segment .button",
+        ".orders-tabs .button--primary, .orders-page__heading-actions .button--primary, .orders-tabs .button, .orders-page .button--primary",
         {},
-        "orders segment",
+        "orders primary action",
       );
       expect(segment).toBeGreaterThanOrEqual(UI_CHROME_MIN);
     });
