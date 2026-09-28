@@ -42,6 +42,10 @@ export class PinService {
           .onConflict((oc) => oc.column("user_id").doUpdateSet({ pin_hash: pinHash, failed_attempts: 0, locked_until: null, updated_at: new Date() })).execute();
       } else await tx.deleteFrom("account_pin").where("user_id", "=", userId).execute();
       await tx.deleteFrom("session").where("userId", "=", userId).where("id", "!=", sessionId).execute();
+      await tx
+        .deleteFrom("platform_admin_mfa_session")
+        .where("session_id", "=", sessionId)
+        .execute();
       await tx.insertInto("account_security_event").values({ id: randomUUID(), user_id: userId,
         action: enabled ? previous ? "pin_changed" : "pin_enabled" : "pin_disabled" }).execute();
       return { enabled };
