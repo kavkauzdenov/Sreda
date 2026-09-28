@@ -13,10 +13,9 @@ export async function GET() {
     checks.database = "ok";
 
     const required = new Set<string>([
-      "background",
-      "notifications",
-      "entity_reminders",
-      "setup_drafts",
+      ...(r.backgroundEnabled
+        ? ["background", "notifications", "entity_reminders", "setup_drafts"]
+        : []),
       ...(r.telegramEnabled ? ["telegram"] : []),
       ...(r.vkEnabled ? ["vk"] : []),
       ...(r.metaEnabled ? ["meta_delivery"] : []),
@@ -36,9 +35,15 @@ export async function GET() {
       )
       .execute();
 
-    if (active.some((s) => s.solution_code === "booking"))
+    if (
+      r.backgroundEnabled &&
+      active.some((s) => s.solution_code === "booking")
+    )
       required.add("booking_reminders");
-    if (active.some((s) => s.solution_code === "autopost"))
+    if (
+      r.backgroundEnabled &&
+      active.some((s) => s.solution_code === "autopost")
+    )
       required.add("autopost");
 
     const beats = await r.db
