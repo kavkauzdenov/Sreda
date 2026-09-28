@@ -3,11 +3,15 @@ set -euo pipefail
 umask 077
 
 cd /opt/biznesoty
-image=${1:?Immutable registry image is required}
-[[ "$image" =~ ^cr\.yandex/[a-z0-9]+/sreda:[a-f0-9]{40}$ ]] || {
+image=${1:?Immutable SHA-tagged image is required}
+if [[ "$image" =~ ^biznesoty:[a-f0-9]{40}$ ]]; then
+  image_source="local"
+elif [[ "$image" =~ ^cr\.yandex/[a-z0-9]+/sreda:[a-f0-9]{40}$ ]]; then
+  image_source="registry"
+else
   echo "Invalid immutable image" >&2
   exit 1
-}
+fi
 
 for env_file in /opt/biznesoty/app.env /opt/biznesoty/db.env /opt/biznesoty/caddy.env; do
   [[ -f "$env_file" ]] || {
@@ -103,8 +107,19 @@ backup_destination="$(
 )"
 bash /opt/biznesoty/deploy/backup.sh "$backup_destination"
 
-yc iam create-token | docker login --username iam --password-stdin cr.yandex
-docker pull "$image"
+if [[ "$image_source" == "registry" ]]; then
+  command -v yc >/dev/null 2>&1 || {
+    echo "yc CLI is required for registry-based releases" >&2
+    exit 1
+  }
+  yc iam create-token | docker login --username iam --password-stdin cr.yandex
+  docker pull "$image"
+else
+  docker image inspect "$image" >/dev/null 2>&1 || {
+    echo "Transferred immutable image is not loaded on the host" >&2
+    exit 1
+  }
+fi
 
 docker compose "${compose[@]}" run --rm migrate
 migration_after="$(
