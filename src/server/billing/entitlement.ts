@@ -129,9 +129,54 @@ export async function assertEntitlement(
  * confirmed provider event (or active subscription item) authorizes the grant.
  */
 export async function assertCanGrantEntitlement(input: {
+  db: Db;
   businessId: string;
   solutionCode: string;
+  at?: Date;
 }): Promise<void> {
-  void input;
-  // Intentional no-op only while the explicit Closed Beta mode is active.
+  const mode = (process.env.BILLING_MODE || "closed_beta").trim();
+
+  if (mode === "closed_beta") return;
+  if (mode !== "paid") {
+    throw new AppError(
+      503,
+      "BILLING_MODE_INVALID",
+      "Режим оплаты настроен некорректно.",
+    );
+  }
+
+  const code = normalizeSolutionCode(input.solutionCode);
+  const at = input.at ?? new Date();
+  const subscription = await input.db
+    .selectFrom("business_subscription as s")
+    .innerJoin(
+      "business_subscription_item as i",
+      "i.subscription_id",
+      "s.id",
+    )
+    .select([
+      "s.status",
+      "s.provider",
+      "s.current_period_end",
+      "i.solution_code",
+    ])
+    .where("s.business_id", "=", input.businessId)
+    .where("i.business_id", "=", input.businessId)
+    .where("i.solution_code", "in", code === "orders" ? ["orders", "sales"] : [code])
+    .where("s.status", "in", ["trialing", "active"])
+    .where("s.provider", "in", ["yookassa", "stripe"])
+    .executeTakeFirst();
+
+  const active =
+    !!subscription &&
+    (!subscription.current_period_end ||
+      subscription.current_period_end.getTime() > at.getTime());
+
+  if (!active) {
+    throw new AppError(
+      402,
+      "PAYMENT_REQUIRED",
+      "Для подключения решения требуется активная оплаченная подписка.",
+    );
+  }
 }
