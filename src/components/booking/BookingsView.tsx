@@ -254,7 +254,7 @@ function Calendar({
     return () => {
       alive = false;
     };
-  }, [base, deepClientId]);
+  }, [base, deepClientId, clients]);
   useEffect(() => {
     let alive = true;
     void Promise.all([
