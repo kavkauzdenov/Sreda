@@ -5,7 +5,7 @@
 
 # Alias brand hosts: TLS + reverse_proxy so Next.js canonical-host can 308 → APP_URL.
 # Do NOT set these as APP_URL / Better Auth trustedOrigins.
-www.{$BIZNESOTY_DOMAIN}, biznesoty.online, xn--90aifd0ahuj5f.xn--p1ai {
+www.{$BIZNESOTY_DOMAIN}, biznesoty.online, www.biznesoty.online, xn--90aifd0ahuj5f.xn--p1ai {
 	encode zstd gzip
 	reverse_proxy app:3000
 }
