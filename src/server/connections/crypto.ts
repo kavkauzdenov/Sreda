@@ -14,9 +14,10 @@ function keyId(secret: string) {
 }
 
 function encryptionKeyring(legacySecret: string) {
-  const primary = process.env.CONNECTION_ENCRYPTION_KEY?.trim() || legacySecret;
-  if (primary.length < 32)
+  const configured = process.env.CONNECTION_ENCRYPTION_KEY?.trim();
+  if (configured && configured.length < 32)
     throw new Error("CONNECTION_ENCRYPTION_KEY must be at least 32 characters");
+  const primary = configured || legacySecret;
 
   const previous = (process.env.CONNECTION_ENCRYPTION_PREVIOUS_KEYS || "")
     .split(",")
@@ -46,7 +47,7 @@ function decryptWithSecret(
 }
 
 export function encryptSecret(value: string, legacySecret: string) {
-  const [primary] = encryptionKeyring(legacySecret);
+  const primary = encryptionKeyring(legacySecret)[0]!;
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", digest(primary), iv);
   const encrypted = Buffer.concat([
@@ -78,7 +79,7 @@ export function decryptSecret(value: string, legacySecret: string) {
 
     for (const secret of candidates) {
       try {
-        return decryptWithSecret(iv, tag, data, secret);
+        return decryptWithSecret(iv!, tag!, data!, secret);
       } catch {
         // Try another key with the same id only in the extremely unlikely event
         // of a truncated-id collision.
@@ -93,7 +94,7 @@ export function decryptSecret(value: string, legacySecret: string) {
 
     for (const secret of keyring) {
       try {
-        return decryptWithSecret(iv, tag, data, secret);
+        return decryptWithSecret(iv!, tag!, data!, secret);
       } catch {
         // Legacy v1 had no key id, so rotation requires trying the keyring.
       }
