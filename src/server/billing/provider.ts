@@ -20,7 +20,8 @@ export interface BillingProvider {
 export class NoopBillingProvider implements BillingProvider {
   readonly name = "noop" as const;
 
-  async createCheckout(_input: CheckoutInput): Promise<CheckoutSession> {
+  async createCheckout(input: CheckoutInput): Promise<CheckoutSession> {
+    void input;
     throw new AppError(
       501,
       "BILLING_NOT_CONFIGURED",
@@ -29,9 +30,11 @@ export class NoopBillingProvider implements BillingProvider {
   }
 
   async handleWebhook(
-    _rawBody: string,
-    _headers: Headers,
+    rawBody: string,
+    headers: Headers,
   ): Promise<WebhookResult> {
+    void rawBody;
+    void headers;
     return { handled: false, reason: "noop_provider" };
   }
 }
