@@ -159,16 +159,6 @@
   --control-radio: 18px;
   --control-checkbox: 20px;
 
-  /* Gestalt-inspired onboarding tokens */
-  --onboarding-max-width: 560px;
-  --stepper-size: 32px;
-  --stepper-size-sm: 28px;
-  --stepper-gap: 12px;
-  --card-padding: var(--space-6);
-  --card-gap: var(--space-4);
-  --section-gap: var(--space-8);
-  --content-gap: var(--space-4);
-  --badge-radius: 9999px;
 }
 
 [data-theme="dark"] {
