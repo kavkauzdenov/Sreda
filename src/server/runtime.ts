@@ -16,6 +16,7 @@ function initialize() {
     pool: new Pool({ connectionString: config.databaseUrl, max: 10,
       connectionTimeoutMillis: 5000, idleTimeoutMillis: 30000 }),
   }) });
+  const backgroundEnabled = process.env.BACKGROUND_WORKER_ENABLED === "true";
   const telegramEnabled = process.env.TELEGRAM_WEBHOOKS_ENABLED === "true";
   const vkEnabled = process.env.VK_WEBHOOKS_ENABLED === "true";
   const metaEnabled =
@@ -24,6 +25,7 @@ function initialize() {
     process.env.INSTAGRAM_WEBHOOKS_ENABLED === "true";
   return {
     ...config,
+    backgroundEnabled,
     telegramEnabled,
     vkEnabled,
     metaEnabled,
