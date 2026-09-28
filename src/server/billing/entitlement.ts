@@ -128,9 +128,10 @@ export async function assertEntitlement(
  * When YooKassa/Stripe is confirmed, replace this with a check that a
  * confirmed provider event (or active subscription item) authorizes the grant.
  */
-export async function assertCanGrantEntitlement(_input: {
+export async function assertCanGrantEntitlement(input: {
   businessId: string;
   solutionCode: string;
 }): Promise<void> {
-  // Intentional no-op for Closed Beta — payment provider not integrated.
+  void input;
+  // Intentional no-op only while the explicit Closed Beta mode is active.
 }
