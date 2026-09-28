@@ -81,6 +81,16 @@ async function login() {
 
 async function grantRole(userId, role, createdBy = userId) {
   await db
+    .insertInto("account_pin")
+    .values({
+      user_id: userId,
+      pin_hash: "test-only-admin-pin-hash",
+      failed_attempts: 0,
+      locked_until: null,
+    })
+    .onConflict((oc) => oc.column("user_id").doNothing())
+    .execute();
+  await db
     .insertInto("platform_admin")
     .values({
       user_id: userId,
@@ -172,6 +182,26 @@ test("tenant isolation: user A cannot read business B via client API", async () 
     biz.id,
   );
   assert.equal(denied.status, 404);
+});
+
+test("platform admin without PIN is denied until MFA is configured", async () => {
+  const account = await login();
+  await db
+    .insertInto("platform_admin")
+    .values({
+      user_id: account.internalId,
+      role: "SUPER_ADMIN",
+      status: "active",
+      created_by: account.internalId,
+      revoked_at: null,
+    })
+    .execute();
+  const res = await adminApi.me(
+    request("/api/admin/me", { cookie: account.cookie }),
+  );
+  assert.equal(res.status, 403);
+  const payload = await res.json();
+  assert.equal(payload.error.code, "ADMIN_MFA_REQUIRED");
 });
 
 test("SUPER_ADMIN can read dashboard with real counts and no secrets", async () => {
