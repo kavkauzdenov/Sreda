@@ -12,10 +12,11 @@ test("production compose keeps background jobs independent from Telegram", () =>
   assert.match(compose, /telegram-worker:/);
   assert.match(compose, /scripts\/telegram-worker\.mts/);
   assert.match(compose, /meta-worker:/);
-  assert.equal(
-    /background-worker:[\s\S]*?profiles:\s*\["telegram"\]/.test(compose),
-    false,
-  );
+  const backgroundBlock = compose
+    .split("  background-worker:", 2)[1]
+    ?.split("\n  telegram-worker:", 1)[0] ?? "";
+  assert.notEqual(backgroundBlock, "");
+  assert.equal(/profiles:/.test(backgroundBlock), false);
 });
 
 test("database health and backup use runtime DB identity instead of brand names", () => {
