@@ -6028,6 +6028,7 @@ ul {
   .analytics-viewer__scroll { display: none; }
   .analytics-viewer__cards { display: grid; }
   .analytics-page { padding-inline: var(--space-3); }
+}
 
 /* ============================================================
    * Gestalt-inspired onboarding & progress stepper
@@ -6762,11 +6763,6 @@ ul {
   .form-field--error .form-field__input {
     border-color: var(--danger);
   }
-
-  
-
-
-}
 
 /* ==========================================================================
    Biznesoty rebrand — new dashboard / shell components
