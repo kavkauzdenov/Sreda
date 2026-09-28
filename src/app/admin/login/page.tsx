@@ -41,6 +41,13 @@ function AdminLoginForm() {
           setError(
             "Для админ-панели обязателен PIN аккаунта. Включите его в обычных настройках безопасности и войдите снова.",
           );
+        } else if (
+          e instanceof AdminApiError &&
+          e.code === "ADMIN_MFA_REAUTH_REQUIRED"
+        ) {
+          setError(
+            "Для админ-панели нужно войти заново и подтвердить PIN аккаунта.",
+          );
         } else if (e instanceof AdminApiError && e.status === 403) {
           setError("Нет доступа к панели");
         } else {
