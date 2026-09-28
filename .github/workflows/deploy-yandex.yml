@@ -4,60 +4,77 @@ on:
   push:
     branches:
       - deploy/production
+
 permissions:
   contents: read
   actions: read
+
 concurrency:
   group: yandex-deploy
   cancel-in-progress: false
+
 jobs:
   deploy:
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/deploy/production'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     env:
-      IMAGE: cr.yandex/${{ secrets.YC_REGISTRY_ID }}/sreda:${{ github.sha }}
+      IMAGE: biznesoty:${{ github.sha }}
+
     steps:
       - uses: actions/checkout@v4
+
       - name: Require deployment branch to equal current main
         if: github.ref == 'refs/heads/deploy/production'
         run: |
+          set -euo pipefail
           git fetch --no-tags origin main:refs/remotes/origin/main
           test "$GITHUB_SHA" = "$(git rev-parse refs/remotes/origin/main)"
+
       - name: Require successful verification of this commit
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/verify.yml/runs?head_sha=$GITHUB_SHA&status=success" --jq '.workflow_runs | length' | awk '{if ($1 < 1) exit 1}'
-      - uses: docker/login-action@v3
-        with:
-          registry: cr.yandex
-          username: json_key
-          password: ${{ secrets.YC_REGISTRY_KEY }}
-      - name: Build and push immutable image
+          set -euo pipefail
+          count="$(
+            gh api "repos/$GITHUB_REPOSITORY/actions/workflows/verify.yml/runs?head_sha=$GITHUB_SHA&status=success"               --jq '.workflow_runs | length'
+          )"
+          test "$count" -ge 1
+
+      - name: Build immutable deployment image
         run: |
+          set -euo pipefail
+          [[ "$IMAGE" =~ ^biznesoty:[a-f0-9]{40}$ ]]
           BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          docker build \
-            --build-arg BUILD_SHA="$GITHUB_SHA" \
-            --build-arg BUILD_TIME="$BUILD_TIME" \
-            -t "$IMAGE" .
-          docker push "$IMAGE"
+          docker build             --build-arg BUILD_SHA="$GITHUB_SHA"             --build-arg BUILD_TIME="$BUILD_TIME"             -t "$IMAGE" .
+          docker image inspect "$IMAGE" >/dev/null
+          docker save "$IMAGE" | gzip -1 > /tmp/biznesoty-image.tar.gz
+          test -s /tmp/biznesoty-image.tar.gz
+          sha256sum /tmp/biznesoty-image.tar.gz > /tmp/biznesoty-image.tar.gz.sha256
+
       - name: Configure SSH
         env:
           SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
         run: |
+          set -euo pipefail
+          test -n "$SSH_KEY"
+          test -n "$KNOWN_HOSTS"
           umask 077
           mkdir -p ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
-      - name: Deliver deployment files and release
+
+      - name: Deliver immutable image and release
         env:
           HOST: ${{ secrets.DEPLOY_HOST }}
           LOGIN: ${{ secrets.DEPLOY_USER }}
         run: |
-          [[ "$IMAGE" =~ ^cr\.yandex/[a-z0-9]+/sreda:[a-f0-9]{40}$ ]]
+          set -euo pipefail
+          [[ "$IMAGE" =~ ^biznesoty:[a-f0-9]{40}$ ]]
           [[ "$LOGIN" =~ ^[a-z_][a-z0-9_-]*$ ]]
           [[ "$HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]
-          scp -o BatchMode=yes -o StrictHostKeyChecking=yes deploy/compose.yml deploy/Caddyfile deploy/release.sh deploy/backup.sh deploy/restore-drill.sh "$LOGIN@$HOST:/opt/biznesoty/deploy/"
-          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$LOGIN@$HOST" bash /opt/biznesoty/deploy/release.sh "$IMAGE"
+
+          scp -o BatchMode=yes -o StrictHostKeyChecking=yes             deploy/compose.yml             deploy/Caddyfile             deploy/release.sh             deploy/backup.sh             deploy/restore-drill.sh             /tmp/biznesoty-image.tar.gz             /tmp/biznesoty-image.tar.gz.sha256             "$LOGIN@$HOST:/opt/biznesoty/deploy/"
+
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$LOGIN@$HOST"             "set -euo pipefail;              cd /opt/biznesoty/deploy;              sha256sum -c biznesoty-image.tar.gz.sha256;              gzip -dc biznesoty-image.tar.gz | docker load;              docker image inspect '$IMAGE' >/dev/null;              rm -f biznesoty-image.tar.gz biznesoty-image.tar.gz.sha256;              bash /opt/biznesoty/deploy/release.sh '$IMAGE'"
