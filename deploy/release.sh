@@ -79,6 +79,8 @@ fi
 
 rollback_tag="biznesoty:rollback-$(date -u +%Y%m%dT%H%M%SZ)"
 current_container="$(docker compose "${compose[@]}" ps -q app 2>/dev/null || true)"
+had_background_worker="$(docker compose "${compose[@]}" ps -q background-worker 2>/dev/null || true)"
+had_meta_worker="$(docker compose "${compose[@]}" ps -q meta-worker 2>/dev/null || true)"
 if [[ -n "$current_container" ]]; then
   current_image_id="$(docker inspect "$current_container" --format '{{.Image}}')"
   docker image tag "$current_image_id" "$rollback_tag"
@@ -135,6 +137,15 @@ if [[ "$migration_before" == "$migration_after" && -n "$current_container" ]]; t
   echo "No new migrations were applied; rolling application containers back." >&2
   export SREDA_IMAGE="$rollback_tag"
   docker compose "${compose[@]}" up -d --remove-orphans
+
+  # The first hardened release may roll back to an image that predates the
+  # split workers. Restore the topology that was actually running before deploy.
+  if [[ -z "$had_background_worker" ]]; then
+    docker compose "${compose[@]}" stop background-worker || true
+  fi
+  if [[ -z "$had_meta_worker" ]]; then
+    docker compose "${compose[@]}" --profile meta stop meta-worker || true
+  fi
 
   for attempt in {1..30}; do
     if docker compose "${compose[@]}" exec -T app node -e       "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"; then
