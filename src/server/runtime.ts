@@ -16,8 +16,25 @@ function initialize() {
     pool: new Pool({ connectionString: config.databaseUrl, max: 10,
       connectionTimeoutMillis: 5000, idleTimeoutMillis: 30000 }),
   }) });
-  return { ...config, telegramEnabled: process.env.TELEGRAM_WEBHOOKS_ENABLED === "true", vkEnabled: process.env.VK_WEBHOOKS_ENABLED === "true", db, auth: createIdentity({ ...config, db }),
-    workspaces: new WorkspaceService(db), leads: new LeadService(db), invitations: new InvitationService(db), connections: new ConnectionService(db, config.secret), communications: new CommunicationService(db) };
+  const telegramEnabled = process.env.TELEGRAM_WEBHOOKS_ENABLED === "true";
+  const vkEnabled = process.env.VK_WEBHOOKS_ENABLED === "true";
+  const metaEnabled =
+    process.env.META_WEBHOOKS_ENABLED === "true" ||
+    process.env.WHATSAPP_WEBHOOKS_ENABLED === "true" ||
+    process.env.INSTAGRAM_WEBHOOKS_ENABLED === "true";
+  return {
+    ...config,
+    telegramEnabled,
+    vkEnabled,
+    metaEnabled,
+    db,
+    auth: createIdentity({ ...config, db }),
+    workspaces: new WorkspaceService(db),
+    leads: new LeadService(db),
+    invitations: new InvitationService(db),
+    connections: new ConnectionService(db, config.secret),
+    communications: new CommunicationService(db),
+  };
 }
 const state = globalThis as typeof globalThis & { sredaRuntime?: ReturnType<typeof initialize> };
 export function getRuntime() {
