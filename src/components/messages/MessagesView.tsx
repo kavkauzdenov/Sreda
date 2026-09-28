@@ -64,6 +64,9 @@ type Message = {
   createdAt: string;
   deliveryStatus: string;
 };
+
+const CLOSE_DIALOG_MESSAGE =
+  "Спасибо за обращение! Диалог закрыт. Если появятся новые вопросы — напишите нам.";
 export function MessagesView() {
   const { currentBusiness } = useBusinessContext();
   return currentBusiness ? (
@@ -173,6 +176,38 @@ function Inbox({
       setBusy(false);
     }
   }
+  async function closeDialog() {
+    if (!selected || busy || current?.status === "closed") return;
+    setBusy(true);
+    setError("");
+    try {
+      await apiRequest(base + "/" + selected, {
+        method: "POST",
+        body: JSON.stringify({
+          text: CLOSE_DIALOG_MESSAGE,
+          requestKey: crypto.randomUUID(),
+        }),
+      });
+      await apiRequest(base + "/" + selected, {
+        method: "PATCH",
+        body: JSON.stringify({ status: "closed" }),
+      });
+      setMessagePage(0);
+      const [nextMessages, nextConversations] = await Promise.all([
+        apiRequest<Message[]>(base + "/" + selected),
+        apiRequest<Conversation[]>(listQuery),
+      ]);
+      setMessages(nextMessages);
+      setConversations(nextConversations);
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "Не удалось закрыть диалог.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function send() {
     if ((!text.trim() && !files.length) || busy || uploading) return;
     setBusy(true);
@@ -335,9 +370,11 @@ function Inbox({
                         ? " · " + waitingLabel(c.waitingSince)
                         : ""}
                     </small>
-                    {c.assignedName && (
+                    {c.status === "closed" ? (
+                      <small>Диалог закрыт</small>
+                    ) : c.assignedName ? (
                       <small>В работе · {c.assignedName}</small>
-                    )}
+                    ) : null}
                   </button>
                 </li>
               ))}
@@ -363,19 +400,24 @@ function Inbox({
               <div className="message-actions">
                 <button
                   className="button button--primary button--sm"
-                  disabled={busy}
+                  disabled={busy || current?.status === "closed"}
                   onClick={() => void status("assigned")}
                 >
                   Взять в работу
                 </button>
                 <button
                   className="button button--outline button--sm"
-                  disabled={busy}
-                  onClick={() => void status("closed")}
+                  disabled={busy || current?.status === "closed"}
+                  onClick={() => void closeDialog()}
                 >
-                  Закрыть диалог
+                  {current?.status === "closed" ? "Диалог закрыт" : "Закрыть диалог"}
                 </button>
               </div>
+              {current?.status === "closed" ? (
+                <p className="text-body-sm" role="status">
+                  Диалог закрыт. Новое сообщение клиента автоматически откроет его снова.
+                </p>
+              ) : null}
               <nav aria-label="История переписки">
                 <button
                   disabled={messages.length < 500}
@@ -426,6 +468,7 @@ function Inbox({
                   </article>
                 ))}
               </div>
+              {current?.status !== "closed" ? (
               <form
                 className="message-composer"
                 onSubmit={(e) => {
@@ -476,6 +519,7 @@ function Inbox({
                   </button>
                 </div>
               </form>
+              ) : null}
             </>
           )}
         </section>
