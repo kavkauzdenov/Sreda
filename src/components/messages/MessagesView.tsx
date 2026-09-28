@@ -181,16 +181,16 @@ function Inbox({
     setBusy(true);
     setError("");
     try {
-      await apiRequest(base + "/" + selected, {
+      const result = await apiRequest<{
+        status: string;
+        notification: "queued" | "failed" | "already_closed";
+      }>(base + "/" + selected, {
         method: "POST",
         body: JSON.stringify({
-          text: CLOSE_DIALOG_MESSAGE,
+          action: "close",
+          message: CLOSE_DIALOG_MESSAGE,
           requestKey: crypto.randomUUID(),
         }),
-      });
-      await apiRequest(base + "/" + selected, {
-        method: "PATCH",
-        body: JSON.stringify({ status: "closed" }),
       });
       setMessagePage(0);
       const [nextMessages, nextConversations] = await Promise.all([
@@ -199,6 +199,15 @@ function Inbox({
       ]);
       setMessages(nextMessages);
       setConversations(nextConversations);
+      if (!nextConversations.some((conversation) => conversation.id === selected)) {
+        setSelected(nextConversations[0]?.id ?? "");
+        setMessages([]);
+      }
+      if (result.notification === "failed") {
+        setError(
+          "Диалог закрыт, но финальное сообщение клиенту не доставлено. Проверьте подключение канала.",
+        );
+      }
     } catch (e) {
       setError(
         e instanceof Error ? e.message : "Не удалось закрыть диалог.",
