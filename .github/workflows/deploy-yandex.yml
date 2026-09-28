@@ -50,7 +50,7 @@ jobs:
           docker image inspect "$IMAGE" >/dev/null
           docker save "$IMAGE" | gzip -1 > /tmp/biznesoty-image.tar.gz
           test -s /tmp/biznesoty-image.tar.gz
-          sha256sum /tmp/biznesoty-image.tar.gz > /tmp/biznesoty-image.tar.gz.sha256
+          (cd /tmp && sha256sum biznesoty-image.tar.gz > biznesoty-image.tar.gz.sha256)
 
       - name: Configure SSH
         env:
