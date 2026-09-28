@@ -53,10 +53,15 @@ Workflow запускается либо вручную из `main`, либо к
 Workflow:
 1. принимает только `main` или `deploy/production`;
 2. требует успешный Verify точного SHA;
-3. собирает immutable image `cr.yandex/<registry>/sreda:<git-sha>`;
+3. собирает immutable image `biznesoty:<git-sha>`;
 4. в image зашиваются `APP_BUILD_SHA` и `APP_BUILD_TIME`;
-5. копируются deploy scripts;
-6. по SSH запускается `release.sh <immutable-image>`.
+5. image сериализуется через `docker save`, сжимается и получает SHA256;
+6. deploy scripts + image + checksum передаются на VM по SSH/SCP;
+7. VM проверяет checksum, выполняет `docker load` и только затем запускает `release.sh <immutable-image>`.
+
+Yandex Container Registry больше не является обязательной точкой отказа для штатного
+release. `release.sh` сохраняет совместимость с registry-tag для ручного аварийного
+сценария, но controlled workflow использует прямую зашифрованную SSH-передачу image.
 
 На VM `release.sh`:
 1. проверяет env-файлы и их права;
@@ -65,7 +70,7 @@ Workflow:
 4. запускает/проверяет DB;
 5. выполняет **validated backup до migrations**;
 6. при настроенном `BACKUP_S3_DESTINATION` отправляет dump + SHA256 в российский Object Storage;
-7. получает immutable image;
+7. проверяет, что переданный immutable image действительно загружен локально;
 8. применяет forward-only migrations;
 9. запускает app + background worker + включённые channel workers;
 10. ждёт полного `/api/health`;
