@@ -337,7 +337,7 @@ test("closing a conversation is atomic and channel failure does not leave CRM op
   const inbound = await svc.recordInbound({
     businessId: f.b.id,
     platform: "telegram",
-    externalUserId: "close-" + randomUUID(),
+    externalUserId: "901337",
     text: "Закройте диалог",
     externalMessageId: randomUUID(),
   });
