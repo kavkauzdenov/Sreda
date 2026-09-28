@@ -29,7 +29,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh api "repos/$GITHUB_REPOSITORY/actions/workflows/verify.yml/runs?head_sha=$GITHUB_SHA&status=success" --jq '.workflow_runs | length' | awk '{if ($1 < 1) exit 1}'
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: cr.yandex
           username: json_key
