@@ -26,7 +26,25 @@ export async function acceptLogin(db: Kysely<Database>, before: Awaited<ReturnTy
       const now = new Date();
       if (currentPin.locked_until && currentPin.locked_until > now) failure = "locked";
       else if (await verifyPin(secret, before.userId, currentPin.pin_hash, pin)) {
-        await tx.updateTable("account_pin").set({ failed_attempts: 0, locked_until: null }).where("user_id", "=", before.userId).execute();
+        await tx
+          .updateTable("account_pin")
+          .set({ failed_attempts: 0, locked_until: null })
+          .where("user_id", "=", before.userId)
+          .execute();
+        await tx
+          .insertInto("platform_admin_mfa_session")
+          .values({
+            session_id: session.id,
+            user_id: before.userId,
+            verified_at: new Date(),
+          })
+          .onConflict((oc) =>
+            oc.column("session_id").doUpdateSet({
+              user_id: before.userId,
+              verified_at: new Date(),
+            }),
+          )
+          .execute();
         return "accepted";
       } else {
         failure = "pin";
