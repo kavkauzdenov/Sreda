@@ -1,0 +1,77 @@
+import { Kysely, PostgresDialect, sql } from "kysely";
+import { Pool } from "pg";
+import { queueNotification } from "../src/server/notifications/worker.ts";
+import {
+  queueScheduledPost,
+  materializeRecurringPost,
+} from "../src/server/posts/worker.ts";
+import { queueBookingReminder } from "../src/server/booking/worker.ts";
+import { processEntityReminder } from "../src/server/calendar/worker.ts";
+import { processSetupDrafts } from "../src/server/solutions/setup-draft-worker.ts";
+import { runtimeConfig } from "../src/server/identity/config.ts";
+import type { Database } from "../src/server/db/schema.ts";
+
+const config = runtimeConfig();
+const db = new Kysely<Database>({
+  dialect: new PostgresDialect({
+    pool: new Pool({ connectionString: config.databaseUrl, max: 3 }),
+  }),
+});
+
+const heartbeatNames = [
+  "background",
+  "notifications",
+  "autopost",
+  "booking_reminders",
+  "entity_reminders",
+  "setup_drafts",
+] as const;
+
+async function heartbeat(name: (typeof heartbeatNames)[number]) {
+  await db
+    .insertInto("worker_heartbeat")
+    .values({ name, seen_at: new Date() })
+    .onConflict((oc) =>
+      oc.column("name").doUpdateSet({ seen_at: new Date() }),
+    )
+    .execute();
+}
+
+let stopping = false;
+process.on("SIGTERM", () => {
+  stopping = true;
+});
+process.on("SIGINT", () => {
+  stopping = true;
+});
+
+try {
+  while (!stopping) {
+    try {
+      await queueNotification(db, config.origin);
+      await heartbeat("notifications");
+
+      await materializeRecurringPost(db);
+      await queueScheduledPost(db);
+      await heartbeat("autopost");
+
+      await queueBookingReminder(db);
+      await heartbeat("booking_reminders");
+
+      await processEntityReminder(db);
+      await heartbeat("entity_reminders");
+
+      await processSetupDrafts(db);
+      await heartbeat("setup_drafts");
+
+      await heartbeat("background");
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    } catch {
+      console.error(JSON.stringify({ code: "BACKGROUND_WORKER_ERROR" }));
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+  }
+} finally {
+  await sql`delete from worker_heartbeat where name in ('background','notifications','autopost','booking_reminders','entity_reminders','setup_drafts')`.execute(db);
+  await db.destroy();
+}
