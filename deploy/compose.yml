@@ -14,6 +14,8 @@ services:
     image: ${SREDA_IMAGE:?Set immutable image tag}
     restart: unless-stopped
     env_file: /opt/biznesoty/app.env
+    environment:
+      BACKGROUND_WORKER_ENABLED: "true"
     depends_on:
       db:
         condition: service_healthy
@@ -27,6 +29,8 @@ services:
     image: ${SREDA_IMAGE:?Set immutable image tag}
     restart: unless-stopped
     env_file: /opt/biznesoty/app.env
+    environment:
+      BACKGROUND_WORKER_ENABLED: "true"
     command: ["node", "--import", "tsx", "scripts/background-worker.mts"]
     depends_on:
       db:
