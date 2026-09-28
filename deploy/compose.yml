@@ -6,7 +6,7 @@ services:
     volumes:
       - postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U biznesoty -d biznesoty"]
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -14,17 +14,27 @@ services:
     image: ${SREDA_IMAGE:?Set immutable image tag}
     restart: unless-stopped
     env_file: /opt/biznesoty/app.env
+    environment:
+      BACKGROUND_WORKER_ENABLED: "true"
     depends_on:
       db:
         condition: service_healthy
-    # App container readiness = web+DB only. Full worker readiness is /api/health
-    # (used by release.sh after profiles start). Do not couple app health to workers.
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health/web').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 20s
       timeout: 8s
       retries: 3
       start_period: 60s
+  background-worker:
+    image: ${SREDA_IMAGE:?Set immutable image tag}
+    restart: unless-stopped
+    env_file: /opt/biznesoty/app.env
+    environment:
+      BACKGROUND_WORKER_ENABLED: "true"
+    command: ["node", "--import", "tsx", "scripts/background-worker.mts"]
+    depends_on:
+      db:
+        condition: service_healthy
   telegram-worker:
     image: ${SREDA_IMAGE:?Set immutable image tag}
     restart: unless-stopped
@@ -40,6 +50,15 @@ services:
     env_file: /opt/biznesoty/app.env
     command: ["node", "--import", "tsx", "scripts/vk-worker.mts"]
     profiles: ["vk"]
+    depends_on:
+      db:
+        condition: service_healthy
+  meta-worker:
+    image: ${SREDA_IMAGE:?Set immutable image tag}
+    restart: unless-stopped
+    env_file: /opt/biznesoty/app.env
+    command: ["node", "--import", "tsx", "scripts/meta-worker.mts"]
+    profiles: ["meta"]
     depends_on:
       db:
         condition: service_healthy

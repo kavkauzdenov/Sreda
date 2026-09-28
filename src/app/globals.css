@@ -159,16 +159,6 @@
   --control-radio: 18px;
   --control-checkbox: 20px;
 
-  /* Gestalt-inspired onboarding tokens */
-  --onboarding-max-width: 560px;
-  --stepper-size: 32px;
-  --stepper-size-sm: 28px;
-  --stepper-gap: 12px;
-  --card-padding: var(--space-6);
-  --card-gap: var(--space-4);
-  --section-gap: var(--space-8);
-  --content-gap: var(--space-4);
-  --badge-radius: 9999px;
 }
 
 [data-theme="dark"] {
@@ -6028,6 +6018,7 @@ ul {
   .analytics-viewer__scroll { display: none; }
   .analytics-viewer__cards { display: grid; }
   .analytics-page { padding-inline: var(--space-3); }
+}
 
 /* ============================================================
    * Gestalt-inspired onboarding & progress stepper
@@ -6762,11 +6753,6 @@ ul {
   .form-field--error .form-field__input {
     border-color: var(--danger);
   }
-
-  
-
-
-}
 
 /* ==========================================================================
    Biznesoty rebrand — new dashboard / shell components

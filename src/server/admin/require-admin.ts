@@ -60,6 +60,33 @@ export async function requirePlatformAdmin(
     throw new AppError(403, "FORBIDDEN", "Недостаточно прав.");
   }
 
+  const pin = await options.db
+    .selectFrom("account_pin")
+    .select("user_id")
+    .where("user_id", "=", session.user.id)
+    .executeTakeFirst();
+  if (!pin) {
+    throw new AppError(
+      403,
+      "ADMIN_MFA_REQUIRED",
+      "Для доступа к админ-панели включите PIN аккаунта в настройках безопасности.",
+    );
+  }
+
+  const verifiedSession = await options.db
+    .selectFrom("platform_admin_mfa_session")
+    .select("verified_at")
+    .where("session_id", "=", session.session.id)
+    .where("user_id", "=", session.user.id)
+    .executeTakeFirst();
+  if (!verifiedSession) {
+    throw new AppError(
+      403,
+      "ADMIN_MFA_REAUTH_REQUIRED",
+      "Выйдите и войдите снова, подтвердив PIN аккаунта.",
+    );
+  }
+
   const role = row.role as PlatformAdminRole;
   if (!platformAllowed(role, permission)) {
     throw new AppError(403, "FORBIDDEN", "Недостаточно прав.");

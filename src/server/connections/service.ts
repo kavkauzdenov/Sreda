@@ -315,14 +315,14 @@ export class ConnectionService {
           .values({
             connection_id: connection.id,
             encrypted_token: encryptSecret(token, this.secret),
-            key_version: 1,
+            key_version: 2,
           })
           .onConflict((oc) =>
             oc
               .column("connection_id")
               .doUpdateSet({
                 encrypted_token: encryptSecret(token, this.secret),
-                key_version: 1,
+                key_version: 2,
                 updated_at: new Date(),
               }),
           )

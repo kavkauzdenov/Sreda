@@ -3,23 +3,24 @@ import { getRuntime } from "@/server/runtime";
 
 export const dynamic = "force-dynamic";
 
-/**
- * Full dependency readiness (deploy / ops gate).
- * Checks web process, database, and required worker heartbeats
- * (telegram/vk/autopost/booking_reminders write `worker_heartbeat` while looping).
- * Never returns secrets or connection strings — only ok / unavailable / disabled.
- * For process-only liveness use /api/health/live; for web+db deploy gate use /api/health/web.
- */
+const HEARTBEAT_TTL_MS = 60_000;
+
 export async function GET() {
   const checks: Record<string, string> = { web: "ok", database: "unavailable" };
   try {
     const r = getRuntime();
     await sql`select 1`.execute(r.db);
     checks.database = "ok";
-    const required = [
+
+    const required = new Set<string>([
+      ...(r.backgroundEnabled
+        ? ["background", "notifications", "entity_reminders", "setup_drafts"]
+        : []),
       ...(r.telegramEnabled ? ["telegram"] : []),
       ...(r.vkEnabled ? ["vk"] : []),
-    ];
+      ...(r.metaEnabled ? ["meta_delivery"] : []),
+    ]);
+
     const active = await r.db
       .selectFrom("business_solution as s")
       .innerJoin("business as b", "b.id", "s.business_id")
@@ -33,21 +34,47 @@ export async function GET() {
         ]),
       )
       .execute();
-    if (active.some((s) => s.solution_code === "booking"))
-      required.push("booking_reminders");
-    if (active.some((s) => s.solution_code === "autopost"))
-      required.push("autopost");
-    // Workers upsert heartbeat ~every loop; stale (>60s) means unavailable.
+
+    if (
+      r.backgroundEnabled &&
+      active.some((s) => s.solution_code === "booking")
+    )
+      required.add("booking_reminders");
+    if (
+      r.backgroundEnabled &&
+      active.some((s) => s.solution_code === "autopost")
+    )
+      required.add("autopost");
+
     const beats = await r.db
       .selectFrom("worker_heartbeat")
       .selectAll()
       .execute();
-    for (const name of ["telegram", "vk", "autopost", "booking_reminders"])
-      checks[name] = required.includes(name)
-        ? beats.some((b) => b.name === name && +b.seen_at > Date.now() - 60000)
+
+    const names = [
+      "background",
+      "telegram",
+      "vk",
+      "meta_delivery",
+      "notifications",
+      "autopost",
+      "booking_reminders",
+      "entity_reminders",
+      "setup_drafts",
+    ];
+
+    for (const name of names) {
+      checks[name] = required.has(name)
+        ? beats.some(
+            (beat) =>
+              beat.name === name &&
+              +beat.seen_at > Date.now() - HEARTBEAT_TTL_MS,
+          )
           ? "ok"
           : "unavailable"
         : "disabled";
+    }
+
     const ok = !Object.values(checks).includes("unavailable");
     return Response.json(
       { ok, checks },

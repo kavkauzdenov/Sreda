@@ -1,55 +1,69 @@
-# Billing domain (Closed Beta)
+# Billing domain
 
-Provider-agnostic billing architecture. **YooKassa / Stripe are not integrated** until explicitly confirmed.
+## Current mode
+
+Billing has an explicit runtime policy:
+
+- `BILLING_MODE=closed_beta` — current pilot mode. Owners may activate solutions
+  without a payment-provider event. The UI must state that payment is not connected.
+- `BILLING_MODE=paid` — activation is denied unless the database contains an
+  active/trialing provider-backed `business_subscription` plus a matching
+  `business_subscription_item`. Only real provider types (`yookassa` / `stripe`)
+  satisfy this guard.
+
+Unknown billing modes fail closed.
+
+The production default remains `closed_beta` until merchant credentials,
+receipt/tax configuration and provider webhooks are configured and accepted.
 
 ## Source of truth
 
 | Concern | Store | Notes |
 |---|---|---|
-| **Entitlement** (may use solution) | `business_solution` | `status` ∈ active\|trial\|expired\|disabled; `starts_at` / `expires_at` |
-| Provider subscription ledger | `business_subscription` + `business_subscription_item` | Future payment state only |
-| Catalog prices (docs / UI) | `billing_plan` + `src/lib/productSolutions.ts` | Seed mirrors product catalog kopecks |
+| Entitlement | `business_solution` | Runtime access: active/trial and non-expired |
+| Provider subscription ledger | `business_subscription` + `business_subscription_item` | Required for new grants in paid mode |
+| Catalog prices | `billing_plan` + `src/lib/productSolutions.ts` | Catalog estimate, not proof of payment |
 
-There is **no** separate `billing_entitlement` table — that would duplicate `business_solution`, which admin subscriptions and bot runtimes already use.
+There is no duplicate `billing_entitlement` table.
 
-Platform admins with `admin.subscriptions.manage` may **override** solution status/expiry (`overrideSolution`, audit `subscription.override`). That is operational, not payment confirmation.
+Platform admins with the appropriate permission may override solution state for
+support/operations; those actions are audited and are not payment receipts.
 
 ## Domain module
 
 `src/server/billing/`:
 
-- `getEntitlement(businessId, solutionCode)` — read entitlement from `business_solution`
-- `assertEntitlement` — throw `ENTITLEMENT_REQUIRED` when not entitled
-- `assertCanGrantEntitlement` — Closed Beta no-op; **hook for paid activation**
-- `BillingProvider` — `createCheckout`, `handleWebhook`
-  - `NoopBillingProvider` — production default; checkout returns 501, no fake success
-  - `MockBillingProvider` — **test-only**; construction throws in `NODE_ENV=production`
+- `getEntitlement` — reads effective runtime entitlement.
+- `assertEntitlement` — denies use when access is absent/expired/paused.
+- `assertCanGrantEntitlement` — enforces `BILLING_MODE`.
+- `BillingProvider` — provider boundary.
+- `NoopBillingProvider` — refuses checkout with `BILLING_NOT_CONFIGURED`;
+  it never fabricates successful payment.
+- `MockBillingProvider` — tests/development only and blocked in production.
 
-## Activation path
+## Paid-mode activation contract
 
-`SolutionService.activate` and leads setup completion call `assertCanGrantEntitlement` before writing `business_solution`. Today that always allows (Closed Beta). After a real provider is chosen, replace the no-op with: confirmed webhook / active subscription item → then upsert entitlement.
+A redirect from a checkout page is never enough to grant access.
 
-Client never activates “because redirect returned”. Provider event ids must be idempotent.
+Before switching `BILLING_MODE=paid`, the provider integration must:
+1. authenticate and verify provider callbacks;
+2. process provider event IDs idempotently;
+3. write/update the subscription ledger only from confirmed provider state;
+4. then let `assertCanGrantEntitlement` authorize activation;
+5. handle renewal, failed payment, cancellation, expiry and grace-period policy;
+6. satisfy merchant receipt/tax requirements.
 
-## Runtime hook points
+Until these external provider details are configured, production checkout must
+continue to fail honestly rather than simulate payment.
 
-Prefer `getEntitlement` / `assertEntitlement` instead of ad-hoc SQL:
+## UI contract
 
-| Path | Status |
-|---|---|
-| Autopost availability (`posts/availability`) | Uses `getEntitlement` |
-| Customer bot actions (`solutions/customer-actions`) | Still inline `business_solution` query — migrate when touching |
-| Telegram/VK autopost SQL filters | Still inline — migrate when touching |
-| Admin subscriptions UI | Lists `business_solution` (correct) |
-
-## UI honesty
-
-- `/billing` shows real active solutions + catalog prices (not `PagePlaceholder`)
-- Status copy: «Решения подключены · оплата не подключена»
-- Next step: «Подключение оплаты — следующий шаг»
-- No «payment succeeded» UI; `NoopBillingProvider.createCheckout` refuses
-- Dashboard `TariffCard` shows catalog estimate, not a fake next charge
+- `/billing` shows active solutions and catalog estimates.
+- It must not show a next-charge date or “payment succeeded” without real provider data.
+- In Closed Beta it explicitly states that payment is not connected.
+- Product price is an estimate/catalog value until provider billing is enabled.
 
 ## Migration
 
-`055_billing_domain.sql` — additive `billing_plan`, `business_subscription`, `business_subscription_item`.
+`055_billing_domain.sql` provides the provider-agnostic plan/subscription ledger.
+Hardening does not fabricate payment events or merchant credentials.

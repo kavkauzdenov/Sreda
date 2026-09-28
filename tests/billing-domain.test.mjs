@@ -5,6 +5,7 @@ import { Kysely, PGliteDialect } from "kysely";
 import { PGlite } from "@electric-sql/pglite";
 import { migrate } from "../src/server/db/migrate.ts";
 import {
+  assertCanGrantEntitlement,
   assertEntitlement,
   buildBillingSummary,
   getEntitlement,
@@ -95,6 +96,60 @@ test("trial entitlement is active until expires_at", async () => {
   assert.equal(entitlement.solutionCode, "orders");
   assert.equal(entitlement.entitled, true);
   assert.equal(entitlement.status, "trial");
+});
+
+test("paid billing mode blocks grants until provider-backed subscription exists", async () => {
+  const business = await fixture();
+  const previous = process.env.BILLING_MODE;
+  process.env.BILLING_MODE = "paid";
+  try {
+    await assert.rejects(
+      () =>
+        assertCanGrantEntitlement({
+          db,
+          businessId: business.id,
+          solutionCode: "leads",
+        }),
+      (err) =>
+        err instanceof Error &&
+        "code" in err &&
+        err.code === "PAYMENT_REQUIRED",
+    );
+
+    const subscription = await db
+      .insertInto("business_subscription")
+      .values({
+        business_id: business.id,
+        status: "active",
+        provider: "yookassa",
+        current_period_start: new Date(),
+        current_period_end: new Date(Date.now() + 30 * 86_400_000),
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+
+    await db
+      .insertInto("business_subscription_item")
+      .values({
+        subscription_id: subscription.id,
+        business_id: business.id,
+        solution_code: "leads",
+        plan_code: "plan_leads",
+        unit_price_minor: 25000,
+        currency: "RUB",
+        quantity: 1,
+      })
+      .execute();
+
+    await assertCanGrantEntitlement({
+      db,
+      businessId: business.id,
+      solutionCode: "leads",
+    });
+  } finally {
+    if (previous === undefined) delete process.env.BILLING_MODE;
+    else process.env.BILLING_MODE = previous;
+  }
 });
 
 test("buildBillingSummary stays honest without payment success", async () => {

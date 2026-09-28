@@ -216,12 +216,12 @@ export async function completeWhatsAppEmbeddedSignup(options: {
       .values({
         connection_id: connection.id,
         encrypted_token: encryptSecret(accessToken, options.secret),
-        key_version: 1,
+        key_version: 2,
       })
       .onConflict((oc) =>
         oc.column("connection_id").doUpdateSet({
           encrypted_token: encryptSecret(accessToken, options.secret),
-          key_version: 1,
+          key_version: 2,
           updated_at: new Date(),
         }),
       )
@@ -449,12 +449,12 @@ export async function selectInstagramAccount(options: {
       .values({
         connection_id: connection.id,
         encrypted_token: encryptSecret(options.accessToken, options.secret),
-        key_version: 1,
+        key_version: 2,
       })
       .onConflict((oc) =>
         oc.column("connection_id").doUpdateSet({
           encrypted_token: encryptSecret(options.accessToken, options.secret),
-          key_version: 1,
+          key_version: 2,
           updated_at: new Date(),
         }),
       )

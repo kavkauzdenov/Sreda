@@ -552,6 +552,191 @@ export class CommunicationService {
     };
   }
 
+  async closeConversation(
+    userId: string,
+    publicId: string,
+    conversationId: string,
+    raw: unknown,
+  ) {
+    await this.resolve(userId, publicId, true);
+    requireUuid(conversationId);
+    if (!raw || typeof raw !== "object" || Array.isArray(raw))
+      throw new AppError(400, "INVALID_MESSAGE", "Проверьте сообщение.");
+    const body = raw as Record<string, unknown>;
+    const closingMessage = text(
+      body.message ||
+        "Спасибо за обращение! Диалог закрыт. Если появятся новые вопросы — напишите нам.",
+      4000,
+    );
+    const requestKey =
+      typeof body.requestKey === "string" ? body.requestKey : null;
+    if (requestKey && !/^[a-zA-Z0-9_-]{16,100}$/.test(requestKey))
+      throw new AppError(400, "INVALID_REQUEST_KEY", "Обновите страницу.");
+
+    const businessId = (await this.resolve(userId, publicId)).id;
+    return this.db.transaction().execute(async (tx) => {
+      await tx
+        .selectFrom("business")
+        .select("id")
+        .where("id", "=", businessId)
+        .forUpdate()
+        .execute();
+      await requireBusiness(tx, userId, publicId, "messages.write");
+
+      const current = await tx
+        .selectFrom("communication_conversation")
+        .selectAll()
+        .where("id", "=", conversationId)
+        .where("business_id", "=", businessId)
+        .forUpdate()
+        .executeTakeFirst();
+      if (!current)
+        throw new AppError(404, "CONVERSATION_NOT_FOUND", "Диалог не найден.");
+      if (
+        current.assigned_member_user_id &&
+        current.assigned_member_user_id !== userId
+      )
+        throw new AppError(
+          409,
+          "CONVERSATION_ASSIGNED",
+          "Диалог уже взял другой сотрудник.",
+        );
+
+      if (current.status === "closed") {
+        return {
+          id: current.id,
+          status: current.status,
+          closedAt: current.closed_at?.toISOString() ?? null,
+          notification: "already_closed" as const,
+        };
+      }
+
+      const connection = await tx
+        .selectFrom("business_connection")
+        .select(["id", "status"])
+        .where("business_id", "=", businessId)
+        .where("platform", "=", current.platform)
+        .executeTakeFirst();
+
+      const runtime = connection
+        ? current.platform === "telegram"
+          ? await tx
+              .selectFrom("telegram_runtime")
+              .select("status")
+              .where("connection_id", "=", connection.id)
+              .executeTakeFirst()
+          : current.platform === "vk"
+            ? await tx
+                .selectFrom("vk_runtime")
+                .select("status")
+                .where("connection_id", "=", connection.id)
+                .executeTakeFirst()
+            : await tx
+                .selectFrom("meta_runtime")
+                .select("status")
+                .where("connection_id", "=", connection.id)
+                .executeTakeFirst()
+        : undefined;
+
+      const channelReady =
+        connection?.status === "connected" &&
+        runtime?.status === "ready" &&
+        !(
+          current.platform === "whatsapp" &&
+          !whatsappSessionOpen(current.last_inbound_at)
+        );
+
+      const now = new Date();
+      const messageRow = await tx
+        .insertInto("communication_message")
+        .values({
+          id: randomUUID(),
+          conversation_id: conversationId,
+          business_id: businessId,
+          direction: "outbound",
+          text: closingMessage,
+          request_key: requestKey,
+          delivery_status: channelReady ? "queued" : "failed",
+          external_message_id: null,
+          actor_user_id: userId,
+          moderation_status: "allowed",
+          created_at: now,
+        })
+        .returning(["id", "delivery_status"])
+        .executeTakeFirstOrThrow();
+
+      if (channelReady && connection) {
+        const values = {
+          communication_message_id: messageRow.id,
+          connection_id: connection.id,
+          message: closingMessage,
+          attachment_ids: JSON.stringify([]),
+          delivered_at: null,
+          last_error: null,
+        };
+        if (current.platform === "telegram")
+          await tx
+            .insertInto("telegram_outbox")
+            .values({ ...values, chat_id: current.external_user_id })
+            .execute();
+        else if (current.platform === "vk")
+          await tx
+            .insertInto("vk_outbox")
+            .values({ ...values, peer_id: current.external_user_id })
+            .execute();
+        else
+          await tx
+            .insertInto("meta_outbox")
+            .values({
+              ...values,
+              recipient_id: current.external_user_id,
+            })
+            .execute();
+      }
+
+      await tx
+        .updateTable("communication_conversation")
+        .set({
+          status: "closed",
+          closed_at: now,
+          last_message_at: now,
+        })
+        .where("id", "=", conversationId)
+        .where("business_id", "=", businessId)
+        .execute();
+
+      await audit(
+        tx,
+        businessId,
+        userId,
+        "conversation_closed",
+        conversationId,
+        {
+          closing_message_id: messageRow.id,
+          notification_queued: channelReady,
+        },
+      );
+      if (current.client_id)
+        await clientActivity(
+          tx,
+          businessId,
+          current.client_id,
+          "conversation.closed",
+          randomUUID(),
+          conversationId,
+          userId,
+        );
+
+      return {
+        id: current.id,
+        status: "closed" as const,
+        closedAt: now.toISOString(),
+        notification: channelReady ? ("queued" as const) : ("failed" as const),
+        messageId: messageRow.id,
+      };
+    });
+  }
+
   async updateStatus(
     userId: string,
     publicId: string,

@@ -30,8 +30,12 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
+      - name: Production dependency audit
+        run: npm audit --omit=dev --audit-level=high
+      - name: Shell syntax checks
+        run: bash -n deploy/release.sh deploy/backup.sh deploy/restore-drill.sh
       - run: npm test
-      - run: npm run lint
+      - run: npm run lint -- --max-warnings=0
       - run: npm run typecheck
       - run: npm run build
       - run: npm run test:http

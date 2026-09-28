@@ -52,9 +52,7 @@ export function validateSetup(raw: unknown): LeadSetupDraft {
     d.step > 3 ||
     !Array.isArray(d.channels) ||
     !Array.isArray(d.fields) ||
-    d.channels.some(
-      (v) => !["telegram", "vk", "whatsapp", "instagram"].includes(v),
-    ) ||
+    d.channels.some((v) => !["telegram", "vk"].includes(v)) ||
     new Set(d.channels).size !== d.channels.length ||
     d.fields.some((v) => !LEAD_FIELDS.some((f) => f.id === v)) ||
     new Set(d.fields).size !== d.fields.length ||
@@ -152,6 +150,7 @@ export class SolutionService {
     private readonly db: Kysely<Database>,
     private readonly telegramEnabled = false,
     private readonly vkEnabled = false,
+    private readonly metaEnabled = false,
   ) {}
   async business(userId: string, publicId: string, write = false) {
     if (write) {
@@ -263,6 +262,7 @@ export class SolutionService {
         );
       }
       await assertCanGrantEntitlement({
+        db: this.db,
         businessId: id,
         solutionCode: "leads",
       });
@@ -296,6 +296,7 @@ export class SolutionService {
     await this.db.transaction().execute(async (tx) => {
       const id = await new SolutionService(tx).business(userId, publicId, true);
       await assertCanGrantEntitlement({
+        db: tx,
         businessId: id,
         solutionCode: "leads",
       });
@@ -367,6 +368,7 @@ export class SolutionService {
       const previousStatus = previous?.status;
       if (enabling) {
         await assertCanGrantEntitlement({
+          db: tx,
           businessId: id,
           solutionCode: code,
         });
@@ -751,22 +753,45 @@ export class SolutionService {
     const alive = (name: string) =>
       beats.some((b) => b.name === name && +b.seen_at > now - 60000);
     const states = new Map<string, { ready: boolean; error: boolean }>();
-    for (const c of connections) {
-      const r = await this.db
-        .selectFrom(
-          c.platform === "telegram" ? "telegram_runtime" : "vk_runtime",
-        )
-        .select("status")
-        .where("connection_id", "=", c.id)
-        .executeTakeFirst();
-      states.set(c.platform, {
+    for (const connection of connections) {
+      let runtime: { status: string } | undefined;
+      let workerName: "telegram" | "vk" | "meta_delivery";
+      let channelEnabled: boolean;
+
+      if (connection.platform === "telegram") {
+        runtime = await this.db
+          .selectFrom("telegram_runtime")
+          .select("status")
+          .where("connection_id", "=", connection.id)
+          .executeTakeFirst();
+        workerName = "telegram";
+        channelEnabled = this.telegramEnabled;
+      } else if (connection.platform === "vk") {
+        runtime = await this.db
+          .selectFrom("vk_runtime")
+          .select("status")
+          .where("connection_id", "=", connection.id)
+          .executeTakeFirst();
+        workerName = "vk";
+        channelEnabled = this.vkEnabled;
+      } else {
+        runtime = await this.db
+          .selectFrom("meta_runtime")
+          .select("status")
+          .where("connection_id", "=", connection.id)
+          .executeTakeFirst();
+        workerName = "meta_delivery";
+        channelEnabled = this.metaEnabled;
+      }
+
+      states.set(connection.platform, {
         ready:
-          r?.status === "ready" &&
-          alive(c.platform) &&
-          (c.platform === "telegram" ? this.telegramEnabled : this.vkEnabled),
+          runtime?.status === "ready" &&
+          alive(workerName) &&
+          channelEnabled,
         error:
-          r?.status === "error" ||
-          (r?.status === "ready" && !alive(c.platform)),
+          runtime?.status === "error" ||
+          (runtime?.status === "ready" && (!alive(workerName) || !channelEnabled)),
       });
     }
     const [productCount, serviceCount, targetCount, orderFulfillment] =
