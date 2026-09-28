@@ -54,7 +54,7 @@ db_name="$(docker compose "${args[@]}" exec -T db sh -lc 'printf "%s" "$POSTGRES
 migration_before="$(docker compose "${args[@]}" exec -T db psql -U "$db_user" -d "$db_name" -tAc 'select count(*) from sreda_migration' 2>/dev/null || printf '0')"
 
 backup_destination="$(grep '^BACKUP_S3_DESTINATION=' /opt/biznesoty/app.env | head -n1 | cut -d= -f2- || true)"
-/opt/biznesoty/deploy/backup.sh "$backup_destination"
+bash /opt/biznesoty/deploy/backup.sh "$backup_destination"
 
 yc iam create-token | docker login --username iam --password-stdin cr.yandex
 docker pull "$image"
