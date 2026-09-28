@@ -73,6 +73,20 @@ export async function requirePlatformAdmin(
     );
   }
 
+  const verifiedSession = await options.db
+    .selectFrom("platform_admin_mfa_session")
+    .select("verified_at")
+    .where("session_id", "=", session.session.id)
+    .where("user_id", "=", session.user.id)
+    .executeTakeFirst();
+  if (!verifiedSession) {
+    throw new AppError(
+      403,
+      "ADMIN_MFA_REAUTH_REQUIRED",
+      "Выйдите и войдите снова, подтвердив PIN аккаунта.",
+    );
+  }
+
   const role = row.role as PlatformAdminRole;
   if (!platformAllowed(role, permission)) {
     throw new AppError(403, "FORBIDDEN", "Недостаточно прав.");
