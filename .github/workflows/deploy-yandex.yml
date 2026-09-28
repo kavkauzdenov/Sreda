@@ -22,8 +22,8 @@ jobs:
       - name: Require deployment branch to equal current main
         if: github.ref == 'refs/heads/deploy/production'
         run: |
-          git fetch --no-tags origin main
-          test "$GITHUB_SHA" = "$(git rev-parse origin/main)"
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          test "$GITHUB_SHA" = "$(git rev-parse refs/remotes/origin/main)"
       - name: Require successful verification of this commit
         env:
           GH_TOKEN: ${{ github.token }}
