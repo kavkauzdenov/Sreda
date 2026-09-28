@@ -1,65 +1,138 @@
-# Яндекс Cloud: подготовленный запуск
+# Яндекс Cloud / российский production
 
-## Что подготовлено
-Dockerfile собирает Next.js в production; контейнер работает от пользователя node, без root.
-deploy/compose.yml запускает PostgreSQL, приложение, Caddy для HTTPS и отдельный worker (профиль telegram).
-База и приложение не публикуют порты на VM; внешние порты только 80/443 Caddy. SSH ограничить адресами администраторов.
-Миграции запускаются отдельным контейнером до обновления приложения. Volume postgres переживает пересоздание контейнеров.
-Нельзя использовать docker compose down -v для обновления.
+## Назначение
 
-Это конфигурация одной VM для технического/закрытого пилота, без высокой доступности и без обещания SLA.
-Отказ VM остановит сайт и worker. Точный бюджет, размер VM, диска, регион и грант проверяются до создания ресурсов.
-Никакие ресурсы, ключи и платные услуги в рамках этой работы не создавались.
+Production использует одну российскую VM для закрытого пилота:
+PostgreSQL, Next.js app, Caddy и отдельные workers. Это не HA-кластер:
+отказ VM останавливает приложение до восстановления/переноса.
 
-## Однократная подготовка владельцем инфраструктуры
-1. Выбрать российский регион, VM Linux x86_64, приватный Container Registry и домен с DNS на IP VM.
-   Начальную память выбирать по измерениям; сборка идёт в GitHub, VM только запускает готовые контейнеры.
-2. Установить Docker Engine/Compose, yc, curl и aws CLI. Создать /opt/biznesoty/deploy и /opt/biznesoty/backups.
-3. Назначить VM сервисную учётную запись с чтением нужного registry, настроить yc под этой учётной записью.
-   Аккаунту сборки GitHub дать запись только в нужный registry. Отдельные ограниченные права нужны для резервных копий.
-4. Подготовить /opt/biznesoty/app.env, db.env, caddy.env по deploy/*.env.example с правами 0600.
-   Случайный пароль БД (hex) одинаков в app.env и db.env, BETTER_AUTH_SECRET случайный >=32 символов.
-   Нельзя менять этот секрет без плана перешифровки токенов: текущая версия использует его и для шифрования.
-5. Настроить SSH пользователя развёртывания. Членство в docker group фактически даёт root-доступ к VM:
-   использовать отдельную учётную запись/ключ. Известный ключ сервера получить по доверенному каналу,
-   StrictHostKeyChecking не отключать.
-6. В GitHub Secrets добавить YC_REGISTRY_ID, YC_REGISTRY_KEY (JSON ключ технической учётной записи сборки),
-   DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY, DEPLOY_KNOWN_HOSTS. Не хранить их в коде или переписке.
-7. Проверить синхронизацию времени, firewall, регион копий и требования к персональным данным.
+Секреты и operational topology не публикуются в репозитории.
 
-## Процесс обновления
-.github/workflows/deploy-yandex.yml запускается только вручную на main и требует успешный Verify именно этого SHA.
-Собирает образ cr.yandex/{registry}/sreda:{commitSHA}, отправляет в registry, копирует deploy файлы по SSH.
-На VM release.sh получает краткоживущий IAM token через yc, скачивает образ, применяет миграции и запускает сервисы.
-Готовность проверяется /api/health. Endpoint возвращает только ok, проверяет базу и, если Telegram включён, heartbeat.
-Успешный тег записывается в deploy/.env. Для отката вызвать release.sh с предыдущим совместимым SHA.
-Базу автоматически не откатывать: миграции необратимы без отдельного плана.
-При провале healthcheck скрипт завершится с ошибкой и не назовёт релиз успешным; автоматического отката пока нет.
-Первый запуск: TELEGRAM_WEBHOOKS_ENABLED=false. Это позволяет проверить аккаунты и базу до подключения бота.
+## Runtime-сервисы
 
-## Включение Telegram
-Проверить HTTPS сертификат и входящую доступность домена, а также исходящий доступ к api.telegram.org из VM.
-Поменять TELEGRAM_WEBHOOKS_ENABLED=true в app.env и повторить release: запустится профиль worker.
-Убедиться, что healthcheck зелёный; в сайте сохранить токен бота и завершённую настройку, нажать «Запустить Telegram».
-Отправить /start реальному тестовому боту, заполнить вопросы и проверить единственную заявку в правильном бизнесе.
-Проверить /cancel, повторные события, рестарт worker и временную недоступность API. Не включать на публичных клиентах
-до ручной приёмки, определения правил обработки персональных данных и восстановления из копии.
-Отключение флага останавливает обработку; Telegram будет получать 503 и повторять доставку по правилам площадки.
-Отключение конкретного подключения в сайте отзывает наш секрет и удаляет локальный токен. Оно не вызывает
-удалённый deleteWebhook; Telegram может некоторое время повторять старые запросы, которые будут отклонены.
+`deploy/compose.yml`:
+- `db` — PostgreSQL 17;
+- `app` — web/API;
+- `background-worker` — notifications, автопостинг, booking/entity reminders, setup drafts;
+- `telegram-worker` — профиль `telegram`;
+- `vk-worker` — профиль `vk`;
+- `meta-worker` — профиль `meta`;
+- `migrate` — одноразовый tools-профиль;
+- `caddy` — TLS/reverse proxy.
 
-## Резервные копии и контроль
-Создать закрытый bucket Object Storage в России и ограниченную учётную запись для копий. Настроить aws CLI на VM,
-хранить credentials с правами 0600. deploy/backup.sh принимает s3://bucket/prefix, делает pg_dump -Fc,
-проверяет читаемость архива и загружает через endpoint storage.yandexcloud.net. Без удалённого назначения скрипт не запускается.
-Запускать по systemd timer/cron с мониторингом exit status; установить отдельные сроки удаления локальных/облачных копий.
-До реальных клиентов восстановить копию в отдельную тестовую БД с pg_restore, проверить аккаунт/бизнес/заявки.
-Копия содержит персональные данные и зашифрованные токены; секрет шифрования хранить отдельно с защищённой резервной копией.
-Грант и бюджеты не являются гарантией остановки расходов. Отслеживать VM, диски, registry, трафик, bucket и журналы.
-Настроить внешнюю проверку /api/health и уведомления о сбоях/бюджете. Отправка таких уведомлений не настроена автоматически.
+DB healthcheck использует фактические `POSTGRES_USER` и `POSTGRES_DB` из `db.env`.
+Это обязательно для совместимости с legacy production databases.
 
-## Проверки конфигурации
-Локально проверены синтаксис bash/YAML, production build, типы и тесты. Docker отсутствует в текущей среде:
-Verify дополнен сборкой Dockerfile и загрузкой модулей worker внутри контейнера. Это не проверка созданной VM,
-DNS, TLS, SSH, IAM, Object Storage или доступности Telegram: они проверяются после настройки облака.
-Образы инфраструктуры закреплены по major tag для пилота; перед production фиксировать проверенные digest и процесс обновления.
+## Обязательные файлы VM
+
+- `/opt/biznesoty/app.env`
+- `/opt/biznesoty/db.env`
+- `/opt/biznesoty/caddy.env`
+- `/opt/biznesoty/deploy/*`
+
+Права env: 0600 или 0400. Release прекращается до любых миграций, если файл
+отсутствует или имеет небезопасные права.
+
+Основные secrets:
+- `BETTER_AUTH_SECRET` — identity/auth;
+- `CONNECTION_ENCRYPTION_KEY` — новое шифрование Telegram/VK/Meta credentials;
+- `CONNECTION_ENCRYPTION_PREVIOUS_KEYS` — только на период ротации ключа;
+- provider/API/S3 credentials по используемым функциям.
+
+Не менять оба security keys одновременно без плана восстановления.
+
+## Production release
+
+Единственный штатный путь — `.github/workflows/deploy-yandex.yml`.
+
+Workflow:
+1. запускается вручную только для `main`;
+2. требует успешный Verify точного SHA;
+3. собирает immutable image `cr.yandex/<registry>/sreda:<git-sha>`;
+4. в image зашиваются `APP_BUILD_SHA` и `APP_BUILD_TIME`;
+5. копируются deploy scripts;
+6. по SSH запускается `release.sh <immutable-image>`.
+
+На VM `release.sh`:
+1. проверяет env-файлы и их права;
+2. определяет нужные Telegram/VK/Meta profiles;
+3. сохраняет локальный rollback tag текущего app image;
+4. запускает/проверяет DB;
+5. выполняет **validated backup до migrations**;
+6. при настроенном `BACKUP_S3_DESTINATION` отправляет dump + SHA256 в российский Object Storage;
+7. получает immutable image;
+8. применяет forward-only migrations;
+9. запускает app + background worker + включённые channel workers;
+10. ждёт полного `/api/health`;
+11. только после успеха пишет новый `deploy/.env` и `LAST_GOOD_IMAGE`.
+
+Если healthcheck не проходит и migration ledger не изменился, выполняется автоматический
+application rollback. Если migrations уже применились, автоматический rollback блокируется:
+используется forward-fix либо восстановление из pre-deploy backup.
+
+## Version verification
+
+После релиза:
+
+```bash
+curl -fsS https://biznesoty.ru/api/version
+curl -fsS https://biznesoty.ru/api/health
+```
+
+`/api/version` должен вернуть ожидаемый git commit. Не использовать host checkout или
+тег `latest` как доказательство фактической версии контейнера.
+
+## Backup
+
+`deploy/backup.sh [s3://bucket/prefix]`:
+- читает реальные DB user/name из работающего DB container;
+- создаёт `pg_dump -Fc`;
+- проверяет `pg_restore --list`;
+- создаёт SHA256;
+- при destination загружает dump + checksum.
+
+Локальный backup — deploy gate, но **не disaster recovery**. Для production обязательно
+настроить отдельный российский Object Storage через `BACKUP_S3_DESTINATION`.
+
+## Restore drill
+
+После настройки Object Storage и затем регулярно:
+
+```bash
+bash /opt/biznesoty/deploy/restore-drill.sh /opt/biznesoty/backups/<backup>.dump
+```
+
+Скрипт поднимает отдельный одноразовый PostgreSQL 17 container, восстанавливает dump с
+`--no-owner --no-privileges`, проверяет базовые таблицы и уничтожает disposable container.
+Он не пишет в production database.
+
+## Channel enablement
+
+Telegram/VK/Meta включаются отдельными env flags. Общий `background-worker` не зависит
+ни от одного channel flag. Поэтому выключение Telegram не должно останавливать
+автопостинг, notification dispatcher или reminders.
+
+Полный health проверяет:
+- web/database;
+- background + notification/setup/entity heartbeats;
+- Telegram/VK/Meta worker только когда соответствующий канал включён;
+- autopost/booking reminder heartbeat, когда активны соответствующие решения.
+
+## Network routing
+
+Маршрутизация внешних API — operational concern. Не хранить в публичном репозитории
+IP конкретных VPS/peers/AllowedIPs.
+
+Для Meta нельзя считать статический DNS snapshot постоянным: перед включением канала
+проверять текущий egress непосредственно на production VM. Не расширять маршруты до
+`0.0.0.0/0` ради одного провайдера без отдельного архитектурного решения.
+
+## Maintenance
+
+До массового запуска:
+- настроить внешний uptime monitor;
+- подтвердить Object Storage upload;
+- выполнить restore drill;
+- провести проверку Meta egress;
+- запланировать maintenance window для обновления ОС;
+- иметь актуальный snapshot/backup перед системным upgrade.
