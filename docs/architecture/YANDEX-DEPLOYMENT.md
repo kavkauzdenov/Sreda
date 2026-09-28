@@ -45,8 +45,13 @@ DB healthcheck использует фактические `POSTGRES_USER` и `P
 
 Единственный штатный путь — `.github/workflows/deploy-yandex.yml`.
 
+Workflow запускается либо вручную из `main`, либо контролируемым обновлением
+ветки `deploy/production`. Для deploy-ветки workflow сначала требует, чтобы её SHA
+**в точности совпадал с текущим `main`**; поэтому непроверенную feature-ветку
+через этот механизм развернуть нельзя.
+
 Workflow:
-1. запускается вручную только для `main`;
+1. принимает только `main` или `deploy/production`;
 2. требует успешный Verify точного SHA;
 3. собирает immutable image `cr.yandex/<registry>/sreda:<git-sha>`;
 4. в image зашиваются `APP_BUILD_SHA` и `APP_BUILD_TIME`;
