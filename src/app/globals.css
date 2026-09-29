@@ -12517,3 +12517,103 @@ a.biznesoty-activity__row {
     min-width: 60px;
   }
 }
+
+/* Business Intelligence / Command Center */
+.intelligence-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4, 1rem);
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: var(--space-4, 1rem) var(--space-3, 0.75rem) 3rem;
+}
+.intelligence-page__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.intelligence-page__header h1 {
+  margin: 0.25rem 0 0;
+  font-size: clamp(1.35rem, 2.5vw, 1.75rem);
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+.intelligence-hero__greeting {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.intelligence-hero__text {
+  margin: 0.5rem 0 0;
+  font-size: 1.0625rem;
+  line-height: 1.45;
+  color: var(--text-primary);
+}
+.intelligence-section-title {
+  margin: 0 0 0.75rem;
+  font-size: 0.9375rem;
+  font-weight: 650;
+}
+.intelligence-grid {
+  display: grid;
+  gap: 0.75rem;
+}
+@media (min-width: 768px) {
+  .intelligence-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.intelligence-card {
+  padding: 1rem 1.1rem;
+  border-radius: 12px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+}
+.intelligence-card__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 0.75rem;
+  margin-bottom: 0.35rem;
+}
+.intelligence-card__head h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 650;
+}
+.intelligence-card__severity {
+  font-size: 0.6875rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+}
+.intelligence-card--high .intelligence-card__severity,
+.intelligence-card--critical .intelligence-card__severity {
+  color: var(--danger, #c0392b);
+}
+.intelligence-evidence {
+  margin: 0.5rem 0;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+.intelligence-demo-banner {
+  margin: 0;
+  padding: 0.65rem 0.85rem;
+  border-radius: 10px;
+  border: 1px dashed var(--border-subtle);
+  background: color-mix(in srgb, var(--brand-primary) 6%, var(--bg-surface));
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.intelligence-preview-dialog {
+  max-width: 420px;
+  padding: 1.25rem;
+  border: none;
+  border-radius: 14px;
+  box-shadow: 0 12px 40px rgb(0 0 0 / 0.18);
+}

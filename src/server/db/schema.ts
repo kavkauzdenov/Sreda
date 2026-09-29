@@ -6,6 +6,7 @@ import type { ClientTables } from "../clients/schema.ts";
 import type { OrderTables } from "../orders/schema.ts";
 import type { CalendarTables } from "../calendar/schema.ts";
 import type { AnalyticsTables } from "../analytics/schema.ts";
+import type { IntelligenceTables } from "../intelligence/schema.ts";
 import type { Generated } from "kysely";
 
 export type Role = "owner" | "admin" | "operator";
@@ -27,7 +28,8 @@ export interface Database
     AttachmentTables,
     OrderTables,
     CalendarTables,
-    AnalyticsTables {
+    AnalyticsTables,
+    IntelligenceTables {
   account_pin: {
     user_id: string;
     pin_hash: string;
