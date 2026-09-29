@@ -7,7 +7,7 @@ Names only. Never put real secrets in git.
 | Name | Notes |
 |---|---|
 | `APP_URL` | Exact origin. Production: `https://biznesoty.ru` |
-| `DATABASE_URL` | Shared Postgres for web + workers (Railway reference) |
+| `DATABASE_URL` | Shared Postgres for web + workers |
 | `BETTER_AUTH_SECRET` | ≥ 32 chars; same across web + workers |
 | `NEXT_PUBLIC_APP_NAME` | `БизнеСоты` |
 | `NEXT_PUBLIC_DATA_SOURCE` | `api` in production builds |
@@ -80,7 +80,7 @@ Names only. Never put real secrets in git.
 |---|---|
 | `CI_RELAX_RATE_LIMITS` | `1` only in CI |
 | `NODE_ENV` | Set by runtime |
-| `PORT` | Injected by Railway — do not hardcode |
+| `PORT` | Injected by the process supervisor when set — do not hardcode |
 | `NEXT_TELEMETRY_DISABLED` | Set in Dockerfile |
 
 See also `.env.example` and `deploy/app.env.example`.

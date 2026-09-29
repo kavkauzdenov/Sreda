@@ -2,9 +2,8 @@
  * Single-origin public host policy for «БизнеСоты».
  *
  * Source of truth for the public origin is APP_URL (exact HTTPS origin).
- * Alias brand hosts and (after cutover) the Railway technical hostname
- * redirect browser-safe GET/HEAD to that origin. They are never trusted
- * auth origins and never weaken CSRF / requireOrigin.
+ * Alias brand hosts redirect browser-safe GET/HEAD to that origin. They are
+ * never trusted auth origins and never weaken CSRF / requireOrigin.
  */
 
 /** Brand aliases that only redirect to the APP_URL host. */
@@ -55,8 +54,7 @@ export function normalizeHostname(raw: string | null | undefined): string {
 
 /**
  * Resolve the public request host.
- * Prefer Host; accept a single X-Forwarded-Host only when Host is empty
- * (Railway/Next normally set Host to the external hostname already).
+ * Prefer Host; accept a single X-Forwarded-Host only when Host is empty.
  * Never trust forwarded host as a redirect *destination*.
  */
 export function resolveRequestHostname(headers: Headers): string {
@@ -78,12 +76,6 @@ export function parseAppOrigin(
   } catch {
     return null;
   }
-}
-
-export function isRailwayTechnicalHost(hostname: string): boolean {
-  return (
-    hostname.endsWith(".up.railway.app") || hostname.endsWith(".railway.app")
-  );
 }
 
 export function isPublicAliasHost(hostname: string): boolean {
@@ -134,12 +126,8 @@ export function decideCanonicalHost(input: {
     return { action: "pass" };
   }
 
-  const isAlias = isPublicAliasHost(host);
-  const isRailway =
-    isRailwayTechnicalHost(host) && !isRailwayTechnicalHost(canonicalHost);
-
-  // Unknown hosts: never use them as redirect destinations; leave routing alone.
-  if (!isAlias && !isRailway) {
+  // Only known brand aliases redirect. Unknown hosts are left alone.
+  if (!isPublicAliasHost(host)) {
     return { action: "pass" };
   }
 
@@ -152,7 +140,7 @@ export function decideCanonicalHost(input: {
     };
   }
 
-  // API GET/HEAD on aliases / old Railway: reject rather than HTML-redirect clients.
+  // API GET/HEAD on aliases: reject rather than HTML-redirect clients.
   if (input.pathname.startsWith("/api/")) {
     return {
       action: "reject",

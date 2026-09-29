@@ -48,7 +48,7 @@ Never set as `APP_URL` and never add to Better Auth `trustedOrigins`:
 
 Implementation: `src/server/http/canonical-host.ts` + Next.js `src/proxy.ts`.
 
-Exempt from canonical redirect (must keep working on Railway technical host):
+Exempt from canonical redirect (must keep working on the registered host):
 
 - `/api/health`, `/api/health/web`, `/api/health/live`
 - `/api/telegram/*`, `/api/vk/*`, `/api/meta/webhook`
@@ -66,59 +66,45 @@ Alias hosts 308 into the same journey on `biznesoty.ru`.
 
 **Do not set `APP_URL=https://biznesoty.ru` until DNS is verified and the TLS certificate is READY.**
 
-Code being ready ≠ domains already attached in Railway/DNS.
+Code being ready ≠ domains already attached in DNS.
 
-## Railway (authoritative for Closed Beta / new environments)
+## Runtime topology
 
 ```
 GitHub (main)
-  → Railway project
+  → host / VM
       → PostgreSQL (shared)
-      → web
+      → web (Docker / Next.js)
       → telegram-worker
       → vk-worker
 ```
 
-### Config files in repo
-
-| Service | Config |
-|---|---|
-| web | `deploy/railway/web.json` |
-| telegram-worker | `deploy/railway/telegram-worker.json` (also `worker.json` compatibility copy) |
-| vk-worker | `deploy/railway/vk-worker.json` |
-
-### Web (`deploy/railway/web.json`)
+### Web
 
 - Build: Dockerfile
-- Pre-deploy: `node --import tsx scripts/db-migrate.mts`
-- Start: `npm run start -- --hostname 0.0.0.0` (respects Railway `PORT`)
-- Health: `/api/health/web` (timeout 120s)
-- Restart: ON_FAILURE, max 5
+- Migrate: `node --import tsx scripts/db-migrate.mts` (or `npm run db:migrate`)
+- Start: `npm run start -- --hostname 0.0.0.0` (respects `PORT` when set)
+- Health: `/api/health/web`
 
 ### Workers
 
 - Telegram start: `npm run worker:telegram`
 - VK start: `npm run worker:vk`
 - No public HTTP domain required
-- Share the same `DATABASE_URL` / `APP_URL` / secrets as web (Railway variable references)
-- Pre-deploy also runs migrations (idempotent) so a worker can start before web on a fresh DB
+- Share the same `DATABASE_URL` / `APP_URL` / secrets as web
+- Migrations are idempotent; a worker can start against a migrated DB
 
-### Recommended bring-up order
+### Self-hosted / Yandex path
 
-1. Create PostgreSQL service.
-2. Create **web**; set `DATABASE_URL` as a **Railway reference** to Postgres (do not paste passwords into docs).
-3. Set remaining env (see `.env.example` / section below) — never commit secrets.
-4. Deploy web (migrations run in preDeploy).
-5. Confirm `GET /api/health/web` → 200.
-6. Create **telegram-worker** with the same env references; enable `TELEGRAM_WEBHOOKS_ENABLED` only when ready.
-7. Create **vk-worker** similarly.
-8. Attach custom domains in Railway (canonical + aliases); wait for TLS READY.
-9. Set `APP_URL=https://biznesoty.ru` only after step 8.
-10. Wire integrations / E2E.
+Authoritative compose + Caddy setup lives under `deploy/`:
 
-### Historical note
+- `deploy/compose.yml`
+- `deploy/Caddyfile`
+- `deploy/release.sh`
+- Manual workflow `.github/workflows/deploy-yandex.yml`
+- Install prefix examples use `/opt/biznesoty/`
 
-Existing Closed Beta may still live in Railway project **Sreda-staging** (legacy project name). Attaching `biznesoty.ru` there means the public brand points at staging until a future production move. Session cookies from `*.up.railway.app` do not transfer to `biznesoty.ru` — users may need to sign in again after cutover.
+See also [architecture/YANDEX-DEPLOYMENT.md](architecture/YANDEX-DEPLOYMENT.md).
 
 ## Required environment names (values never documented here)
 
@@ -135,12 +121,6 @@ Existing Closed Beta may still live in Railway project **Sreda-staging** (legacy
 **SMTP (optional):** `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`
 
 Full authoritative list: [docs/ENV.md](ENV.md).
-
-## Optional self-hosted / Yandex path
-
-- Compose + Caddy under `deploy/`
-- Manual workflow `.github/workflows/deploy-yandex.yml`
-- Install prefix examples use `/opt/biznesoty/`
 
 ## Pre-deploy habits
 

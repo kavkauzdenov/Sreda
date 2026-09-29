@@ -7,7 +7,7 @@ import {
 
 /**
  * Server-side canonical host enforcement (Next.js 16 `proxy`).
- * Redirects alias / post-cutover Railway browser navigation to APP_URL.
+ * Redirects brand-alias browser navigation to APP_URL.
  * Does not expand Better Auth trustedOrigins.
  */
 export function proxy(request: NextRequest) {

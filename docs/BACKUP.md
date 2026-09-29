@@ -1,18 +1,18 @@
 # Backup & restore
 
-## Staging (Railway Postgres)
+## Staging Postgres
 
-Closed Beta staging (**Biznebiznesoty-staging**) uses Railway-managed PostgreSQL shared by web and workers.
+Staging uses a managed or self-hosted PostgreSQL instance shared by web and workers.
 
 Recommended practice:
 
-1. Use Railway snapshots / provider backup features for the staging database.
+1. Use the provider’s snapshots / backup features for the staging database.
 2. Before risky migrations: take a snapshot; record deployed git SHA and migration ledger checksums (`npm run staging:check -- --database` is read-only).
 3. Keep attachment bucket separate and private; DB dump does not replace object storage backup.
 
 ## Scripted dump (self-hosted / Yandex path)
 
-`deploy/backup.sh` (used with compose on a VM, not required for Railway-only staging):
+`deploy/backup.sh` (used with compose on a VM):
 
 1. `pg_dump -Fc` from compose service `db` into `/opt/biznesoty/backups/sreda-<UTC>.dump`
 2. `pg_restore --list` validates archive structure

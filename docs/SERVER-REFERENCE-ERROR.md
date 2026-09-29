@@ -1,4 +1,4 @@
-# Known Railway runtime: Server Reference ID
+# Known runtime: Server Reference ID
 
 ## Symptom
 
@@ -19,7 +19,7 @@ Stale client HTML/JS after a deploy (or a CDN/browser cache) posting an old/corr
 ## Mitigation
 
 1. Hard refresh / clear site data after deploy.
-2. Ensure Railway does not serve mixed old static assets with a new server (single deploy unit via Dockerfile — already the case).
+2. Ensure the host does not serve mixed old static assets with a new server (single deploy unit via Dockerfile — already the case).
 3. Do not catch-and-ignore this error in app code.
 
 ## Regression

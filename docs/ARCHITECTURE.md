@@ -50,4 +50,4 @@ Workers never trust a browser `businessId`: business is derived from the verifie
 
 ## Platform admin
 
-Separate surface `/admin` + `/api/admin/*` with `platform_admin` roles. Same web process; not a Railway service. See [PERMISSIONS.md](PERMISSIONS.md) and `docs/admin/README.md`.
+Separate surface `/admin` + `/api/admin/*` with `platform_admin` roles. Same web process; not a separate service. See [PERMISSIONS.md](PERMISSIONS.md) and `docs/admin/README.md`.

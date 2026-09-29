@@ -43,7 +43,7 @@
 
 Telegram/VK tokens вводятся в разделе «Подключения» и хранятся зашифрованно; они не являются NEXT_PUBLIC env. VK для публикации требует соответствующий publish token и права. Не присылать секреты в отчётах/скриншотах/логах.
 
-1. Подготовить отдельное окружение с web и двумя worker services. Railway configs: `deploy/railway/web.json`, `worker.json` (Telegram), `vk-worker.json` (VK).
+1. Подготовить отдельное окружение с web и двумя worker processes (`npm run worker:telegram`, `npm run worker:vk`).
 2. Выполнить `npm ci`, собрать в api mode. Миграции запускает штатный `npm run db:migrate`; pre-deploy использует этот же механизм и блокировку. Сначала проверить на копии БД.
 3. Запустить web, `npm run worker:telegram` и `npm run worker:vk`. Общие задания autopost/booking reminders выполняются существующими worker loops, отдельные дубли worker не нужны.
 4. `npm run staging:check` проверяет конфигурацию без вывода значений; `npm run staging:check -- --database` дополнительно **только читает** checksums миграций и heartbeat. Код 1 означает неготовность, не обходить её фиктивными credentials.
