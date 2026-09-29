@@ -34,12 +34,16 @@ export const metadata: Metadata = {
   icons: {
     icon: [
       {
-        url: BRAND_ASSETS.favicon,
+        url: "/favicon.ico?v=4",
+        sizes: "any",
+      },
+      {
+        url: `${BRAND_ASSETS.favicon}?v=4`,
         type: "image/svg+xml",
         sizes: "any",
       },
     ],
-    shortcut: BRAND_ASSETS.favicon,
+    shortcut: "/favicon.ico?v=4",
   },
   alternates: {
     canonical: "/",
