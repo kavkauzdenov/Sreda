@@ -13,6 +13,7 @@ import {
   ShoppingBag,
   Sparkles,
   Users,
+  Brain,
 } from "lucide-react";
 import { APP_NAME, APP_TAGLINE, SUPPORT_TELEGRAM_URL } from "@/config/brand";
 
@@ -40,6 +41,7 @@ export const NAV_ITEMS: NavItem[] = [
 
 /** Secondary items available via «Ещё» / settings areas. */
 export const SECONDARY_NAV_ITEMS: NavItem[] = [
+  { href: "/intelligence", label: "Intelligence", icon: Brain },
   { href: "/analytics", label: "Аналитика", icon: BarChart3 },
   { href: "/calendar", label: "Календарь", icon: Calendar },
   { href: "/notifications", label: "Уведомления", icon: Bell },
