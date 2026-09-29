@@ -6,7 +6,6 @@ import {
   decideCanonicalHost,
   isExemptFromCanonicalRedirect,
   isPublicAliasHost,
-  isRailwayTechnicalHost,
   normalizeHostname,
   parseAppOrigin,
   resolveRequestHostname,
@@ -34,14 +33,6 @@ describe("canonical-host policy", () => {
     assert.equal(isPublicAliasHost("xn--90aifd0ahuj5f.xn--p1ai"), true);
     assert.equal(isPublicAliasHost("biznesoty.ru"), false);
     assert.ok(PUBLIC_ALIAS_HOSTS.has("xn--90aifd0ahuj5f.xn--p1ai"));
-  });
-
-  it("detects Railway technical hosts", () => {
-    assert.equal(
-      isRailwayTechnicalHost("web-production-1aace.up.railway.app"),
-      true,
-    );
-    assert.equal(isRailwayTechnicalHost("biznesoty.ru"), false);
   });
 
   it("exempts health and webhook paths", () => {
@@ -142,10 +133,10 @@ describe("canonical-host policy", () => {
     }
   });
 
-  it("passes health on Railway host even after APP_URL cutover", () => {
+  it("passes health on alias host without redirecting", () => {
     const d = decideCanonicalHost({
       method: "GET",
-      hostname: "web-production-1aace.up.railway.app",
+      hostname: "biznesoty.online",
       pathname: "/api/health/web",
       search: "",
       appUrl: CANONICAL,
@@ -153,39 +144,13 @@ describe("canonical-host policy", () => {
     assert.deepEqual(d, { action: "pass" });
   });
 
-  it("passes webhook ingress on Railway host after cutover", () => {
+  it("passes webhook ingress on alias host", () => {
     const d = decideCanonicalHost({
       method: "POST",
-      hostname: "web-production-1aace.up.railway.app",
+      hostname: "biznesoty.online",
       pathname: "/api/telegram/conn-1",
       search: "",
       appUrl: CANONICAL,
-    });
-    assert.deepEqual(d, { action: "pass" });
-  });
-
-  it("redirects Railway browser pages after APP_URL is custom domain", () => {
-    const d = decideCanonicalHost({
-      method: "GET",
-      hostname: "web-production-1aace.up.railway.app",
-      pathname: "/leads/concept",
-      search: "?x=1",
-      appUrl: CANONICAL,
-    });
-    assert.equal(d.action, "redirect");
-    if (d.action === "redirect") {
-      assert.equal(d.location, "https://biznesoty.ru/leads/concept?x=1");
-    }
-  });
-
-  it("does not redirect Railway host while APP_URL is still Railway", () => {
-    const railway = "https://web-production-1aace.up.railway.app";
-    const d = decideCanonicalHost({
-      method: "GET",
-      hostname: "web-production-1aace.up.railway.app",
-      pathname: "/",
-      search: "",
-      appUrl: railway,
     });
     assert.deepEqual(d, { action: "pass" });
   });

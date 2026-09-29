@@ -10,7 +10,7 @@ import path from "path";
 const baseURL =
   process.env.E2E_BASE_URL ||
   process.env.AUDIT_BASE_URL ||
-  "https://web-production-1aace.up.railway.app";
+  "http://127.0.0.1:3000";
 
 const outDir =
   process.env.E2E_SCREENSHOT_DIR ||

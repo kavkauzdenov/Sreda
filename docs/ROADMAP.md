@@ -18,7 +18,7 @@ Items intentionally **not** required to complete Closed Beta hardening after PR 
 ## Beta focus instead
 
 - Harden tenant isolation, staff notification verification, workers/health, and solution UX from PR #53.
-- Keep docs and staging checks aligned with migration **052** and Railway **Biznebiznesoty-staging**.
+- Keep docs and staging checks aligned with migration **052** and the current staging environment.
 - Expand real-channel E2E evidence on staging without enabling live payments or production bots.
 
 Snapshot: [BETA-STATE-2026-09-21.md](BETA-STATE-2026-09-21.md).

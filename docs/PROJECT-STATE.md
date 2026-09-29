@@ -24,7 +24,7 @@
 - migration ledger дошёл как минимум до `066_orders_v2.sql`;
 - Orders V2 и фикс закрытия диалога уже были развёрнуты;
 - Telegram включён; VK/autopost/booking reminders могут быть отключены конфигурацией конкретного окружения;
-- Railway остаётся вспомогательным staging/relay-контуром, а не каноническим production.
+- staging/relay при необходимости идёт через отдельный контур на той же Docker-инфраструктуре, не через сторонние PaaS.
 
 ## Hardening 28 сентября
 

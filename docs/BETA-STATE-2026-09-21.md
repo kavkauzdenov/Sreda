@@ -42,4 +42,4 @@ MERGED. Includes ProductEditor, BookingSetupWizard, bot nav, request_contact, cu
 - Playwright smoke scaffold
 
 ## GATE
-Continue Closed Beta hardening → green CI → merge → Railway deploy matching SHA.
+Continue Closed Beta hardening → green CI → merge → staging deploy matching SHA.

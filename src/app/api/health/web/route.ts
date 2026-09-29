@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 
 /**
  * Dependency readiness for the web service (database).
- * Used as Railway/deploy healthcheck so a paused worker does not block web rollout.
+ * Used as deploy healthcheck so a paused worker does not block web rollout.
  * Process-only liveness: /api/health/live. Full worker readiness: /api/health.
  * Never exposes secrets.
  */

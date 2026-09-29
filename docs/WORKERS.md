@@ -4,10 +4,10 @@ Long-running Node processes. Same Docker image as web; different start commands.
 
 ## Processes
 
-| Name | Script | Railway config | Requires |
-|---|---|---|---|
-| telegram-worker | `npm run worker:telegram` | `deploy/railway/worker.json` | `TELEGRAM_WEBHOOKS_ENABLED=true` |
-| vk-worker | `npm run worker:vk` | `deploy/railway/vk-worker.json` | `VK_WEBHOOKS_ENABLED=true` |
+| Name | Script | Requires |
+|---|---|---|
+| telegram-worker | `npm run worker:telegram` | `TELEGRAM_WEBHOOKS_ENABLED=true` |
+| vk-worker | `npm run worker:vk` | `VK_WEBHOOKS_ENABLED=true` |
 
 Both share `DATABASE_URL`, `BETTER_AUTH_SECRET`, `APP_URL`, and S3 settings with web.
 

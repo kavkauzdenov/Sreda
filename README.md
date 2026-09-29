@@ -22,4 +22,4 @@ npm run dev
 
 ## Деплой
 
-См. [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — схема Railway (web + Postgres + telegram-worker + vk-worker) и canonical origin `https://biznesoty.ru`.
+См. [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — схема web + Postgres + telegram-worker + vk-worker и canonical origin `https://biznesoty.ru`.
