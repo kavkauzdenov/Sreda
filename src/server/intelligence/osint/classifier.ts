@@ -121,7 +121,9 @@ const SERP_PATH = /^\/(search|search\/|p\/|yandsearch|go\.yandsearch|web)/i;
 
 function isSerpPage(host: string, path: string): boolean {
   if (host === "yandex.ru" || host === "ya.ru") return SERP_PATH.test(path) || path === "/search";
-  if (host.endsWith("google.com") || host === "google.ru") return path.startsWith("/search") || path === "/";
+  // Только точный хост или его поддомен: `evilgoogle.com` — не Google.
+  if (hostMatches(host, "google.com") || hostMatches(host, "google.ru"))
+    return path.startsWith("/search") || path === "/";
   if (host === "go.mail.ru") return true;
   if (host === "mail.ru") return path.startsWith("/search");
   return false;

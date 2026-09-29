@@ -35,6 +35,25 @@ test("search engine result pages are rejected", () => {
     ok: false,
     reason: "search_page",
   });
+  assert.deepEqual(classify("https://www.google.com/search?q=cafe"), {
+    ok: false,
+    reason: "search_page",
+    }, "поддомен google тоже SERP");
+});
+
+test("host suffix match requires a label boundary", () => {
+  // js/incomplete-url-substring-sanitization: endsWith("google.com")
+  // принимал бы evilgoogle.com за Google.
+  const spoofed = classify("https://evilgoogle.com/search?q=cafe");
+  assert.equal(spoofed.ok, true, "чужой хост — не search_page");
+  assert.equal(spoofed.candidate.host, "evilgoogle.com");
+  assert.equal(spoofed.candidate.trustLevel, "third_party");
+
+  const other = classify("https://notgoogle.com/");
+  assert.equal(other.ok, true);
+  assert.equal(other.candidate.host, "notgoogle.com");
+  assert.equal(other.candidate.type, "website");
+  assert.equal(other.candidate.trustLevel, "third_party");
 });
 
 test("maps and directories classified as public_directory", () => {
