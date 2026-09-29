@@ -12,7 +12,7 @@ test("favicon is exposed through stable and cache-busted browser paths", () => {
   const brandIcon = read("public/assets/soty/brand/favicon.svg");
 
   assert.match(layout, /\/favicon\.ico\?v=4/);
-  assert.match(layout, /favicon\.svg\?v=4/);
+  assert.match(layout, /BRAND_ASSETS\.favicon\}\?v=4/);
   assert.match(route, /\/assets\/soty\/brand\/favicon\.svg\?v=4/);
   assert.match(route, /Cache-Control/);
   assert.equal(appIcon, brandIcon);
