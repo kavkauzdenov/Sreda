@@ -148,6 +148,35 @@ Canonical SoT docs: `docs/PROJECT-STATE.md`, `docs/ARCHITECTURE.md`, `docs/archi
 ## Execution status
 
 - [x] Audit complete (this file)
-- [ ] Proven DELETE / ARCHIVE applied
-- [ ] Gates run
-- [ ] Final summary updated
+- [x] Proven DELETE / ARCHIVE applied (`ff02963`+)
+- [x] Gates run
+- [x] Final summary updated
+
+### Gate results (post-cleanup)
+
+| Check | Result |
+|-------|--------|
+| `npm run typecheck` | PASS |
+| `npm run lint` | PASS |
+| `npm run test` | PASS (553) |
+| `npm run build` | PASS |
+| `npm run test:e2e` | SKIPPED (no dedicated e2e run this pass; unit/HTTP suite covers domains) |
+| `npm run audit:ui` / visual | SKIPPED (optional; not required for dead-code removal) |
+
+### Removed (this pass)
+
+**Components / modules:** `OrdersView`, `ProductEditor`, `LeadsSetupView`, `LeadFormFieldsPanel`, `DashboardAnalyticsSummary`, dashboard leftovers (`ConnectionsCard`, `DashboardHeader`, `RecentLeads`, `ScheduledPosts`, `SearchField`, `SolutionWorkspace`, `TariffCard`), `PagePlaceholder`, `StatusPill`, `config/assets.ts`, `lib/cn.ts`, `services/user.service.ts`, `services/index.ts`, `mocks/index.ts`.
+
+**Exports / CSS:** `toLegacyDraftView`, `SOLUTION_MESSAGES_CSS_ALIAS`, `.crm-segment*` rules.
+
+**Scripts:** `visual-polish-capture.mjs`, `ui-polish-capture.mjs`, `corrective-shots.cjs`, `prep-auth-storage.mjs`.
+
+**Docs archived → `docs/archive/`:** TRANSFER, BRAND-RENAME, POST-INFRA-COMPAT, FINAL-NETWORK-ROUTING RTF, SAVED-WORK, BETA-STATE, mvp-readiness, PRE-RELEASE-E2E, UNIFIED-SOLUTIONS-REVIEW, universal-bot-architecture, ROADMAP, LEAD-ONBOARDING.
+
+### Left intentionally (legacy required / uncertain)
+
+See KEEP and UNCERTAIN tables above — especially CRM/orders non-`view=v2` handlers, lead v1→v2 conversion, connection crypto v1, `public/assets/sreda/**`, `/leads/concept`, soft-orphan API routes.
+
+### Historical layers removed
+
+Orders UI v1 tree (`src/components/orders/`), pre-redesign dashboard widget set, unused asset catalog module, one-off polish capture scripts, obsolete snapshot docs (archived, not destroyed).
