@@ -5115,23 +5115,6 @@ ul {
   line-height: var(--line-height-body);
   max-width: 48ch;
 }
-.crm-segment {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
-  width: 100%;
-  max-width: none;
-  padding: 4px;
-  border-radius: 14px;
-  background: var(--bg-page);
-  border: 1px solid var(--border-subtle);
-}
-.crm-segment .button {
-  min-height: 44px;
-  box-shadow: none;
-  border-radius: 11px;
-  font-size: var(--font-size-label);
-}
 @media (max-width: 699px) {
   .button--sm,
   .button.button--sm,
@@ -5165,18 +5148,6 @@ ul {
     flex: 1 1 auto;
     text-align: left;
   }
-}
-.crm-segment .button--outline {
-  background: transparent;
-  border-color: transparent;
-  color: var(--text-secondary);
-}
-.crm-segment .button--outline:hover {
-  background: var(--bg-surface);
-  color: var(--text-primary);
-}
-.crm-segment .button--primary {
-  box-shadow: none;
 }
 .crm-panel { padding:24px; min-width:0; overflow-wrap:anywhere; }
 .crm-panel label { display:grid; gap:6px; margin-bottom:16px; font-size:var(--font-size-label); font-weight:600; color:var(--text-primary); }
@@ -7604,9 +7575,6 @@ ul {
     font-size: var(--font-size-body-sm);
     line-height: var(--line-height-body);
   }
-  .crm-segment {
-    max-width: none;
-  }
   .solution-setup-banner__actions {
     gap: 10px;
   }
@@ -7958,21 +7926,6 @@ input[type="time"] {
 .sidebar__link.is-active {
   background: color-mix(in srgb, var(--brand-primary) 14%, transparent);
   color: var(--text-primary);
-}
-
-.crm-segment .button--outline {
-  background: transparent;
-  border-color: transparent;
-  color: var(--text-secondary);
-}
-
-[data-theme="dark"] .crm-segment {
-  background: var(--bg-page);
-  border-color: var(--border-default);
-}
-
-[data-theme="dark"] .crm-segment .button--primary {
-  color: var(--brand-primary-text);
 }
 
 @media (max-width: 1099px) {

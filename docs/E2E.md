@@ -15,7 +15,7 @@ PostgreSQL-backed race tests need `TEST_DATABASE_URL` (provided in CI). Local PG
 
 ## Manual staging E2E (Closed Beta)
 
-Prerequisite: isolated Telegram bot + VK community, separate DB/bucket, workers healthy. Full narrative checklist historically lives in `docs/PRE-RELEASE-E2E.md`; condensed gate for beta:
+Prerequisite: isolated Telegram bot + VK community, separate DB/bucket, workers healthy. Full narrative checklist historically lives in `docs/archive/PRE-RELEASE-E2E.md`; condensed gate for beta:
 
 1. **Auth:** register, login, logout, recovery code, password change, PIN if enabled.
 2. **Tenant:** two businesses A/B; invite admin/operator; revoke operator mid-dialogue.

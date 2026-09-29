@@ -21,7 +21,4 @@ export const SOLUTION_ACCENTS = {
   },
 } as const;
 
-/** Legacy CSS alias — prefer --solution-messages. */
-export const SOLUTION_MESSAGES_CSS_ALIAS = "--solution-admin-messages";
-
 export type SolutionAccentCode = keyof typeof SOLUTION_ACCENTS;

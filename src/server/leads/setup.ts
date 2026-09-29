@@ -423,16 +423,3 @@ async function normalizeLeadFieldPositions(tx: Db, businessId: string) {
       .execute();
   }
 }
-
-/** Keep legacy validateSetup working by accepting v1 or returning synthetic v1 from v2. */
-export function toLegacyDraftView(setup: LeadSetupV2): LeadSetupDraft {
-  return {
-    version: 1,
-    step: setup.completed ? 3 : (Math.min(setup.setupStep, 3) as 0 | 1 | 2 | 3),
-    channels: setup.channels,
-    fields: ["name", "phone", "service"],
-    title: setup.buttonLabel,
-    greeting: setup.greeting,
-    finalMessage: setup.finalMessage,
-  };
-}
