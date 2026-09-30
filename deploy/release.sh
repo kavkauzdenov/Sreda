@@ -85,9 +85,31 @@ rollback_tag="biznesoty:rollback-$(date -u +%Y%m%dT%H%M%SZ)"
 current_container="$(docker compose "${compose[@]}" ps -q app 2>/dev/null || true)"
 had_background_worker="$(docker compose "${compose[@]}" ps -q background-worker 2>/dev/null || true)"
 had_meta_worker="$(docker compose "${compose[@]}" ps -q meta-worker 2>/dev/null || true)"
+rollback_target_ready=0
 if [[ -n "$current_container" ]]; then
   current_image_id="$(docker inspect "$current_container" --format '{{.Image}}')"
-  docker image tag "$current_image_id" "$rollback_tag"
+  if docker image inspect "$current_image_id" >/dev/null 2>&1; then
+    docker image tag "$current_image_id" "$rollback_tag"
+    rollback_target_ready=1
+  else
+    # The image backing the running container is gone from the store. The
+    # legacy /opt/sreda/deploy/deploy.sh rebuilds a floating tag and
+    # recreates app from it, so every rebuild retags it and orphans the
+    # previous ID. Fall back to the last release recorded as healthy, so the
+    # rollback path below still has an image to switch to.
+    last_good=""
+    if [[ -f /opt/biznesoty/deploy/LAST_GOOD_IMAGE ]]; then
+      last_good="$(tr -d '[:space:]' < /opt/biznesoty/deploy/LAST_GOOD_IMAGE)"
+    fi
+    if [[ -n "$last_good" && "$last_good" != "$image" ]] &&
+      docker image inspect "$last_good" >/dev/null 2>&1; then
+      docker image tag "$last_good" "$rollback_tag"
+      rollback_target_ready=1
+      echo "Running app image $current_image_id was pruned; rollback target falls back to $last_good." >&2
+    else
+      echo "Running app image $current_image_id was pruned and no usable fallback exists; this release cannot auto-rollback." >&2
+    fi
+  fi
 fi
 
 docker compose "${compose[@]}" up -d db
@@ -147,8 +169,9 @@ fi
 
 echo "Full health check failed." >&2
 
-# Application rollback is safe only when this release did not advance schema.
-if [[ "$migration_before" == "$migration_after" && -n "$current_container" ]]; then
+# Application rollback is safe only when this release did not advance schema
+# and a rollback image was actually pinned above.
+if [[ "$migration_before" == "$migration_after" && "$rollback_target_ready" -eq 1 ]]; then
   echo "No new migrations were applied; rolling application containers back." >&2
   export SREDA_IMAGE="$rollback_tag"
   docker compose "${compose[@]}" up -d --remove-orphans
