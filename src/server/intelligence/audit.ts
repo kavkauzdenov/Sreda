@@ -8,6 +8,8 @@ export async function logIntelligenceEvent(
     businessId: string;
     userId: string | null;
     operation: string;
+    /** Кто выполняет операцию: business_brain | osint. */
+    source?: string;
     reason?: string;
     result?: string;
     metadata?: Record<string, unknown>;
@@ -20,7 +22,7 @@ export async function logIntelligenceEvent(
       business_id: input.businessId,
       user_id: input.userId,
       operation: input.operation,
-      source: "business_brain",
+      source: input.source ?? "business_brain",
       reason: input.reason ?? null,
       result: input.result ?? "ok",
       metadata: input.metadata ?? {},

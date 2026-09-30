@@ -1,6 +1,7 @@
 import type { Generated } from "kysely";
+import type { OsintTables } from "./osint/schema.ts";
 
-export interface IntelligenceTables {
+export interface IntelligenceTables extends OsintTables {
   intelligence_audit_log: {
     id: string;
     business_id: string;
