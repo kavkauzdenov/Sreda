@@ -64,16 +64,24 @@ export async function persistCandidate(
   );
   const decision = decideCandidate(scored, profile, input.thresholds);
 
-  const existing = await db
-    .selectFrom("osint_source_candidates")
-    .select(["id", "status", "confidence"])
-    .where("business_id", "=", input.businessId)
-    .where("normalized_url", "=", classified.normalizedUrl)
-    .executeTakeFirst();
+  const readExisting = () =>
+    db
+      .selectFrom("osint_source_candidates")
+      .select(["id", "status", "confidence"])
+      .where("business_id", "=", input.businessId)
+      .where("normalized_url", "=", classified.normalizedUrl)
+      .executeTakeFirst();
 
-  if (existing) {
+  /**
+   * Повторная запись того же URL (дедуп по osint_candidates_unique) не должна
+   * падать: статус двигается только вверх (rejected < candidate < accepted).
+   */
+  const reuse = async (
+    existing: NonNullable<Awaited<ReturnType<typeof readExisting>>>,
+  ): Promise<PersistCandidateResult> => {
     const existingStatus = existing.status as CandidateStatus;
-    if (STATUS_RANK[decision.status] > STATUS_RANK[existingStatus]) {
+    const upgraded = STATUS_RANK[decision.status] > STATUS_RANK[existingStatus];
+    if (upgraded) {
       await db
         .updateTable("osint_source_candidates")
         .set({
@@ -88,20 +96,20 @@ export async function persistCandidate(
     }
     return {
       id: existing.id,
-      status:
-        STATUS_RANK[decision.status] > STATUS_RANK[existingStatus]
-          ? decision.status
-          : existingStatus,
+      status: upgraded ? decision.status : existingStatus,
       score: scored.score,
       rule: decision.rule,
       reasons: scored.reasons,
       isNew: false,
       duplicate: true,
     };
-  }
+  };
+
+  const existing = await readExisting();
+  if (existing) return reuse(existing);
 
   const id = randomUUID();
-  await db
+  const inserted = await db
     .insertInto("osint_source_candidates")
     .values({
       id,
@@ -128,7 +136,21 @@ export async function persistCandidate(
       created_at: new Date(),
       updated_at: new Date(),
     })
-    .execute();
+    // Гонка двух параллельных run'ов одного бизнеса: UNIQUE (business_id,
+    // normalized_url) решает конфликт, вставка не падает.
+    .onConflict((oc) =>
+      oc.columns(["business_id", "normalized_url"]).doNothing(),
+    )
+    .executeTakeFirst();
+
+  if (!inserted || inserted.numInsertedOrUpdatedRows === BigInt(0)) {
+    const raced = await readExisting();
+    if (!raced)
+      throw new Error(
+        `candidate insert conflicted for ${classified.normalizedUrl} but no row exists`,
+      );
+    return reuse(raced);
+  }
 
   return {
     id,

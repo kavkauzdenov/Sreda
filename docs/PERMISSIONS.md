@@ -20,6 +20,7 @@ Source: `src/server/access/permissions.ts`.
 | `connections.manage` | ✓ | ✓ | ✗ |
 | `solutions.manage` | ✓ | ✓ | ✗ |
 | `analytics.export` / `upload` / `ai` | ✓ | ✓ | ✗ |
+| `intelligence.manage` | ✓ | ✓ | ✗ |
 
 `requireBusiness` returns 404 for missing/foreign business (same as not found) and 403 when membership exists but permission is denied.
 

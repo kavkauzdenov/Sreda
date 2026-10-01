@@ -7,6 +7,7 @@ import {
   Ellipsis,
   Plus,
   BarChart3,
+  Brain,
   ChevronDown,
 } from "lucide-react";
 import {
@@ -115,11 +116,18 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
             <div className="desktop-topbar__utility">
               <CommandSearch compact />
               <Link
+                href="/intelligence"
+                className="icon-button"
+                aria-label="Intelligence"
+              >
+                <Brain size={20} strokeWidth={1.7} aria-hidden />
+              </Link>
+              <Link
                 href="/analytics"
                 className="icon-button"
                 aria-label="Аналитика"
               >
-                <BarChart3 size={20} strokeWidth={1.7} />
+                <BarChart3 size={20} strokeWidth={1.7} aria-hidden />
               </Link>
               <NotificationBell />
             </div>

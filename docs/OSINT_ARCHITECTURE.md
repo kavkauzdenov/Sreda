@@ -1,8 +1,18 @@
 # OSINT-разведчик бизнеса — архитектура (Этап 1: аудит)
 
-**Статус:** Этап 1 завершён. Код не изменялся, создан только этот документ.
+**Статус:** Этап 1 завершён (документ без изменений кода). Этапы 2 и 3 ниже
+(§19, §20) описывают уже слитый в `main` код. Ремонтный пасс аудита — §22,
+фундамент Этапа 3 — §21.
 **Основано на:** `main` @ `89403a3` (Intelligence Day 1 уже в `main`).
 **Правило документа:** все ссылки на файлы проверены в репозитории на дату аудита.
+
+> **Расхождение нумерации этапов.** В §6 миграция этапа 1 названа
+> `069_osint_core.sql`; фактическое имя — `069_osint_discovery_v1.sql`
+> (этап 1) и `070_osint_knowledge_graph_v1.sql` (этап 2). §16 говорит
+> «этапы 2–14» — это нумерация roadmap-этапов из §16, а не номера
+> «Stage 1/Stage 2» из задачи. Номера миграций (`069`, `070`, `071`)
+> — единственный надёжный ориентир.
+
 
 ---
 
@@ -130,6 +140,12 @@ internal-data.ts (snapshot из order/lead/client/business)
 ---
 
 ## 3. Чего **нет** (пробелы, которые надо закрыть)
+
+> **Снимок Этапа 1** (на `89403a3`), не переписывается задним числом.
+> Закрыто с тех пор: таблицы `osint_*` (069/070), SSRF-хелпер
+> `osint/safe-fetch.ts`, `zod` в `dependencies`, `osint_competitor_candidates`,
+> право `intelligence.manage`. Остаются: HTML-парсер, notification-типы OSINT,
+> метрики-инфраструктура, кэш, `docs/WORKERS.md`.
 
 | Пробел | Факт |
 |---|---|
@@ -565,6 +581,12 @@ providers.collect()
 
 ## 12. API
 
+> **План Этапа 1**, а не факт. Фактически в репозитории три ручки:
+> `GET /intelligence/overview`, `GET /intelligence/osint`,
+> `POST /intelligence/osint/discovery` (§22.4). Остальные строки таблицы
+> (`/profile`, `/sources`, `/observations`, `/findings`, `/competitors`,
+> `/reviews`, `/collect`, `/entity-matches`) **не реализованы** — §20.16, §22.6.
+
 Конвенция: `src/app/api/v1/businesses/[id]/…/route.ts` → `intelligenceHandler(request, publicId, subresource)` в `src/server/http/intelligence-handler.ts`; `export const dynamic = "force-dynamic"`; `requireUser` → `requireBusiness` → сервис; мутации — `requireOrigin` (как в `application.ts` для POST) и `readJson()`.
 
 | Метод | Путь | Permission | Замечание |
@@ -680,18 +702,19 @@ E2E (по образцу `e2e/clients-v2.spec.mjs`): открыть `/intelligen
 
 ```
 [x] Intelligence architecture изучена          [x] OSINT schema implemented (Этап 2)
-[x] Existing intelligence code reused (план)  [x] migrations created (069)
+[x] Existing intelligence code reused (план)  [x] migrations created (069–071)
 [x] provider abstraction implemented (эт. 2)  [ ] website collector implemented
 [x] discovery collector implemented (эт. 2)   [ ] observation storage implemented
 [x] deduplication implemented (discovery)     [~] entity resolution: scoring+rules (эт. 2), merge — эт. 4
 [ ] review analysis implemented               [ ] competitor detection implemented
 [ ] findings implemented                      [ ] evidence implemented
 [ ] AI integration uses existing AI layer     [x] audit implemented (source=osint)
-[ ] background jobs implemented               [ ] API implemented
-[ ] UI implemented                            [x] tenant isolation verified (эт. 2)
+[ ] background jobs implemented               [x] API implemented (intelligence/osint)
+[x] UI implemented (OsintPanel)               [x] tenant isolation verified (эт. 2)
 [x] SSRF protection implemented (safe-fetch)  [x] tests implemented (+43 OSINT)
 [x] typecheck passes                          [x] lint passes (0 ошибок)
-[x] tests pass (596 / 0 fail / 11 skipped)    [x] build passes (этап 2 gate)
+[x] tests pass (649 / 0 fail / 11 skipped)    [x] build passes (этап 2 gate)
+[x] permission intelligence.manage            [x] Stage 3 contracts only (§21, без runtime)
 ```
 
 Базовые проверки на `89403a3` выполнены **до** любых изменений: `typecheck` чисто, `lint` 0 ошибок, `npm test` 553/0 fail. После Этапа 2: `typecheck` чисто, `lint` 0 ошибок, `npm test` 596 tests / 585 pass / 0 fail / 11 skipped, `npm run build` exit 0. На Этапе 14 — тот же финальный гейт.
@@ -841,8 +864,11 @@ result провайдера → classify → candidate (status: rejected | candi
 
 Наблюдения/факты/находки (таблицы созданы, сервисов нет), глубинная
 загрузка страниц, реальные провайдеры, AI-классификация (`src/server/ai/osint.ts`),
-конкуренты, уведомления, `intelligence.manage` permissions + endpoint'ы,
-UI, background worker (`processOsintJobs`), health-heartbeat `osint`.
+конкуренты, уведомления, background worker (`processOsintJobs`),
+health-heartbeat `osint`.
+
+> Обновлено при ремонте (§22): `intelligence.manage` + endpoint'ы + UI **вошли**
+> в область реализации и сделаны — см. §22.5. Остальное по-прежнему вне рамок.
 
 ### 19.9 Тесты и гейт Этапа 2
 
@@ -1220,16 +1246,16 @@ official_website → official_social → maps_and_directories → reviews → pu
 
 | Что | Готово | Осталось |
 |---|---|---|
-| План обхода, глубина, бюджеты, приоритет | `traversal.ts` | реальный fetch страниц |
+| План обхода, глубина, бюджеты, приоритет | `traversal.ts` | вызов из runtime (сейчас только тесты), реальный fetch страниц |
 | SSRF-защита и лимиты | `safe-fetch.ts` | — |
 | Разбор HTML | — | **HTML-парсер** (§26: не добавлялся) |
 | Наблюдения | таблица + `content_hash` | сервис сбора, парсер контента |
-| Mentions/attributes из текста | `apply.ts` + deterministic | выдача собранного текста в apply |
+| Mentions/attributes из текста | `apply.ts` + deterministic | вызов из runtime (сейчас только тесты), выдача собранного текста в apply |
 | AI-извлечение | контракт + заглушка | включить `enabled: true` + транспорт |
 | Фоновый worker | — | `processOsintJobs` |
 | Health-heartbeat `osint` | — | появится вместе с worker'ом |
-| API/UI | — | Этапы 10–14 |
-| Permissions `intelligence.manage` | — | Этап 11 |
+| API/UI | `GET/POST .../intelligence/osint` + `OsintPanel` (§22.4) | отчёт Этапа 3 (§21) |
+| Permissions `intelligence.manage` | union прав + `OsintService` (owner/admin) | — |
 
 ### 20.17 Решения: что и почему сделано иначе
 
@@ -1259,3 +1285,182 @@ official_website → official_social → maps_and_directories → reviews → pu
 
 Гейт: `typecheck` ✅ · `lint` ✅ · `npm test` 623/0 fail/11 skipped ✅ ·
 `build` ✅ · `npm audit --omit=dev --audit-level=high` 0 vulnerabilities ✅.
+
+---
+
+## 21. Этап 3 — фундамент: evidence & intelligence (только контракты)
+
+Контракты лежат в `src/lib/intelligence-contracts.ts` — **только типы**:
+нет рантайма, нет HTTP-ручек, нет миграций, нет новых таблиц. Цель файла —
+зафиксировать маппинг до того, как кто-нибудь начнёт реализацию.
+
+### 21.1 Рамка этапа
+
+Цепочка, которую закрывает Этап 3:
+
+```
+Observation → Evidence → Claim → Corroboration / Contradiction
+                                   → Intelligence Profile → Report
+```
+
+Сознательно **не** входит в Этап 3: crawler, скрейпинг, LLM-агенты,
+prediction / forecasting / sentiment / risk score, внешние провайдеры,
+дорогие фоновые job'ы.
+
+### 21.2 Маппинг контрактов на существующие таблицы
+
+| Контракт | Таблица (уже существует) | Комментарий |
+|---|---|---|
+| `Evidence` | `osint_observations` + `osint_sources` | `source_id` NOT NULL (069) — провенанс на уровне схемы |
+| `EvidenceSourceRef` | `osint_entity_mentions` / `osint_entity_attributes` / `osint_entity_relations.evidence` | хранится как ссылка + `evidence_kind` |
+| `Claim` (state/metric/contact/identity) | `osint_facts` | `subject`, `predicate`, `value`, `source_observation_id` |
+| `Claim` (relation) | `osint_entity_relations` | `from_entity_id`, `to_entity_id`, `relation_type`, `source_observation_id` |
+| `Corroboration` | производный — group by `(subject, predicate, value)` | считается на чтение, не хранится |
+| `Contradiction` | производный — group by `(subject, predicate)` с разным `value` | считается на чтение, не хранится |
+| `IntelligenceProfile` | `osint_business_entities` (мост) + `osint_entities` + `osint_facts` | глобальный слой читается только через bridge |
+| `Report` | read-only проекция | **не** хранится: копия данных = второй источник истины |
+
+### 21.3 Инварианты, обязательные при реализации
+
+1. Ни одного `Claim` без хотя бы одной `EvidenceSourceRef`.
+2. `Evidence` всегда указывает на `source_id` — NULL запрещён схемой (069).
+3. Fuzzy-совпадение **не** даёт права `auto-accept` (правило §12/§20.8).
+4. `OWNER` / `PUBLISHED_BY` — только через `sameAs | rel_author | explicit_claim`.
+5. Глобальные таблицы (`osint_entities`, `osint_sources`, `osint_observations`,
+   `osint_entity_sources`, `osint_entity_attributes`, `osint_entity_relations`,
+   `osint_entity_mentions`) не получают `business_id` и не читаются тенантом
+   в обход `osint_business_entities`.
+6. Дедуп сущностей — только по `identity_key`.
+7. `Corroboration` / `Contradiction` считаются по числу **разных**
+   `osint_sources.id`, а не наблюдений.
+8. `Report.mode` наследует `IntelligenceDataMode` Day 1
+   (`live | insufficient | demo`) — отчёт не выдаёт демо за живое.
+9. Разрешение противоречий наследует словарь Stage 1
+   (`prefer_newest | prefer_official | manual`), не «самое свежее выиграло».
+10. Любое новое хранилище Claim/Contradiction обязано пройти тот же гейт:
+    `schema → migration → service → integration → consumer → audit → tests`.
+
+### 21.4 Сознательно не сделано (backlog перед полноценным Этапом 3)
+
+- Никаких новых таблиц под Claim/Evidence/Contradiction/Report.
+- Нет вычислителя `corroborationRatio` / `contradictionRatio` (нужен сервисный слой).
+- Нет HTTP-ручек под Report.
+- Нет worker'а, который бы пересчитывал профиль.
+- `osint_facts`, `osint_findings`, `osint_finding_evidence`,
+  `osint_competitor_candidates`, `osint_entity_attributes` по-прежнему
+  **без** application-кода потребления (таблицы есть, читателей нет).
+
+---
+
+## 22. Ремонтный пасс аудита Stage 1/2
+
+Гейт после пасса: `typecheck` ✅ · `lint` ✅ ·
+`npm test` **649 / 638 pass / 0 fail / 11 skipped** ✅ · `build` ✅ ·
+`npm audit --omit=dev --audit-level=high` **0 vulnerabilities** ✅.
+
+Правило гейта capability: `schema → migration → service → integration →
+consumer → audit → tests`. Ниже — только то, что не проходило.
+
+### 22.1 Найденные дефекты
+
+| # | Уровень | Место | Дефект | Статус |
+|---|---|---|---|---|
+| 1 | HIGH | `osint_sources.url_len` CHECK 2048 | `candidates.ts` вставлял необрезанный URL из SERP → reachable unique/CHECK violation | исправлено |
+| 2 | MED | `releaseStaleDiscoveryRuns` | нет индекса `(status, started_at)` — оба существующих ведут с `business_id` → полный скан | исправлено (071) |
+| 3 | HIGH | `persistCandidate` | `INSERT` без `onConflict` → `unique_violation` при параллельных run'ах | исправлено |
+| 4 | HIGH | `osint_competitor_candidates.candidate_business_id` | `ON DELETE CASCADE` → удаление бизнеса B стирало строку тенанта A | исправлено (071) |
+| 5 | HIGH | `osint_facts.source_observation_id` | `ON DELETE CASCADE` → удаление глобального наблюдения удаляло тенантский факт | исправлено (071 → `RESTRICT`) |
+| 6 | HIGH | `osint_business_entities.entity_id` | `ON DELETE CASCADE` → удаление глобальной сущности удаляло тенантский мост | исправлено (071 → `RESTRICT`) |
+| 7 | MED | `osint_competitor_candidates.entity_id` | `ON DELETE CASCADE` на глобальную сущность | исправлено (071 → `SET NULL`) |
+| 8 | LOW | `osint_source_candidates.confidence` | Kysely-тип `string` вместо `Generated<string>` | исправлено |
+| 9 | LOW | `osint_entity_attributes.value` | Kysely-тип `unknown` вместо `Generated<unknown>` | исправлено |
+| 10 | HIGH | runtime | `runDiscovery` вызывался **только из тестов** — подсистема не была подключена к приложению | исправлено (§22.4) |
+| 11 | MED | `permissions.ts` | `intelligence.manage` не существовало | исправлено |
+| 12 | MED | UI | `/intelligence` был только в `SECONDARY_NAV_ITEMS`; desktop-пользователь не мог попасть на страницу; панели OSINT не было | исправлено |
+| 13 | LOW | тесты | из 11 инвариантов 2 отсутствовали полностью, 0 тестов на отклонение DB-ограничений, 0 HTTP-тестов intelligence/osint | закрыто частично (§22.6) |
+| 14 | LOW | runtime | `buildTraversalPlan` / `runTraversal` / `applyExtraction` — runtime готов и покрыт тестами, но production-потребителя по-прежнему нет | **не исправлено** — категория C (§22.6); подключить их = новое поведение, а не ремонт |
+
+### 22.2 Изменённые файлы
+
+| Файл | Изменение |
+|---|---|
+| `migrations/071_osint_repair_v1.sql` | **новый** — индекс + 4 FK-семантики удаления; без `;` в строках/комментариях (`migrate.ts:21` режет по `;`), без правки применённых миграций (`migrate.ts:17` checksum-guard) |
+| `src/server/access/permissions.ts` | `intelligence.manage` в union прав; **не** в `operatorPermissions` → owner/admin |
+| `src/server/intelligence/osint/classifier.ts` | `classifyResult` отклоняет `normalized.url.length > 2048` → `{ok:false, reason:"url_too_long"}` |
+| `src/server/intelligence/osint/candidates.ts` | хелперы `readExisting()`/`reuse()`, `onConflict((oc) => oc.columns(["business_id","normalized_url"]).doNothing())` + re-select по `numInsertedOrUpdatedRows`, `url.slice(0, 2048)` |
+| `src/server/intelligence/osint/schema.ts` | `confidence` и `value` → `Generated<>` |
+| `src/server/intelligence/osint/providers/own-urls.ts` | **новый** провайдер `own_urls`: `requiresNetwork:false`, `policy:"structured_data"`, `enabledByDefault:true`; эмитит `profile.website`, `https://<domain>/` и `knownSocialLinks` ровно один раз за run |
+| `src/server/intelligence/osint-service.ts` | **новый** сервисный слой: `getSnapshot` (право `analytics.view`), `startDiscovery` (право `intelligence.manage`, `releaseStaleDiscoveryRuns` перед стартом) |
+| `src/server/http/intelligence-handler.ts` | `intelligenceOsintSnapshotHandler`, `intelligenceOsintDiscoveryHandler` (`requireOrigin` + `limit(db, secret, …, 5, 60)`) |
+| `src/app/api/v1/businesses/[id]/intelligence/osint/route.ts` | **новый** `GET` |
+| `src/app/api/v1/businesses/[id]/intelligence/osint/discovery/route.ts` | **новый** `POST` |
+| `src/services/intelligence.service.ts` | `getOsintSnapshot`, `startOsintDiscovery` |
+| `src/lib/intelligence-types.ts` | wire-типы `OsintProviderInfo`, `OsintRunInfo`, `OsintCandidateInfo`, `OsintEntityInfo`, `OsintSourceInfo`, `OsintSnapshot`, `OsintDiscoveryRunOutcome` |
+| `src/lib/intelligence-contracts.ts` | **новый** — контракты Этапа 3 (§21) |
+| `src/components/intelligence/OsintPanel.tsx` | **новый** — счётчики, запуски, кандидаты, сущности, источники, кнопка «Запустить сбор» |
+| `src/components/intelligence/IntelligenceCommandCenter.tsx` | `<OsintPanel businessId={…}/>` после блока `overview` |
+| `src/components/layout/AppShell.tsx` | иконка `Brain` → `/intelligence` рядом с `/analytics` в desktop topbar |
+
+### 22.3 Миграция 071
+
+Шаги: (1) `osint_discovery_runs_status_started_idx (status, started_at) WHERE started_at IS NOT NULL`;
+(2) `osint_facts.source_observation_id` → `RESTRICT`;
+(3) `osint_business_entities.entity_id` → `RESTRICT`;
+(4) `osint_competitor_candidates.entity_id` → `SET NULL`;
+(5) `osint_competitor_candidates.candidate_business_id` → `SET NULL`.
+
+Принятое правило удаления: глобальный слой каскадится внутри себя;
+граница «тенант ← глобал» — `NOT NULL` → `RESTRICT`, NULLable → `SET NULL`;
+удаление одного бизнеса не должно трогать строки другого тенанта.
+
+### 22.4 Runtime-цепочка
+
+```
+POST /api/v1/businesses/:publicId/intelligence/osint/discovery
+  → requireUser (session + rate limit)  → requireOrigin + limit(5, 60)
+  → OsintService.startDiscovery(userId, publicId)
+      → requireBusiness(…, "intelligence.manage")   404 чужой / 403 нет прав
+      → releaseStaleDiscoveryRuns(db)
+      → runDiscovery(db, { businessId, userId, registry })
+          → buildDiscoveryProfile / buildDiscoveryQueries
+          → providers (own_urls — без сети)
+          → classifyResult → persistCandidate (onConflict) → ensureEntity (мост)
+          → intelligence_audit_log (operation "osint.discovery.run")
+  → OsintDiscoveryRunOutcome (201)
+
+GET  /api/v1/businesses/:publicId/intelligence/osint
+  → requireBusiness(…, "analytics.view") → OsintSnapshot
+```
+
+Права: чтение — `analytics.view` (owner/admin/operator/…), запуск —
+`intelligence.manage` (только owner/admin). UI: `OsintPanel` на
+`/intelligence`, вход через desktop topbar (`AppShell`).
+
+### 22.5 Новые тесты (+24)
+
+| Файл | Покрытие |
+|---|---|
+| `tests/osint-repair-invariants.test.mjs` (10) | провенанс observation→source + `NOT NULL` rejection; остановка traversal на цикле `A→B→C→A` без повторов; budget hits `max_requests`/`max_observations`; `maxSearchResults` → `partial`; abort → `aborted_by_caller`; упавший run → `intelligence_audit_log` с `result="failed"`; read-back провенанса relation + запрет NULL; дедуп по `identity_key` при одинаковом имени; ownership-guard `PUBLISHED_BY`; `url_too_long` в `classifyResult` |
+| `tests/osint-constraints.test.mjs` (10) | отклонения БД: дубль `osint_sources.normalized_url`, дубль `osint_entities.identity_key`, дубль `osint_observations (source_id, content_hash)`, неизвестный `source_id` (FK), self-relation `CHECK`, дубль relation `UNIQUE`, дубль `osint_entity_mentions` span, дубль `osint_facts`, тенантские строки переживают удаление глобального источника, удаление бизнеса B не трогает строку тенанта A |
+| `tests/osint-integration.test.mjs` (5) | `own_urls` эмитит URL один раз за instance; owner запускает сбор и читает snapshot (`providers`, counts, root entity); snapshot бизнеса B не утекает данные A; operator читает, но не запускает (`FORBIDDEN` 403), `allowed("operator","intelligence.manage") === false`; не-участник получает `BUSINESS_NOT_FOUND` 404 |
+
+Было 624 теста (613 pass / 0 fail / 11 skipped) → стало 649
+(638 pass / 0 fail / 11 skipped).
+
+### 22.6 Честно: что осталось закрытым
+
+- **HTTP-тестов intelligence/osint нет** — `tests/osint-integration.test.mjs`
+  покрывает сервисный слой, не `route.ts`. `tests/http/*` требует
+  `TEST_DATABASE_URL` и в этот гейт не входит.
+- `osint_facts`, `osint_findings`, `osint_finding_evidence`,
+  `osint_entity_attributes`, `osint_competitor_candidates` — таблицы есть,
+  application-кода потребления по-прежнему нет.
+- `buildTraversalPlan` / `runTraversal` / `applyExtraction` — модули рабочие и
+  покрыты тестами, но их не вызывает ни один production-код (единственный
+  runtime-вход в OSINT — `runDiscovery` через `OsintService`). Подключить их =
+  новое поведение, поэтому это категория C, а не ремонт (§22.1, дефект 14).
+- `processOsintJobs` (background worker) и health-heartbeat `osint` не делались.
+- Deep fetch, реальные провайдеры, AI-классификация (`src/server/ai/osint.ts`)
+  остаются отключёнными (`enabled:false` по умолчанию).
+- Кросс-тенантного read-only пути в `OsintService` нет: глобальный слой
+  читается только через `osint_business_entities`.

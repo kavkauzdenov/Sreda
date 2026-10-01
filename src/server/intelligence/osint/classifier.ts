@@ -149,6 +149,10 @@ function methodFor(intent: DiscoveryIntent | null | undefined): OsintDiscoveryMe
 export function classifyResult(input: ClassifyInput): ClassifyResult {
   const normalized = normalizeUrl(input.url);
   if (!normalized.ok) return { ok: false, reason: normalized.reason };
+  // osint_sources_url_len / osint_candidates_url_len (CHECK <= 2048): длинный
+  // URL не сохраняется — отбрасываем на границе классификации, а не триггером БД.
+  if (normalized.url.length > 2048)
+    return { ok: false, reason: "url_too_long" };
 
   const host = normalized.host;
   const path = normalized.path;

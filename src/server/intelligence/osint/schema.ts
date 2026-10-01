@@ -216,7 +216,7 @@ export interface OsintTables {
     discovery_method: Generated<OsintDiscoveryMethod>;
     query: string | null;
     search_position: number | null;
-    confidence: string;
+    confidence: Generated<string>;
     match_reasons: Generated<string[]>;
     evidence: Generated<unknown[]>;
     status: Generated<OsintCandidateStatus>;
@@ -394,7 +394,7 @@ export interface OsintTables {
     id: string;
     entity_id: string;
     attribute: OsintAttributeKind;
-    value: unknown;
+    value: Generated<unknown>;
     confidence: Generated<string>;
     source_observation_id: string | null;
     valid_from: Generated<Date>;

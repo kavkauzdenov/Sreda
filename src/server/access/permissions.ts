@@ -16,7 +16,8 @@ export type Permission =
   | "analytics.view"
   | "analytics.export"
   | "analytics.upload"
-  | "analytics.ai";
+  | "analytics.ai"
+  | "intelligence.manage";
 const operatorPermissions: readonly Permission[] = [
   "clients.read",
   "clients.write",

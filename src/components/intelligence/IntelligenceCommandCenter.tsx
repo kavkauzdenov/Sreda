@@ -5,6 +5,7 @@ import Link from "next/link";
 import { BusinessSwitcher } from "@/components/dashboard/BusinessSwitcher";
 import { LoadingPanel } from "@/components/dashboard/LoadingPanel";
 import { getIntelligenceOverview } from "@/services/intelligence.service";
+import { OsintPanel } from "@/components/intelligence/OsintPanel";
 import type {
   BusinessInsight,
   BusinessRecommendation,
@@ -247,6 +248,8 @@ export function IntelligenceCommandCenter() {
           </p>
         </>
       ) : null}
+
+      <OsintPanel businessId={businessId} />
 
       {previewRec ? (
         <dialog
