@@ -60,3 +60,26 @@ export function intelligenceOsintDiscoveryHandler(
     return json(outcome, 201);
   });
 }
+
+/**
+ * `GET /api/v1/businesses/[id]/intelligence/osint/observations/[observationId]`
+ * — Stage 3 runtime v1: observation → Evidence → Claim → Provenance.
+ */
+export function intelligenceOsintObservationHandler(
+  request: Request,
+  publicId: string,
+  observationId: string,
+) {
+  return respond(request, async () => {
+    if (request.method !== "GET") return json({ error: "method" }, 405);
+    const runtime = getRuntime();
+    const user = await createApplication(runtime).requireUser(request.headers);
+    return json(
+      await new OsintService(runtime.db).explainObservation(
+        user.id,
+        publicId,
+        observationId,
+      ),
+    );
+  });
+}

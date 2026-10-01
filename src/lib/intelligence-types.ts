@@ -1,3 +1,9 @@
+import type {
+  Claim,
+  Evidence,
+  EvidenceSourceRef,
+} from "./intelligence-contracts";
+
 export type SignalSeverity = "low" | "medium" | "high" | "critical";
 
 export type SignalType =
@@ -181,4 +187,59 @@ export type OsintDiscoveryRunOutcome = {
   reviewCount: number;
   rejectedCount: number;
   errors: string[];
+};
+
+/**
+ * Wire-контракт Stage 3 runtime v1
+ * (`GET .../intelligence/osint/observations/:observationId`).
+ *
+ * `Claim` / `Evidence` / `EvidenceSourceRef` берутся из контрактов
+ * `intelligence-contracts.ts` без изменений — здесь только DTO ответа.
+ */
+export type Stage3SourceInfo = {
+  id: string;
+  name: string;
+  url: string;
+  type: string;
+  trustLevel: string;
+  provider: string;
+};
+
+export type Stage3EntityInfo = {
+  id: string;
+  displayName: string;
+  identityKey: string | null;
+};
+
+/**
+ * Указатели цепочки Claim → Evidence → Observation → Source. Это ссылки на
+ * блоки того же ответа (`evidence`, `source`), а не вторая копия данных:
+ * контракт запрещает держать `sourceId` внутри `EvidenceSourceRef`.
+ */
+export type Stage3Provenance = {
+  claimId: string;
+  evidenceRef: EvidenceSourceRef;
+  observationId: string;
+  sourceId: string;
+};
+
+export type Stage3Claim = Claim & { provenance: Stage3Provenance };
+
+/**
+ * Причина пустого результата. Пустой `claims` — это нормальный ответ
+ * обработки, а не ошибка (§12).
+ */
+export type Stage3Reason =
+  | "no_extractable_claims"
+  | "missing_provenance"
+  | "missing_entity";
+
+export type Stage3ObservationSlice = {
+  businessId: string;
+  observationId: string;
+  evidence: Evidence;
+  source: Stage3SourceInfo | null;
+  entity: Stage3EntityInfo | null;
+  claims: Stage3Claim[];
+  reason: Stage3Reason | null;
 };

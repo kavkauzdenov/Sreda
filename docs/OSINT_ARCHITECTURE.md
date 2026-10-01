@@ -1464,3 +1464,194 @@ GET  /api/v1/businesses/:publicId/intelligence/osint
   остаются отключёнными (`enabled:false` по умолчанию).
 - Кросс-тенантного read-only пути в `OsintService` нет: глобальный слой
   читается только через `osint_business_entities`.
+
+---
+
+## 23. Stage 3 runtime v1 — первый вертикальный slice
+
+Цепочка: **Stage 2 observation → Evidence → Claim → Provenance.**
+
+### 23.1 Что реализовано
+
+| Шаг | Модуль | Что делает |
+|---|---|---|
+| Tenant scope | `osint-service.ts` → `explainObservation` | `requireBusiness(…, "analytics.view")` + запрос наблюдения только через тенантский мост `osint_business_entities` (`status <> 'rejected'`) либо `osint_entity_sources` → мост. Иначе 404 `OBSERVATION_NOT_FOUND` — без утечки факта существования чужой строки |
+| Evidence adapter | `osint/evidence.ts` → `toEvidence` | `osint_observations` → `Evidence` без копий: `id`, `sourceId`, `content`, `contentHash`, `observedAt`, `entityId` берутся как есть. Битые даты/хэш → 422 `MALFORMED_OBSERVATION` |
+| Kind guard | `osint/evidence.ts` → `assertClaimSupportedKind` | вид вне поддерживаемого набора → 422 `UNSUPPORTED_OBSERVATION_KIND`, а не пустой «тихий» результат |
+| Claim extraction | `osint/claims.ts` → `extractClaims` | детерминированная экстракция через существующий `extractDeterministic` Stage 2. Словарь предикатов — ровно `EXTRACTABLE_ATTRIBUTES`; `kind` мапится в `identity`/`contact`/`state` |
+| Stable identity | `osint/claims.ts` → `stableClaimId` | UUID из SHA-256 `(business, subject, predicate, observation, value)` — повторная проекция даёт байт-в-байт тот же результат |
+| Provenance | `Stage3Provenance` | `claimId`, `evidenceRef` (дословный `textSpan` + `evidenceKind` + `confidence`), `observationId`, `sourceId` — цепочка Claim → Evidence → Observation → Source |
+| API | `GET …/intelligence/osint/observations/:observationId` | handler `intelligenceOsintObservationHandler` → `OsintService.explainObservation` |
+| Наполнение | `osint/observations.ts` → `ensureObservation` | production writer, вставлен в существующий discovery (§23.3) — без него Stage 3 нечего объяснять |
+
+Права — те же, что у snapshot: чтение `analytics.view` (owner/admin/operator).
+Аудит на read не пишется — как и `getSnapshot` в Stage 2.
+
+### 23.2 Что сознательно НЕ реализовано
+
+- **persistence отсутствует намеренно**: ни одной новой таблицы, ни одной
+  миграции. Stage 3 — read-model поверх Stage 2; `Claim` нигде не хранится.
+  (Сами `osint_observations` пишет Stage 2 — см. §23.3; это не persistence
+  Stage 3.)
+- **Extraction детерминированная, LLM не вызывается.** Излечение идёт
+  **только из текста самого наблюдения** — поэтому `textSpan` всегда лежит
+  внутри `Evidence.content` и трассировка честна. Атрибуты, которые
+  `extractDeterministic` берёт из `DiscoveryProfile` (city/address/category),
+  сюда не попадают: их значение не гарантировано присутствовать в наблюдении,
+  и `textSpan` для них был бы непроверяемым.
+- Внешние providers, crawler, scraping, review collection, embeddings,
+  vector DB, forecasting, prediction, sentiment, risk score, autonomous
+  agents, очереди, workers, новые внешние API — не подключались.
+- UI не менялся: slice закрыт серверным кодом + тестами.
+- `Corroboration` / `Contradiction` / `IntelligenceProfile` / `Report`
+  не вычисляются — это следующие слои (§21.4).
+- `ClaimKind` `metric` и `relation` в v1 не порождаются: `metric` требует
+  числовых показателей, `relation` — `osint_entity_relations`.
+
+### 23.3 Какой pipeline создаёт observation (gap закрыт)
+
+Раньше здесь был gap: в `src/**` не существовало ни одного
+`insertInto("osint_observations")`, поэтому production-счётчик наблюдений был
+равен нулю, хотя вся остальная цепочка Stage 2 работала. Писатель добавлен в
+существующий discovery-pipeline, новый crawler/provider/очередь не заводились.
+
+#### Фактический data flow
+
+```
+input: профиль бизнеса (name, description, contact_info, website)
+  ↓ buildDiscoveryQueries(profile)
+provider.search(...)                     — в production это только own_urls
+  ↓ результат {url, title, snippet, position}
+classifyResult(...)                      → ClassifiedCandidate
+  ↓
+persistCandidate(...)                    → osint_source_candidates  (тенант)
+  ↓ status === "accepted"
+ensureSource(...)                        → osint_sources            (глобал)
+attachCandidateSource(...)               → candidates.source_id
+  ↓
+ensureObservation(...)                   → osint_observations       ← ДОБАВЛЕНО
+```
+
+#### Где именно выполняется writer
+
+`src/server/intelligence/osint/observations.ts` → `ensureObservation()`,
+вызов добавлен в `discovery.ts` в ветку `outcome.status === "accepted"`
+(`handleOutcome`), сразу после `ensureSource` + `attachCandidateSource`.
+
+Место выбрано не «где проще вставить INSERT», а структурно вынужденно:
+`osint_observations.source_id` — `NOT NULL` (069), а единственный код,
+создающий `osint_sources`, — `ensureSource()`, и вызывается он ровно оттуда.
+Наблюдение без источника схема физически не принимает.
+
+#### Какие данные являются источником
+
+Ровно то, что провайдер вернул по URL: `title`, `snippet` и сам `url`,
+склеенные переводом строки (`observationContent()`). Ничего не выдумывается —
+ни значений профиля, ни содержимого страницы (discovery страницы не читает,
+это делают коллекторы Этапов 5+). URL входит в content осознанно: так же
+«наблюдаемым материалом» его уже считает `scoreCandidate()` Stage 2
+(`entity-resolution.ts`, `title + snippet + url`), поэтому семантика не
+изобретается заново.
+
+- `kind` — `search_result`: discovery наблюдает **результат провайдера**, а не
+  содержимое страницы. `page`/`review`/`post`/`listing` появятся, когда
+  коллекторы начнут реально читать страницу.
+- `metadata` — только глобальная лексика `{provider, discovery_method}`.
+  `discovery_run_id` / `business_id` / `query` / `position` в публичный слой
+  **не кладутся**: правило 070 (не светить, кто первый нашёл источник).
+
+#### Idempotency
+
+`content_hash = sha256(content)` (64 hex, лимит 1..128 из 069) + уже
+существующий `UNIQUE (source_id, content_hash)` из 069. Вставка идёт через
+`ON CONFLICT (source_id, content_hash) DO NOTHING`; при гонке двух run'ов
+строка читается обратно. Повторный discovery того же профиля не плодит
+наблюдений. `external_id` не заполняется: `ClassifiedCandidate` его не несёт,
+а для идемпотентности он не нужен — хэша достаточно.
+
+#### Tenant isolation
+
+`osint_observations` глобальна (070 убрал `business_id`), поэтому граница
+проверяется явно, до записи:
+
+1. существует ли мост `osint_business_entities (businessId, entityId)` со
+   `status <> 'rejected'` — иначе `skipped: "tenant_bridge_missing"`;
+2. привязан ли источник к этой сущности через `osint_entity_sources` — иначе
+   `skipped: "source_not_linked_to_entity"`.
+
+Оба условия обязаны выполняться — запись «tenant A → observation →
+entity/source tenant B» невозможна. `entityId` приходит из `ensureEntity()`
+для самого тенанта, так что на практике guard ловит именно ошибочное
+перекрёстное использование API.
+
+#### Как observation становится доступен Stage 3
+
+Без нового формата провенанса, цепочкой Stage 2:
+
+```
+observation.source_id   → osint_sources        (provider, normalized_url)
+observation.entity_id   → osint_entities       → мост → бизнес
+candidate.source_id     → osint_source_candidates (tenant: business_id,
+                                                   discovery_run_id, query,
+                                                   search_position)
+```
+
+Дальше `GET …/osint/observations/:id` → `explainObservation()` →
+`Evidence` → `Claim` → `Provenance` (§23.1) — читается тем же запросом, что и
+в Stage 3 v1, без правок.
+
+#### Известное ограничение (честно)
+
+Наблюдение появляется **только для auto-accept кандидата**, потому что
+источник Stage 2 создаёт только для него. Замер на продовом провайдере
+`own_urls` (детерминированный, без сети):
+
+| Профиль | score | исход | наблюдений |
+|---|---|---|---|
+| имя + город + телефон + сайт | 0.444 | `accepted (domain_exact)` | **1** |
+| только имя + сайт | 0.889 | `accepted (domain_exact)` | **1** |
+| + соцсеть в описании | 0.400 | `accepted (domain_exact)` | **1** |
+| то же + строка «ул. Ленина, 10» | 0.381 | `candidate` (порог 0.40 не взят) | **0** |
+| без сайта/доменов/соцсетей | — | `own_urls` не вернул результатов | **0** |
+
+Порог `domain_exact` (`score >= 0.40`) и веса признаков — замороженная
+логика entity resolution Stage 2 (§4), она не менялась. Наблюдение без
+источника создать нельзя (`source_id NOT NULL`), поэтому кандидат в ручной
+очереди наблюдения не даёт. Закрытие этого ограничения — отдельное решение
+(ручной accept кандидата либо скоринг), не часть gap closure.
+
+Ни одна production-строка не создавалась вручную: наблюдения появляются
+только через реальный discovery-run.
+
+### 23.4 Тесты
+
+`tests/osint-stage3-runtime.test.mjs` (5) — все проходят на реальных строках
+Stage 2, вставленных в PGlite с настоящими ограничениями/FK:
+
+| # | Проверка |
+|---|---|
+| 1 | валидное наблюдение → Evidence + Claim + provenance; `textSpan` лежит в `Evidence.content`; `provenance.sourceId === evidence.sourceId === source.id` |
+| 2 | пустое содержимое → 200 с `claims: []` + `reason: "no_extractable_claims"`; наблюдение без пути до тенанта → 404 |
+| 3 | cross-tenant: B не читает наблюдение A зная UUID; не-участник → `BUSINESS_NOT_FOUND` |
+| 4 | три проекции подряд `deepEqual`, id уникальны; `stableClaimId` стабилен и чувствителен к value |
+| 5 | вид вне набора → 422; битые данные → 422 `MALFORMED_OBSERVATION`; малформенный/несуществующий id → 404 |
+
+Мутационная проверка (файлы восстановлены): снят тенант-скоуп → падают 2 и 3;
+`createdAt = now()` → падает 4; `provenance.observationId = source_id` или
+снят `textSpan` → падает 1.
+
+`tests/osint-observation-writer.test.mjs` (5) — gap closure (§23.3); наблюдения
+создаёт сам discovery, включая боевой провайдер `own_urls`:
+
+| # | Проверка |
+|---|---|
+| 1 | реальный Stage 2 flow (`own_urls` → source/entity) пишет observation: `content_hash = sha256(content)`, `kind`, `url`, `metadata.provider`, в `metadata` нет `discovery_run_id`/`business_id`; плюс пиннинг ограничения — профиль со строкой адреса даёт `candidate`, не `accepted`, и наблюдения нет |
+| 2 | повторный discovery не растит счётчик; прямой повторный `ensureObservation` → `created:false` + тот же id; другой материал того же источника → новая строка |
+| 3 | tenant A → entity/source tenant B → `tenant_bridge_missing`; источник без связи с entity → `source_not_linked_to_entity`; строк не добавлено; B не читает наблюдение A |
+| 4 | цепочка observation → source → entity → `osint_entity_sources` → мост → тенант; `candidate.discovery_run_id === run.runId` |
+| 5 | `explainObservation()` над writer-наблюдением → Evidence + Claims (`website`, `phone`) + Provenance; `textSpan` подстрока `Evidence.content`; повторный вызов `deepEqual` |
+
+Мутационная проверка writer'а (файлы восстановлены): снят tenant-guard →
+падает 3; снят `ON CONFLICT` → падают 2 и 5; убран вызов `ensureObservation`
+из discovery → падают 1, 2, 4, 5; из content убран URL → падают 1 и 5;
+`entity_id = null` → падают все пять.

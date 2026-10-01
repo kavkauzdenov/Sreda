@@ -2,6 +2,7 @@ import type { Kysely } from "kysely";
 import { sql } from "kysely";
 import type { Database } from "../db/schema.ts";
 import { requireBusiness } from "../access/permissions.ts";
+import { AppError } from "../http/errors.ts";
 import { createRegistry } from "./osint/providers/registry.ts";
 import { createOwnUrlsProvider } from "./osint/providers/own-urls.ts";
 import {
@@ -10,14 +11,30 @@ import {
   type DiscoveryRunResult,
 } from "./osint/discovery.ts";
 import type { DiscoveryBudget } from "./osint/config.ts";
+import {
+  assertClaimSupportedKind,
+  toEvidence,
+  type ObservationRow,
+} from "./osint/evidence.ts";
+import { extractClaims } from "./osint/claims.ts";
 import type {
   OsintDiscoveryRunOutcome,
   OsintSnapshot,
+  Stage3EntityInfo,
+  Stage3ObservationSlice,
+  Stage3Reason,
+  Stage3SourceInfo,
 } from "@/lib/intelligence-types.ts";
 
 const RUN_LIMIT = 5;
 const CANDIDATE_LIMIT = 50;
 const LIST_LIMIT = 50;
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const OBSERVATION_NOT_FOUND = () =>
+  new AppError(404, "OBSERVATION_NOT_FOUND", "Наблюдение не найдено.");
 
 const iso = (value: Date | string | null | undefined): string | null =>
   value ? new Date(value).toISOString() : null;
@@ -253,6 +270,177 @@ export class OsintService {
         provider: row.provider,
         createdAt: iso(row.created_at) ?? "",
       })),
+    };
+  }
+
+  /**
+   * Stage 3 runtime v1: вертикальный slice
+   * Stage 2 observation → Evidence → Claim → Provenance.
+   *
+   * Read-model поверх Stage 2: ничего не пишется и не дублируется.
+   * Tenant isolation — здесь, на сервере: наблюдение глобальное, поэтому
+   * доступ выдаётся только через тенантский мост `osint_business_entities`
+   * (status <> 'rejected'), либо через `osint_entity_sources` → мост.
+   * Иначе — 404, без утечки факта существования чужой строки.
+   */
+  async explainObservation(
+    userId: string,
+    publicId: string,
+    observationId: string,
+  ): Promise<Stage3ObservationSlice> {
+    const member = await requireBusiness(
+      this.db,
+      userId,
+      publicId,
+      "analytics.view",
+    );
+
+    if (!UUID_RE.test(observationId)) throw OBSERVATION_NOT_FOUND();
+
+    const scoped = await sql<ObservationRow>`
+      SELECT o.id, o.source_id, o.entity_id, o.content, o.content_hash,
+             o.observed_at, o.created_at, o.kind
+      FROM osint_observations o
+      WHERE o.id = ${observationId}
+        AND (
+          EXISTS (
+            SELECT 1
+            FROM osint_business_entities be
+            WHERE be.business_id = ${member.id}
+              AND be.entity_id = o.entity_id
+              AND be.status <> 'rejected'
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM osint_entity_sources es
+            JOIN osint_business_entities be2 ON be2.entity_id = es.entity_id
+            WHERE es.source_id = o.source_id
+              AND be2.business_id = ${member.id}
+              AND be2.status <> 'rejected'
+          )
+        )
+      LIMIT 1
+    `.execute(this.db);
+
+    const row = scoped.rows[0];
+    if (!row) throw OBSERVATION_NOT_FOUND();
+
+    assertClaimSupportedKind(row.kind);
+    const evidence = toEvidence(row);
+
+    const sourceRow = await this.db
+      .selectFrom("osint_sources")
+      .select(["id", "name", "url", "type", "trust_level", "provider"])
+      .where("id", "=", row.source_id)
+      .executeTakeFirst();
+
+    const source: Stage3SourceInfo | null = sourceRow
+      ? {
+          id: sourceRow.id,
+          name: sourceRow.name,
+          url: sourceRow.url,
+          type: sourceRow.type,
+          trustLevel: sourceRow.trust_level,
+          provider: sourceRow.provider,
+        }
+      : null;
+
+    const entityRows = await sql<{
+      entity_id: string;
+      display_name: string;
+      identity_key: string | null;
+    }>`
+      SELECT be.entity_id, e.display_name, e.identity_key
+      FROM osint_business_entities be
+      JOIN osint_entities e ON e.id = be.entity_id
+      WHERE be.business_id = ${member.id}
+        AND be.status <> 'rejected'
+        AND (
+          be.entity_id = ${row.entity_id}
+          OR be.entity_id IN (
+            SELECT es.entity_id
+            FROM osint_entity_sources es
+            WHERE es.source_id = ${row.source_id}
+          )
+        )
+      ORDER BY COALESCE(be.entity_id = ${row.entity_id}, false) DESC,
+               (be.status = 'linked') DESC,
+               be.created_at DESC
+      LIMIT 1
+    `.execute(this.db);
+
+    const entityRow = entityRows.rows[0];
+    const entity: Stage3EntityInfo | null = entityRow
+      ? {
+          id: entityRow.entity_id,
+          displayName: entityRow.display_name,
+          identityKey: entityRow.identity_key,
+        }
+      : null;
+
+    // §6: без полной цепочки Claim → Evidence → Observation → Source
+    // утверждение не считается валидным — возвращаем объяснимый пустой результат.
+    const subject = entity ? entity.displayName || entity.identityKey : null;
+    if (!source) return this.emptySlice(member.id, row.id, evidence, null, entity, "missing_provenance");
+    if (!entity || !subject)
+      return this.emptySlice(member.id, row.id, evidence, source, null, "missing_entity");
+
+    const extracted = extractClaims({
+      businessId: member.id,
+      observationId: row.id,
+      subject,
+      content: evidence.content,
+      observedAt: evidence.observedAt,
+    });
+
+    // Инвариант §6: Claim без Evidence-ссылки невалиден — он не отдаётся.
+    const claims = extracted.flatMap((claim) => {
+      const evidenceRef = claim.evidence[0];
+      if (!evidenceRef) return [];
+      return [
+        {
+          ...claim,
+          provenance: {
+            claimId: claim.id,
+            evidenceRef,
+            observationId: row.id,
+            sourceId: row.source_id,
+          },
+        },
+      ];
+    });
+
+    // Пустой список — нормальный результат обработки, а не ошибка (§12).
+    if (claims.length === 0)
+      return this.emptySlice(member.id, row.id, evidence, source, entity, "no_extractable_claims");
+
+    return {
+      businessId: member.id,
+      observationId: row.id,
+      evidence,
+      source,
+      entity,
+      claims,
+      reason: null,
+    };
+  }
+
+  private emptySlice(
+    businessId: string,
+    observationId: string,
+    evidence: Stage3ObservationSlice["evidence"],
+    source: Stage3ObservationSlice["source"],
+    entity: Stage3ObservationSlice["entity"],
+    reason: Stage3Reason,
+  ): Stage3ObservationSlice {
+    return {
+      businessId,
+      observationId,
+      evidence,
+      source,
+      entity,
+      claims: [],
+      reason,
     };
   }
 

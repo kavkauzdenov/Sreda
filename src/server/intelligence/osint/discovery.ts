@@ -14,6 +14,7 @@ import {
   ensureSource,
   persistCandidate,
 } from "./candidates.ts";
+import { ensureObservation } from "./observations.ts";
 import { classifyResult, type ClassifiedCandidate } from "./classifier.ts";
 import {
   buildDiscoveryProfile,
@@ -265,6 +266,20 @@ export async function runDiscovery(
         candidateId: outcome.id,
         sourceId,
         entityId,
+      });
+      // Gap closure Stage 3 (§23.3): здесь материал провайдера иначе
+      // заканчивался — до osint_observations он не доходил.
+      await ensureObservation(db, {
+        businessId: input.businessId,
+        entityId,
+        sourceId,
+        observed: {
+          url: classified.normalizedUrl,
+          title: classified.title,
+          snippet: classified.snippet,
+          provider: providerId,
+          method: classified.method,
+        },
       });
     }
   };
