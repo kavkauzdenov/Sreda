@@ -1,6 +1,7 @@
 import type { Kysely } from "kysely";
 import { sql } from "kysely";
 import type { Database } from "../db/schema.ts";
+import type { Claim, Evidence } from "@/lib/intelligence-contracts.ts";
 import { requireBusiness } from "../access/permissions.ts";
 import { AppError } from "../http/errors.ts";
 import { createRegistry } from "./osint/providers/registry.ts";
@@ -13,13 +14,16 @@ import {
 import type { DiscoveryBudget } from "./osint/config.ts";
 import {
   assertClaimSupportedKind,
+  isClaimSupportedObservationKind,
   toEvidence,
   type ObservationRow,
 } from "./osint/evidence.ts";
 import { extractClaims } from "./osint/claims.ts";
+import { assessClaims } from "./osint/assessment.ts";
 import type {
   OsintDiscoveryRunOutcome,
   OsintSnapshot,
+  Stage3Assessment,
   Stage3EntityInfo,
   Stage3ObservationSlice,
   Stage3Reason,
@@ -29,9 +33,17 @@ import type {
 const RUN_LIMIT = 5;
 const CANDIDATE_LIMIT = 50;
 const LIST_LIMIT = 50;
+/** Сколько тенантских наблюдений читает bulk-оценка (§1 — без полного скана). */
+const ASSESSMENT_LIMIT = 200;
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Наблюдение + субъект, выбранный тем же ранжированием, что у v1. */
+type AssessmentRow = ObservationRow & {
+  display_name: string | null;
+  identity_key: string | null;
+};
 
 const OBSERVATION_NOT_FOUND = () =>
   new AppError(404, "OBSERVATION_NOT_FOUND", "Наблюдение не найдено.");
@@ -274,6 +286,37 @@ export class OsintService {
   }
 
   /**
+   * Единый тенант-скоуп наблюдений (§7).
+   *
+   * Одна и та же предпосылка и у объяснения одного наблюдения (v1), и у
+   * bulk-оценки (v2): наблюдение глобальное, поэтому читается только через
+   * тенантский мост `osint_business_entities` (status <> 'rejected'), либо
+   * через `osint_entity_sources` → мост. Скоуп предполагает, что таблица
+   * наблюдений алиасирована как `o`.
+   */
+  private tenantScope(businessId: string) {
+    return sql<boolean>`
+      (
+        EXISTS (
+          SELECT 1
+          FROM osint_business_entities be
+          WHERE be.business_id = ${businessId}
+            AND be.entity_id = o.entity_id
+            AND be.status <> 'rejected'
+        )
+        OR EXISTS (
+          SELECT 1
+          FROM osint_entity_sources es
+          JOIN osint_business_entities be2 ON be2.entity_id = es.entity_id
+          WHERE es.source_id = o.source_id
+            AND be2.business_id = ${businessId}
+            AND be2.status <> 'rejected'
+        )
+      )
+    `;
+  }
+
+  /**
    * Stage 3 runtime v1: вертикальный slice
    * Stage 2 observation → Evidence → Claim → Provenance.
    *
@@ -302,23 +345,7 @@ export class OsintService {
              o.observed_at, o.created_at, o.kind
       FROM osint_observations o
       WHERE o.id = ${observationId}
-        AND (
-          EXISTS (
-            SELECT 1
-            FROM osint_business_entities be
-            WHERE be.business_id = ${member.id}
-              AND be.entity_id = o.entity_id
-              AND be.status <> 'rejected'
-          )
-          OR EXISTS (
-            SELECT 1
-            FROM osint_entity_sources es
-            JOIN osint_business_entities be2 ON be2.entity_id = es.entity_id
-            WHERE es.source_id = o.source_id
-              AND be2.business_id = ${member.id}
-              AND be2.status <> 'rejected'
-          )
-        )
+        AND ${this.tenantScope(member.id)}
       LIMIT 1
     `.execute(this.db);
 
@@ -442,6 +469,104 @@ export class OsintService {
       claims: [],
       reason,
     };
+  }
+
+  /**
+   * Stage 3 runtime v2: corroboration / contradiction / claim assessment.
+   *
+   * Read-model поверх Stage 2 (§9): ничего не пишется и не персистится.
+   * Читает те же наблюдения, что и `explainObservation`, но все целиком в
+   * пределах тенантского скоупа, и оценивает их коллективно (§5).
+   *
+   * Субъект выбирается тем же ранжированием, что и в `explainObservation`
+   * (прямая привязка → статус 'linked' → свежайший мост), поэтому ответ v2
+   * не расходится с ответом v1 на той же строке.
+   */
+  async assessObservations(
+    userId: string,
+    publicId: string,
+  ): Promise<Stage3Assessment> {
+    const member = await requireBusiness(
+      this.db,
+      userId,
+      publicId,
+      "analytics.view",
+    );
+
+    const scoped = await sql<AssessmentRow>`
+      SELECT
+        o.id, o.source_id, o.entity_id, o.content, o.content_hash,
+        o.observed_at, o.created_at, o.kind,
+        ranked.display_name, ranked.identity_key
+      FROM osint_observations o
+      LEFT JOIN LATERAL (
+        SELECT be.entity_id, e.display_name, e.identity_key
+        FROM osint_business_entities be
+        JOIN osint_entities e ON e.id = be.entity_id
+        WHERE be.business_id = ${member.id}
+          AND be.status <> 'rejected'
+          AND (
+            be.entity_id = o.entity_id
+            OR be.entity_id IN (
+              SELECT es.entity_id
+              FROM osint_entity_sources es
+              WHERE es.source_id = o.source_id
+            )
+          )
+        ORDER BY COALESCE(be.entity_id = o.entity_id, false) DESC,
+                 (be.status = 'linked') DESC,
+                 be.created_at DESC
+        LIMIT 1
+      ) ranked ON true
+      WHERE ${this.tenantScope(member.id)}
+      ORDER BY o.id
+      LIMIT ${ASSESSMENT_LIMIT}
+    `.execute(this.db);
+
+    const claims: Claim[] = [];
+    const provenance = new Map<string, string>();
+    let skipped = 0;
+
+    for (const row of scoped.rows) {
+      provenance.set(row.id, row.source_id);
+
+      const subject = row.display_name || row.identity_key;
+      if (!subject || !isClaimSupportedObservationKind(row.kind)) {
+        skipped += 1;
+        continue;
+      }
+
+      // §6: битая строка не даёт права на Claim — наблюдение пропускается,
+      // а оценка остается объяснимой, вместо 503 на весь bulk.
+      let evidence: Evidence;
+      try {
+        evidence = toEvidence(row);
+      } catch {
+        skipped += 1;
+        continue;
+      }
+
+      const extracted = extractClaims({
+        businessId: member.id,
+        observationId: row.id,
+        subject,
+        content: evidence.content,
+        observedAt: evidence.observedAt,
+      });
+      if (extracted.length === 0) {
+        skipped += 1;
+        continue;
+      }
+      claims.push(...extracted);
+    }
+
+    return assessClaims({
+      businessId: member.id,
+      observationCount: scoped.rows.length,
+      skippedObservations: skipped,
+      claims,
+      provenance,
+    });
   }
 
   async startDiscovery(

@@ -83,3 +83,21 @@ export function intelligenceOsintObservationHandler(
     );
   });
 }
+
+/**
+ * `GET /api/v1/businesses/[id]/intelligence/osint/assessment`
+ * — Stage 3 runtime v2: corroboration / contradiction / claim assessment.
+ */
+export function intelligenceOsintAssessmentHandler(
+  request: Request,
+  publicId: string,
+) {
+  return respond(request, async () => {
+    if (request.method !== "GET") return json({ error: "method" }, 405);
+    const runtime = getRuntime();
+    const user = await createApplication(runtime).requireUser(request.headers);
+    return json(
+      await new OsintService(runtime.db).assessObservations(user.id, publicId),
+    );
+  });
+}

@@ -1655,3 +1655,211 @@ Stage 2, вставленных в PGlite с настоящими огранич
 падает 3; снят `ON CONFLICT` → падают 2 и 5; убран вызов `ensureObservation`
 из discovery → падают 1, 2, 4, 5; из content убран URL → падают 1 и 5;
 `entity_id = null` → падают все пять.
+
+---
+
+## 24. Stage 3 runtime v2 — corroboration / contradiction / claim assessment
+
+Цепочка: **`Evidence[]` → `Claims[]` → grouping → оценка → объяснимый
+результат.** Это закрывает пункт §23.2 («`Corroboration` / `Contradiction`
+не вычисляются»).
+
+### 24.1 Что реализовано
+
+| Шаг | Модуль | Что делает |
+|---|---|---|
+| Tenant scope | `osint-service.ts` → `tenantScope` | **Один** приватный предикат, которым теперь пользуются и `explainObservation` (v1), и `assessObservations` (v2): глобальное `osint_observations` читается только через тенантский мост `osint_business_entities` (`status <> 'rejected'`), либо через `osint_entity_sources` → мост |
+| Bulk чтение | `assessObservations` | одним запросом (`LEFT JOIN LATERAL`) возвращает наблюдение + субъект, выбранный **тем же ранжированием**, что и в v1 (прямая привязка → `status = 'linked'` → свежайший мост). Лимит `ASSESSMENT_LIMIT = 200` — полного скана нет |
+| Сбор claims | `assessObservations` | те же `toEvidence` + `extractClaims`, что и в v1. Битая строка, неподдерживаемый `kind`, отсутствие субъекта или пустая экстракция → строка попадает в `skippedObservations`, а bulk не падает 503 |
+| Оценка | `osint/assessment.ts` → `assessClaims` | **чистая функция**: ни сети, ни персистентности, ни `now()`. Группировка → нормализация → правила → `Stage3Assessment` |
+| Таблица сравнения | `CLAIM_COMPARISON_TABLE` | закрытый набор predicate'ов, для которых равенство значений безопасно (§24.2); ключи сверяются с `EXTRACTABLE_ATTRIBUTES` при загрузке модуля |
+| Grouping | `assessClaims` | ключ — **точный** пар `(subject, predicate)`. Нечёткого merge нет: «похожая строка» не делает два утверждения одним |
+| Provenance | `Stage3Provenance[]` на группу | каждый claim трассируется до своего `observationId` и `sourceId`; контракт `intelligence-contracts.ts` **не менялся** |
+| API | `GET …/intelligence/osint/assessment` | handler `intelligenceOsintAssessmentHandler` → `OsintService.assessObservations`. Права — те же, что у v1: чтение `analytics.view` |
+
+Типы ответа (`Stage3Assessment`, `Stage3AssessmentGroup`,
+`Stage3AssessmentRule`, `Stage3AssessmentGap`, `Stage3Independence`)
+добавлены в `src/lib/intelligence-types.ts` — там же, где v1 держит
+`Stage3ObservationSlice`. Внутри группы переиспользуются контрактные
+`Corroboration` и `Contradiction` без модификаций.
+
+### 24.2 Фактические predicates и что безопасно сравнивать
+
+Словарь Stage 1 (`EXTRACTABLE_ATTRIBUTES`, 13 позиций): `name`, `phone`,
+`website`, `address`, `email`, `city`, `region`, `country`, `category`,
+`description`, `social_links`, `coordinates`, `working_hours`.
+
+**Что Stage 3 v1/v2 реально создаёт.** `extractClaims` вызывает
+`extractDeterministic({ text })` **без** `profile` и **без**
+`knownEntityName`, поэтому ветка профиля (`deterministic.ts`,
+`if (input.profile)`) не исполняется. Из текста наблюдения рождаются ровно
+три predicate'а:
+
+| predicate | как нормализуется | `valueKind` | уверенность |
+|---|---|---|---|
+| `phone` | `normalizePhone` → цифровая строка (`73852551010`) | `string` | 0.95 |
+| `email` | `toLowerCase` | `string` | 0.95 |
+| `website` | `registrableDomain(host)` | `string` | 0.9 |
+
+`name` / `city` / `address` / `category` сегодня в Stage 3 не появляются
+вообще; `description`, `social_links`, `coordinates`, `working_hours` из
+текста не извлекаются.
+
+**Таблица безопасного сравнения** (`CLAIM_COMPARISON_TABLE`):
+
+| predicate | нормализация при сравнении | почему сравним |
+|---|---|---|
+| `phone` | `replace(/\D/g, "")` | цифры; `normalizePhone` уже каноничен, формат записи не важен |
+| `email` | trim + схлопывание пробелов + lower | формат адреса |
+| `website` | trim + lower + снятие конечных точек | домен |
+| `name`, `city`, `region`, `country` | схлопывание пробелов + casefold | текст, где регистр/пробельные различия не меняют смысл |
+
+**Сознательно `not_assessed`:**
+
+| predicate | почему |
+|---|---|
+| `address` | форматы не унифицированы («ул. Ленина, 10» vs «улица Ленина, 10») — без парсера равенство врёт |
+| `category` | несколько категорий одновременно не противоречат друг другу |
+| `description`, `working_hours` | свободный текст; разные формулировки ≠ разные факты |
+| `social_links`, `coordinates` | список и числовая точность |
+| любой predicate вне таблицы | не изобретаем семантику постфактум |
+| `value === null` или `valueKind !== "string"` | неизвестное значение не должно становиться подтверждением |
+
+Смесь сравнимых и несравнимых значений в одной группе тоже даёт
+`not_assessed` + gap `value_not_comparable`: молча выбрать «правильную»
+часть — ровно та неоднозначность, которую §5 запрещает разрешать.
+
+### 24.3 Правила оценки
+
+Правила применяются по порядку, первое сработавшее и становится `rule`:
+
+| `rule` | условие | что отдаётся |
+|---|---|---|
+| `missing_provenance` | ни у одного claim группы нет проверяемой цепочки Observation → Source **в этом тенанте** | `corroboration: null`, `contradictions: []`, gap `missing_provenance` |
+| `not_assessed` | predicate вне таблицы сравнения, либо значения несравнимы | `corroboration: null`, `contradictions: []`, gap `predicate_not_comparable` / `value_not_comparable` |
+| `single_observation` | меньше двух разных `observation_id` | `corroboration: null`, gap `insufficient_observations` |
+| `value_mismatch` | есть два наблюдения с **непересекающимися** множествами значений | `Contradiction` с `resolution: "unresolved"`, `status: "unresolved"`, gap `no_temporal_semantics` |
+| `single_source` | значение едино, источников один | `corroboration: null` |
+| `distinct_sources` | значение едино, источников ≥ 2 | `Corroboration` |
+
+Правила корроборации и противоречия (§4):
+
+1. **Одно наблюдение не подтверждает само себя** — bucket требует
+   ≥ 2 разных `observation_id`. Повторная проекция того же наблюдения
+   счётчик не растит: claims дедуплицируются по `id`.
+2. **Один source с несколькими observations ≠ несколько источников** —
+   `distinctSourceCount` считает **разные** `osint_sources.id`.
+   Такой случай получает `single_source`, а не `Corroboration`.
+3. **`Corroboration.confidence` — не новая оценка.** Это
+   `min(confidence)` входящих claims, то есть пол детерминированного
+   извлечения. Вероятность истинности не вычисляется и не выдаётся.
+4. **`independence` всегда `"unknown"`.** Разные `source_id` доказывают
+   *разнообразие* источников, но не их независимость: владельцы могут
+   совпадать, а данных об этом в Stage 1/2 нет. Пол `"established"`
+   зарезервирован и сегодня намеренно не достигается; на это указывает
+   gap `source_independence_unknown`.
+5. **Конфликт определяется как отсутствие общего значения.** Противоречие
+   объявляется, только если существуют два наблюдения, у которых нет ни
+   одного общего нормализованного значения. Это сознательно
+   консервативно: один source может легально перечислить два телефона, и
+   это не спор между источниками — пока у всех есть общее значение,
+   `Contradiction` не создаётся.
+6. **Временная изменчивость не разрешается.** У Stage 3 `validTo = null`,
+   то есть temporal semantics нет. Поэтому `resolution` и `status`
+   всегда `"unresolved"` — «предпочесть более новое» было бы категорическим
+   выводом без данных.
+
+Детерминизм (§8):
+
+- `Contradiction.id` — SHA-256 от `(business, subject, predicate,
+  отсортированных нормализованных значений)` с выставленными
+  version/variant битами;
+- `Contradiction.detectedAt` — момент **последнего вошедшего наблюдения**,
+  а не `now()`: повторный запуск того же входа даёт тот же ответ;
+- все массивы (`groups`, `observations`, `sources`, `provenance`,
+  `sides`, `gaps`) отсортированы локально-независимым сравнением
+  (без `localeCompare`);
+- входные `Claim` не мутируются — нормализация живёт только во внутренних
+  ключах bucket'ов, отданное значение остаётся исходным.
+
+Изоляция (§7): чужие `claim.businessId` отбрасываются до группировки и не
+создают групп; `provenance`-карта строится только из строк, прошедших
+тенантский scope, поэтому чужой `observation_id` в неё не попадает.
+
+### 24.4 Что сознательно НЕ реализовано
+
+- **Persistence отсутствует намеренно**: ни одной новой таблицы, ни одной
+  миграции. Оценка — read-model, повторный вызов пересчитывает её заново.
+- `intelligence-contracts.ts` **не изменялся**: `Corroboration`,
+  `Contradiction`, `Claim`, `Evidence`, `EvidenceSourceRef` используются
+  как есть. Объяснение к оценке живёт в группе-обёртке
+  (`Stage3AssessmentGroup`), а не в виде второго набора типов.
+- Числовой `confidence` оценки не вводился: у `Corroboration` это поле
+  контрактное, и его значение — пол извлечения входящих claims (§24.3.3).
+- LLM, embeddings, vector DB, sentiment, business risk score, прогнозы,
+  автопринятие решений, crawler/scraping, новые providers, новые
+  workers/очереди — не подключались.
+- Запись результата в `osint_facts` / `osint_entity_relations` не
+  выполняется: это отдельное решение с отдельной миграцией.
+- Разрешение противоречий (`prefer_newest` / `prefer_official` /
+  `manual`) не применяется — нет temporal semantics (§24.3.6).
+- UI не менялся: slice закрыт серверным кодом + тестами.
+
+### 24.5 Тесты
+
+`tests/osint-stage3-assessment.test.mjs` (14, все проходят) — часть кейсов
+на реальных строках Stage 2 в PGlite, часть на чистой функции `assessClaims`:
+
+| # | Проверка |
+|---|---|
+| 1 | два источника с одним значением → `distinct_sources` + `Corroboration` (`distinctSourceCount = 2`), `independence = "unknown"`, gap `source_independence_unknown`; `confidence = min(...)`; каждый claim трассируется своим `observationId`/`sourceId` |
+| 2 | одно наблюдение → `single_observation`, ничего не подтверждено, gap `insufficient_observations` |
+| 3 | один source с двумя observations → `single_source`, `distinctSourceCount = 1`, `corroboration: null` |
+| 4 | два источника, разные значения `phone` → `value_mismatch`, `Contradiction` с двумя `sides` |
+| 5 | временно изменчивый `phone` → `resolution`/`status` = `unresolved`; `detectedAt` равен максимуму `observed_at` из данных, а не текущему времени; `id` — UUID |
+| 6 | один source с двумя телефонами + второй source с одним из них → **нет** противоречия (непересекающееся значения), `distinct_sources` |
+| 7 | разные `subject` → две группы, `Contradiction` между ними не создаётся |
+| 8 | predicate вне словаря → `not_assessed` + gap `predicate_not_comparable` |
+| 9 | прямой и реверсированный порядок входа дают `deepEqual`; входные `Claim` не мутируют; `Contradiction.id` совпадает |
+| 10 | cross-tenant: `observationCount = 1`, чужой source/значения не попадают; не-участник → `BUSINESS_NOT_FOUND`; claim чужого `businessId` не создаёт группу |
+| 11 | бизнес без наблюдений → `reason: "insufficient_evidence"`, `groups: []` |
+| 12 | claim без проверяемой цепочки → `missing_provenance`, `corroboration: null`, `claimCount = 0`; та же группа с рабочей цепочкой даёт подтверждение |
+| 13 | три claim из одного observation (+ точный дубль `id`) → `claimCount` схлопнут, `distinctObservationCount = 1`, `single_observation`, `corroboration: null` |
+| 14 | наблюдение с `content_hash = " "` (проходит CHECK, но `toEvidence` отвечает 422) → `skippedObservations = 1`, endpoint не падает 503, валидное наблюдение обработано |
+
+Мутационные проверки (файлы восстановлены, каждая даёт ≥ 1 падение):
+
+| # | Мутация | Падает |
+|---|---|---|
+| A | `independence: "established"` | 1 |
+| B | конфликт = «≥ 2 значения» вместо непересекающихся множеств | 6 |
+| C | `Corroboration` уже при одном источнике | 3 |
+| D | `detectedAt = now()` | 5 |
+| E | снят фильтр провенанса | 12 |
+| F | `resolution: "prefer_newest"` | 5 |
+| G | снят тенант-скоуп в bulk-запросе | 1, 4, 10 |
+| H | grouping только по `predicate` (без `subject`) | 7 |
+| I | снят фильтр чужого `businessId` | 10 |
+| J | снят дедуп claim по `id` | 13 |
+| K | `sortedUnique(observations)` → без уникальности | 13, 14 |
+| L | снят `try/catch` вокруг `toEvidence` (bulk падает 422/503) | 14 |
+
+### 24.6 Честно: что не проверено (Stage 3 v2)
+
+- **Реальная PostgreSQL не проверялась.** `TEST_DATABASE_URL` в этом окружении
+  не задан, поэтому все тесты Stage 3 (и v1, и v2) шли на **PGlite** —
+  встроенном in-process Postgres-совместимом движке. Ограничения, FK и
+  CHECK у PGlite настоящие, но семантика настоящего сервера PostgreSQL
+  (блокировки строк, `NULL`-уникальность, конкуренция соединений) не
+  воспроизводилась.
+- **11 skipped в `npm test` — не Stage 3.** Это тесты конкуренции
+  (`booking`, `hardening-pre-e2e`, `identity-workspaces` и др.), которым
+  нужны отдельные соединения к `TEST_DATABASE_URL`. Ни один тест Stage 3
+  не пропущен: 14/14 у v2 и 5/5 у v1 выполняются.
+- **HTTP-ручка не покрыта HTTP-тестами** — как и весь intelligence/osint
+  (§22.6): `tests/osint-stage3-assessment.test.mjs` проверяет сервисный
+  слой `OsintService.assessObservations`, а не `route.ts`.
+  `tests/http/*` требует `TEST_DATABASE_URL`.
+- Оценка **не устанавливает истинность claims** и не выдаёт вероятность:
+  `Corroboration.confidence` — пол извлечения, `independence` — всегда
+  `"unknown"`, `Contradiction` всегда `unresolved`.

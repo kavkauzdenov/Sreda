@@ -1,5 +1,7 @@
 import type {
   Claim,
+  Contradiction,
+  Corroboration,
   Evidence,
   EvidenceSourceRef,
 } from "./intelligence-contracts";
@@ -242,4 +244,93 @@ export type Stage3ObservationSlice = {
   entity: Stage3EntityInfo | null;
   claims: Stage3Claim[];
   reason: Stage3Reason | null;
+};
+
+/**
+ * Wire-контракт Stage 3 runtime v2
+ * (`GET .../intelligence/osint/assessment`).
+ *
+ * Оценка — проекция уже построенных `Claim`, поэтому второго набора данных
+ * нет: `Corroboration` и `Contradiction` берутся из
+ * `intelligence-contracts.ts` без изменений, сам контракт НЕ меняется.
+ * Пояснение к оценке (какое правило сработало, почему результат
+ * неопределён, чего не хватает) живёт в группе-обёртке — ровно так, как v1
+ * держит провенанс в `Stage3Provenance`, а не внутри `EvidenceSourceRef`.
+ */
+export type Stage3AssessmentRule =
+  /** Ни один claim группы не имеет проверяемой цепочки Observation → Source. */
+  | "missing_provenance"
+  /** Predicate вне таблицы безопасного сравнения — сравнивать нельзя. */
+  | "not_assessed"
+  /** Меньше двух разных наблюдений: подтвердить и опровергнуть нечем. */
+  | "single_observation"
+  /** Два наблюдения отвечают на один вопрос по-разному. */
+  | "value_mismatch"
+  /** Значение едино, но все наблюдения из одного источника. */
+  | "single_source"
+  /** Значение едино, источников несколько — есть разнообразие источников. */
+  | "distinct_sources";
+
+/**
+ * Независимость источников.
+ *
+ * v2 выдаёт только `"unknown"`: разные `osint_sources.id` доказывают
+ * разнообразие, но не независимость — владельцы источников могут совпадать,
+ * а данных об этом в Stage 1/2 нет (§4.5–4.7). `"established"` зарезервирован
+ * под появление таких данных и сегодня намеренно не достигается.
+ */
+export type Stage3Independence = "unknown" | "established";
+
+/**
+ * Почему уверенному выводу не хватает данных (§1).
+ * Список без дублей и отсортирован — детерминизм (§8).
+ */
+export type Stage3AssessmentGap =
+  /** Ни одного claim с проверяемой цепочкой Observation → Source. */
+  | "missing_provenance"
+  /** Predicate не входит в таблицу безопасного сравнения. */
+  | "predicate_not_comparable"
+  /** Часть значений группы несравнима (не строка / нет значения). */
+  | "value_not_comparable"
+  /** Меньше двух разных наблюдений. */
+  | "insufficient_observations"
+  /** Разные source id ≠ доказанная независимость. */
+  | "source_independence_unknown"
+  /** Нет temporal semantics (`validTo = null`) — конфликт не разрешается. */
+  | "no_temporal_semantics";
+
+export type Stage3AssessmentGroup = {
+  businessId: string;
+  /** Предмет: имя сущности либо её домен (§5). */
+  subject: string;
+  predicate: string;
+  /** Claims, прошедшие проверку провенанса и вошедшие в группу. */
+  claimCount: number;
+  distinctObservationCount: number;
+  distinctSourceCount: number;
+  /** osint_observations.id, участвующие в оценке. */
+  observations: string[];
+  /** osint_sources.id, участвующие в оценке. */
+  sources: string[];
+  /** Трассировка каждого claim'а до Observation и Source (§6). */
+  provenance: Stage3Provenance[];
+  rule: Stage3AssessmentRule;
+  independence: Stage3Independence;
+  /** `null`, если разнообразия источников нет. */
+  corroboration: Corroboration | null;
+  contradictions: Contradiction[];
+  gaps: Stage3AssessmentGap[];
+};
+
+export type Stage3Assessment = {
+  businessId: string;
+  /** Сколько тенантских наблюдений просмотрено (диагностика, не оценка). */
+  observationCount: number;
+  /** Сколько наблюдений не дало пригодной цепочки (субъект/вид/контент). */
+  skippedObservations: number;
+  /** Сколько claims передано в оценку. */
+  claimCount: number;
+  groups: Stage3AssessmentGroup[];
+  /** Пустая проекция — нормальный ответ обработки, а не ошибка (§12). */
+  reason: "insufficient_evidence" | null;
 };
