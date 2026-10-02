@@ -2124,3 +2124,264 @@ CI (`verify.yml`, не менялся): `npm test` → `test:pg` → `lint` →
 6. HTTP-сьют (`test:http`) исполняет run'ы `crawl: null` (search-фаза) —
    crawl через реальный Next-маршрут покрыт E2E на сервисном слое, а не на
    `next start`.
+
+## 26. Stage 4 — intelligence layer: факты, изменения, профиль (реализовано)
+
+### 26.1 Поток данных и факт-слой
+
+```
+discovery run завершён (runner §25)
+  → enqueueEnrichment                       один активный run на бизнес (§26.11)
+фоновый воркер (background-worker, тик между discovery и heartbeat "osint")
+  или runEnrichment ad-hoc (юнит/E2E/инструменты)
+  → claim queued→running (attempts+1)       два воркера — ровно один winner (§26.16)
+  → loadObservations: ПОСЛЕДНЕЕ наблюдение на источник
+      SELECT DISTINCT ON (o.source_id) … ORDER BY o.source_id, observed_at DESC
+      единый тенант-скоуп §7 (scope.ts)
+  → extractFacts (§26.3) → normalizeFactValue (§26.5)
+      дедуп по (source_id, fact_type, fact_key)
+  → buildExtractedIdentity → resolveEntityMatch (§26.6)
+  → транзакция:
+      upsert по fingerprint (§26.5)         conflict → обновить seen-времена
+      state-based transitions → osint_fact_changes (§26.9)
+      reconcileContradictions (§26.10)
+  → finishRun: stats + resolution → osint_enrichment_runs.stats (jsonb)
+
+GET .../osint/{profile,facts,changes,contradictions}  read model (§26.12)
+UI  IntelligenceProfilePanel                             четыре вопроса (§26.13)
+```
+
+**Fact ≠ Observation.** Observation — «источник сообщил X», Fact — «для
+бизнеса наблюдалось значение X»: нормализованное, привязанное к строке
+источника и живущее дольше одной загрузки страницы (§26.1). Каждая
+fact-строка обязана трассироваться до observation → source FK'ми.
+
+### 26.2 Что сознательно НЕ извлекается в v1
+
+Без LLM и без эвристик «по здравому смыслу»: `brand_name`/`legal_name`
+без структурированного источника, публичные идентификаторы (ИНН/ОГРН/
+лицензии) из произвольного текста, `service`/`product`/`opening_hours`
+без закрытого словаря, геокодирование. `category`/`city`/`address`/
+`region`/`country` — только из `osint_source_context` (structured data).
+Типы определены в схеме заранее; строка создаётся только когда значение
+уже дано структурно или лежит в закрытом текстовом паттерне.
+
+### 26.3 Извлечение кандидатов (`facts.ts`)
+
+Приоритет источников: 1) structured data (`source_context`: имя,
+категория, город, адрес, контакты, домены, social links); 2)
+`source_url` самого источника — registrable-домен → `domain`, URL →
+`website`; 3) закрытые regex текста наблюдения — телефоны
+(`extractPhoneRuns`), email, URL (соцсеть → соответствующий тип, иначе
+`website`); 4) имя сущности — только при явном присутствии в тексте
+(`business_name`). Доменом бизнеса считается **только домен самого
+источника** — anchor-домены соседних сайтов не извлекаются (§26.19).
+Дедуп кандидатов по (source, type, normalized key) — уже в enrichment.
+
+### 26.4 Провенанс (`metadata.origin`)
+
+`origin ∈ {source_context, source_url, observation_text}` — как именно
+появился кандидат; `raw_value` никогда не перезаписывается
+нормализованным `value`. Цепочка fact → observation → source читается
+FK'ми: `osint_intelligence_facts` FK на глобальные таблицы (070 убрал их
+`business_id`), тенантская изоляция — общий SQL-скоуп §7, а не составной
+FK. Drill-down из UI/API уходит в существующий Stage 3 observation slice.
+
+### 26.5 Нормализация и fingerprint'ы (`normalize.ts`)
+
+Два слоя: `value` — каноническое представление для показа, `key` — ключ
+сравнения (там, где регистр не несёт смысла — casefold(value)). Один и
+тот же вход всегда даёт один и тот же результат — иначе идемпотентность
+невозможна.
+
+| тип | правило |
+|---|---|
+| phone | общий с Stage 3 `normalizePhone`: 10–15 цифр, 8→7 для 11 цифр РФ; мусор → null |
+| email | домен lowercase, локальная часть сохраняется (RFC 5321) |
+| domain | без схемы/пути/порта, `www.` снимается, только ASCII |
+| website | lowercase scheme+host, без фрагмента, tracking-параметры (utm/gclid/fbclid/…) вырезаны, параметры отсортированы; в key схема не входит → http ≡ https |
+| social | `network:handle` (vk/telegram/instagram/facebook/youtube/tiktok + `other:` для остальных) |
+| address | TRIM, ё→е, типовые сокращения (`ул.`→`улица`, `д.`→`дом`, …); NB: `\b` в JS не работает с кириллицей — позиция задаётся `(^|\s)` |
+| free text | pretty-текст в value, `normalizeText` в key |
+| прочее | `null` на непригодное значение — факт не создаётся, а не сохраняется «как есть» |
+
+Fingerprint'ы — sha256 по полям, соединённым NUL-символом:
+`(business, type, key, source)` — отпечаток fact-строки;
+`(business, type, kind, old, new, source)` — отпечаток change-перехода
+(`null` и `""` эквивалентны). Уникальность держит
+`UNIQUE (business_id, fingerprint)` в обеих таблицах.
+
+### 26.6 Entity resolution (`entity-match.ts`)
+
+Классификация **процесса** сопоставления, а не оценки бизнеса: сигналы
+`domain_exact` / `phone_exact` / `name_exact` / `city_match` /
+`name_similar` (Sørensen–Dice по токенам, порог 0.85) → классы
+`EXACT` (домен + имя/телефон), `STRONG` (ровно один из домена/телефона),
+`CANDIDATE` (имя + город), `AMBIGUOUS` (сходство без точного), `NO_MATCH`.
+Равные претенденты принижаются до `AMBIGUOUS` с `entityId: null` —
+выбор без явного решения не делается. Мосты `osint_business_entities` при
+этом не изменяются: enrichment не создаёт и не отвергает сущностей.
+
+### 26.7 Миграция `073_osint_intelligence_v1.sql`
+
+Четыре таблицы: `osint_intelligence_facts`, `osint_fact_changes`,
+`osint_intelligence_contradictions`, `osint_enrichment_runs`. Ограничения
+(проверены по именам на реальной PG): CHECK типов фактов (26 значений) и
+статусов, `attempts < 10`, `UNIQUE (business_id, fingerprint)` × 2,
+`UNIQUE (business_id, fact_type)` на противоречиях, частично-уникальный
+индекс `osint_enrichment_active_idx … WHERE status IN ('queued','running')`,
+FK на observation/source/entity. Стороны противоречия — jsonb-массив
+через `jsonbArray()` (top-level массив в `pg` иначе уходит в литеральный
+массив — §24.7). Append-only, идемпотентность миграции — повторный
+`migrate` в тестах.
+
+### 26.8 Жизненный цикл fact-строки
+
+`ACTIVE` — подтверждён последним enrichment; `RETIRED` — вытеснен
+заменой значения того же типа того же источника (есть change-событие
+`VALUE_CHANGED`); `STALE` — исчез из источника без пары (может вернуться
+→ `VALUE_REAPPEARED`). **Профиль собирается только из ACTIVE** — retired
+и stale участвуют в истории и ленте, но не в «что известно сейчас».
+
+### 26.9 State-based transitions и идемпотентность
+
+Переходы детектируются сравнением **before** (stored ACTIVE-строки) и
+**after** (извлечённые кандидаты) по composite `fact_type` + `fact_key`
+(разделитель — NUL), а не по времени:
+
+- ровно 1 исчез × 1 появился → `VALUE_CHANGED` (старые строки → `RETIRED`);
+- иначе исчезнувшие → `STALE` + `VALUE_DISAPPEARED`, появившиеся →
+  `FIRST_SEEN` либо `VALUE_REAPPEARED` (ключ был в beforeAll);
+- новый источник у уже известного ключа → `SOURCE_CHANGED`.
+
+Change-строки вставляются с `ON CONFLICT DO NOTHING` по fingerprint —
+повторный пересчёт того же перехода не дублируется; детерминированный
+`ORDER BY` везде. Повторный enrichment без изменений: `factsExtracted=0`,
+`factsChanged=0`, `contradictionsDetected=0` (только `factsUpdated`
+обновляет seen-времена). `stats.factsChanged` считает **вставки**
+change-строк: неизменный пересчёт даёт 0.
+
+### 26.10 Противоречия (`reconcileContradictions`)
+
+Правило: ≥2 активных значения **и** ≥2 источника **и** множества
+источников у значений не идентичны (один источник с двумя номерами — не
+противоречие, а его собственный список). Одна строка на
+`(business, fact_type)`: `sides` (value + sources + observations +
+firstSeen/lastSeen), `value_count`, `source_count`, статус. Пересчёт
+вставляет **новые** строки (их число и есть
+`stats.contradictionsDetected`), существующие — обновляет стороны, если
+они изменились; `detected_at` и `resolved`-статус пересчёт не трогает.
+Победитель не выбирается.
+
+### 26.11 Очередь enrichment и оркестрация
+
+`queued → running → completed|failed`, частично-уникальный индекс держит
+**один активный run на бизнес** (гонка двух `enqueueEnrichment` гасится
+`23505` → возвращается существующий, `created:false`). Claim — `UPDATE
+… WHERE status='queued'` с `attempts+1`; воркер берёт следующий queued
+через `FOR UPDATE SKIP LOCKED`. Интеграция: runner после успешного
+discovery ставит enrichment в очередь; `background-worker` выполняет
+`processQueuedEnrichments({limit:1})` тиком между discovery и
+`heartbeat("osint")` (новых heartbeat-имён нет). Ad-hoc `runEnrichment`
+без runId сам ставит в очередь и claim'ает; при занятости возвращает
+`status: "in_progress"` без ошибки.
+
+### 26.12 Read model: API, DTO, клиентский сервис
+
+`OsintService.getIntelProfile/getIntelFacts/getIntelChanges/
+getIntelContradictions` — все через `requireBusiness(…, "analytics.view")`
+(чужой/не-член → 404 `BUSINESS_NOT_FOUND`, неотличим от несуществующего).
+Проекция on-read без materialized view: профиль — из ACTIVE-строк
+(names/phones/emails/websites/domains/socials/categories/address/city +
+`counts` по статусам + `byType` + `lastRun` с `resolution` из jsonb),
+факты/изменения — страницы с JOIN источников и полным тай-брейком,
+противоречия — jsonb-стороны с defensive-парсингом. Клампы:
+`limit ≤ 100` (по умолчанию 50), `offset ≤ 10000`; неизвестный
+`factType` — **пустая страница**, а не ошибка (список типов открыт).
+DTO — `src/lib/intelligence-types.ts` (даты ISO); клиент —
+`intelligence.service.ts` через `apiRequest`.
+
+### 26.13 UI: четыре вопроса (`IntelligenceProfilePanel`)
+
+«Кто это» (имя, класс сопоставления, сигналы), «Что известно» (профиль +
+факты, ленивая загрузка страницами по 20, provenance в `<details>`),
+«Что изменилось» (лента переходов), «Противоречия» (стороны без выбора
+победителя). Встроен в `IntelligenceCommandCenter` под `OsintPanel`;
+`data-testid` на каждом блоке; синхронный `setState` в эффекте обойдён
+через `queueMicrotask` (правило `react-hooks/set-state-in-effect`).
+
+### 26.14 HTTP-контракт
+
+Четыре `GET`-маршрута
+`/api/v1/businesses/[id]/intelligence/osint/{profile,facts,changes,contradictions}`
+(факты/изменения принимают `?limit=&offset=`, факты — ещё `?factType=`).
+Ошибки: 401 без сессии; 405 на не-GET — **тело отдаёт сам Next (пустое,
+не JSON)**, собственная ветка в хендлере недостижима (§24.7); 404
+`BUSINESS_NOT_FOUND` для чужого бизнеса.
+
+### 26.15 Тесты
+
+| Файл | Что доказывает |
+|---|---|
+| `tests/osint-stage4-normalize.test.mjs` (10) | нормализация по типам, мусор → null, детерминизм и чувствительность fingerprint'ов |
+| `tests/osint-stage4-entity-match.test.mjs` (8) | классы EXACT/STRONG/CANDIDATE/AMBIGUOUS/NO_MATCH, равные претенденты → AMBIGUOUS без выбора |
+| `tests/osint-stage4-intelligence.test.mjs` (9, PGlite) | Runs 1–4: FIRST_SEEN → SOURCE_CHANGED+противоречие → VALUE_CHANGED+RETIRED → идемпотентный пересчёт; профиль/страницы/фильтры; тенант-изоляция; очередь (дубль enqueue, воркер-тик без изменений) |
+| `tests/postgres/osint-stage4-constraints.test.mjs` (5, реальная PG17) | именованные CHECK/UNIQUE/FK; first_seen не двигается; два claim → один winner; SKIP LOCKED ×3 → ровно 2; stale-run → queued/failed; тенант read model |
+| `tests/http/account-flows.test.mjs` (append) | 401 ×4, 405 (пустое тело), 200 owner со структурой профиль/факты/изменения/противоречия, 404 чужому, пустой бизнес → нули |
+
+Прогон: `npm test` 733 (0 fail), `test:pg` 24, `test:http` 16 — локально
+против запущенного `postgres:17` (контейнер тестового сервера) и в CI
+(`verify.yml`, порядок шагов не менялся: test → test:pg → lint →
+typecheck → build → test:http).
+
+### 26.16 Конкурентная безопасность очереди
+
+`partial UNIQUE` — физический запрет двух активных run'ов на бизнес;
+`claimEnrichment` параллельно дважды → ровно один winner (проверено на
+реальной PG через независимые соединения пула); `claimNextEnrichment` ×3
+при двух queued → ровно два winner'а с разными id, третий получает null
+(SKIP LOCKED не выдаёт занятое).
+
+### 26.17 Retry и stale-recovery
+
+Исключение в пайплайне: `attempts < ENRICHMENT_MAX_ATTEMPTS (3)` →
+run снова `queued` с текстом ошибки, иначе → `failed`. Застаревший
+`running` (старше 10 минут — процесс упал вместе с run'ом) при старте
+тика переводится в `queued`, а при исчерпанных попытках — в `failed` с
+`error: stale_run_expired`. Бессмертных ретраев нет.
+
+### 26.18 Статусы enrichment ≠ качество данных
+
+Противоречие — **не отказ пайплайна**: `runEnrichment` завершается
+`completed` и записывает `contradictionsDetected > 0` в stats; статусы
+`failed/retry` отражают только технические ошибки исполнения.
+`factsChanged = 0` означает «переходов не было», а не «данные
+согласованы».
+
+### 26.19 Гарантии
+
+Никакой сети (наблюдения уже в БД), никакого LLM, никакого
+forecasting/risk/reputation — только детерминированные правила;
+контент — ровно то, что Stage 3 сохранил (§25); домен извлекается только
+у самого источника, не по anchor-ссылкам. Одинаковое состояние БД →
+одинаковые факты, переходы и проекция.
+
+### 26.20 Лимиты и известные ограничения
+
+1. **Материал для извлечения — по одной (последней) строке на источник**
+   (`DISTINCT ON`): выборка ограничена числом источников, весь граф в
+   память не грузится; многостраничная история источника в enrichment не
+   участвует (жизненный цикл отвечает «что источник сообщает сейчас»).
+2. `osint_source_context` подгружается только для источников текущей
+   выборки; bridge-сущностей для match — ≤50; страницы фактов ≤100;
+   длины полей ограничены CHECK'ами (key ≤300, value ≤1000, raw ≤2000).
+3. Имя без домена/телефона/города у сущности даёт типовой
+   `AMBIGUOUS` — это классификация процесса, а не отказ в сопоставлении;
+   автоматического выбора между равными сущностями нет.
+4. Ручное разрешение противоречия (`status: resolved`) — слой данных
+   готов, UI/метода для клика нет; пересчёт существующий статус не
+   трогает.
+5. Извлечение email/имени — закрытые regex и присутствие имени в тексте:
+   ложные срабатывания возможны, LLM-верификации нет (по контракту §26.19).
+6. Лента изменений в профиле — последние 10 переходов; полная история
+   только через `GET .../changes`.
