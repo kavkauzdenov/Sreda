@@ -13,6 +13,8 @@ import { Kysely, PostgresDialect } from "kysely";
 import { migrate } from "../../src/server/db/migrate.ts";
 import { ensureBusinessEntity } from "../../src/server/intelligence/osint/entity-graph.ts";
 import { buildDiscoveryProfile } from "../../src/server/intelligence/osint/profile.ts";
+import { processQueuedDiscoveryRuns } from "../../src/server/intelligence/osint/runner.ts";
+import { createBuiltinRegistry } from "../../src/server/intelligence/osint/providers/builtin.ts";
 import {
   NO_CLAIM_TEXT,
   PHONE_A,
@@ -918,6 +920,133 @@ test("production HTTPS account and workspace lifecycle", { timeout: 120000 }, as
             `${group.predicate}: счётчик не выходит за предел чтения`,
           );
         }
+      },
+    );
+
+    // Stage 3 full (§25): discovery ставится в очередь через реальный
+    // production-маршрут, статус читается отдельным GET, исполнение —
+    // тем же кодом, что фоновый воркер (processQueuedDiscoveryRuns).
+    await t.test(
+      "Stage 3 discovery enqueue and status over production HTTPS routes",
+      async () => {
+        const path = (id) => `/api/v1/businesses/${id}/intelligence/osint/discovery`;
+        const statusPath = (id, runId) => `${path(id)}/${runId}`;
+
+        // --- 401 без сессии ------------------------------------------------
+        const anonymous = await request(path("biz_0000000000000000"), {
+          method: "POST",
+          body: { seedUrls: ["https://example.com/"] },
+        });
+        assert.equal(anonymous.status, 401, anonymous.text);
+        assert.equal(anonymous.json.error.code, "UNAUTHENTICATED");
+
+        const owner = await account();
+        const created = await request("/api/v1/businesses", {
+          method: "POST",
+          cookie: owner.cookie,
+          body: { name: "Stage 3 Discovery", timezone: "Europe/Moscow" },
+          headers: { "idempotency-key": randomUUID() },
+        });
+        assert.equal(created.status, 201, created.text);
+        const publicId = created.json.id;
+
+        // --- 422 на некорректных seed-URL ----------------------------------
+        const invalid = await request(path(publicId), {
+          method: "POST",
+          cookie: owner.cookie,
+          body: { seedUrls: ["not a url", "ftp://x.example/"] },
+        });
+        assert.equal(invalid.status, 422, invalid.text);
+        assert.equal(invalid.json.error.code, "INVALID_SEED_URL");
+
+        // --- 201: run поставлен в очередь, сеть не тронута ------------------
+        const enqueued = await request(path(publicId), {
+          method: "POST",
+          cookie: owner.cookie,
+          body: {
+            seedUrls: ["https://example.com/"],
+            budget: { maxDepth: 9, maxPages: 9999 },
+          },
+        });
+        assert.equal(enqueued.status, 201, enqueued.text);
+        assert.equal(enqueued.json.status, "queued");
+        assert.equal(enqueued.json.seeds, 1);
+        assert.equal(typeof enqueued.json.runId, "string");
+
+        const pending = await db
+          .selectFrom("osint_discovery_runs")
+          .select(["status", "started_at", "budget", "max_depth"])
+          .where("id", "=", enqueued.json.runId)
+          .executeTakeFirstOrThrow();
+        assert.equal(pending.status, "queued", "POST только ставит в очередь");
+        assert.equal(pending.started_at, null, "сеть не запускалась в запросе");
+        const budget = JSON.parse(JSON.stringify(pending.budget));
+        assert.equal(budget.maxDepth, 5, "бюджет ужат до капа (9 → 5)");
+        assert.equal(budget.maxPages, 50, "бюджет ужат до капа (9999 → 50)");
+        assert.equal(pending.max_depth, 5, "max_depth строки согласован с бюджетом");
+
+        // --- GET статуса: очередь и счётчики видны до исполнения ------------
+        const beforeRun = await request(statusPath(publicId, enqueued.json.runId), {
+          cookie: owner.cookie,
+        });
+        assert.equal(beforeRun.status, 200, beforeRun.text);
+        assert.equal(beforeRun.json.runId, enqueued.json.runId);
+        assert.equal(beforeRun.json.status, "queued");
+        assert.equal(beforeRun.json.queue.queued, 1);
+        assert.equal(beforeRun.json.queue.total, 1);
+        assert.deepEqual(beforeRun.json.recentFailures, []);
+
+        // --- тенант-изоляция статус-эндпоинта -------------------------------
+        const stranger = await account();
+        const foreignGet = await request(statusPath(publicId, enqueued.json.runId), {
+          cookie: stranger.cookie,
+        });
+        assert.equal(foreignGet.status, 404, foreignGet.text);
+        assert.equal(foreignGet.json.error.code, "BUSINESS_NOT_FOUND");
+
+        const foreignRun = await request(
+          statusPath(publicId, randomUUID()),
+          { cookie: owner.cookie },
+        );
+        assert.equal(foreignRun.status, 404, foreignRun.text);
+        assert.equal(foreignRun.json.error.code, "DISCOVERY_RUN_NOT_FOUND");
+
+        // --- исполнение тем же кодом, что и фоновый воркер ------------------
+        const registry = createBuiltinRegistry({ vk: { token: "" } });
+        const processed = await processQueuedDiscoveryRuns(db, {
+          registry,
+          crawl: null,
+          limit: 5,
+        });
+        assert.ok(processed.processed >= 1, JSON.stringify(processed));
+
+        const afterRun = await request(statusPath(publicId, enqueued.json.runId), {
+          cookie: owner.cookie,
+        });
+        assert.equal(afterRun.status, 200, afterRun.text);
+        assert.ok(
+          ["completed", "partial"].includes(afterRun.json.status),
+          afterRun.json.status,
+        );
+        assert.ok(afterRun.json.finishedAt, "run завершён");
+        assert.equal(afterRun.json.queue.queued, 1, "crawl не запускали — seeds на месте");
+
+        // --- rate limit: 5 POST/60s на пользователя+бизнес ------------------
+        for (let index = 0; index < 3; index += 1) {
+          const more = await request(path(publicId), {
+            method: "POST",
+            cookie: owner.cookie,
+            body: {},
+          });
+          assert.equal(more.status, 201, more.text);
+        }
+        const limited = await request(path(publicId), {
+          method: "POST",
+          cookie: owner.cookie,
+          body: {},
+        });
+        assert.equal(limited.status, 429, limited.text);
+        assert.equal(limited.json.error.code, "RATE_LIMITED");
       },
     );
   } finally {

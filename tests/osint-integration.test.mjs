@@ -106,8 +106,20 @@ test("owner can run discovery and read the snapshot", async () => {
   assert.equal(outcome.errors.includes("no_providers_available"), false);
 
   const snapshot = await service.getSnapshot(uid, biz.public_id);
-  assert.equal(snapshot.providers.length, 1);
-  assert.equal(snapshot.providers[0].id, "own_urls");
+  assert.deepEqual(
+    snapshot.providers.map((provider) => provider.id).sort(),
+    ["own_urls", "vk", "web_page"],
+    "registry exposes the built-in providers",
+  );
+  assert.equal(
+    snapshot.providers.find((provider) => provider.id === "vk").available,
+    false,
+    "vk is unavailable without OSINT_VK_API_TOKEN (not an error)",
+  );
+  assert.equal(
+    snapshot.providers.find((provider) => provider.id === "web_page").available,
+    true,
+  );
   assert.equal(snapshot.counts.runs, 1);
   assert.equal(snapshot.counts.candidates, outcome.candidatesCount);
   assert.equal(snapshot.runs[0].status, outcome.status);

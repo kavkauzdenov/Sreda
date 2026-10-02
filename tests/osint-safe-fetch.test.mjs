@@ -191,3 +191,95 @@ test("oversized declared body is refused before download", async () => {
   assert.equal(result.ok, true);
   assert.equal(result.truncated, true);
 });
+
+test("acceptContentTypes rejects foreign types with a typed reason", async () => {
+  const allowed = ["text/html", "application/xhtml+xml", "text/plain"];
+  const ok = await safeFetch(
+    "https://a.example/page",
+    { acceptContentTypes: allowed },
+    {
+      lookup: async () => ["93.184.216.34"],
+      transport: async (url, init) => {
+        assert.deepEqual(init.acceptContentTypes, allowed, "белый список уходит в транспорт");
+        return {
+          status: 200,
+          headers: { "content-type": "text/html; charset=utf-8" },
+          body: "<html>ok</html>",
+          truncated: false,
+        };
+      },
+    },
+  );
+  assert.equal(ok.ok, true, "charset и регистр не мешают совпадению");
+
+  const rejected = await safeFetch(
+    "https://a.example/file",
+    { acceptContentTypes: allowed },
+    {
+      lookup: async () => ["93.184.216.34"],
+      transport: async () => ({
+        status: 200,
+        headers: { "content-type": "application/pdf" },
+        body: "%PDF-1.4",
+        truncated: false,
+      }),
+    },
+  );
+  assert.deepEqual(rejected, {
+    ok: false,
+    reason: "unsupported_content_type",
+    detail: "application/pdf",
+  });
+
+  const missingHeader = await safeFetch(
+    "https://a.example/page",
+    { acceptContentTypes: allowed },
+    {
+      lookup: async () => ["93.184.216.34"],
+      transport: async () => ({ status: 200, headers: {}, body: "html?", truncated: false }),
+    },
+  );
+  assert.equal(missingHeader.ok, true, "без заголовка проверка не блокирует (обратная совместимость)");
+
+  const noList = await safeFetch(
+    "https://a.example/file",
+    {},
+    {
+      lookup: async () => ["93.184.216.34"],
+      transport: async () => ({
+        status: 200,
+        headers: { "content-type": "application/octet-stream" },
+        body: "bytes",
+        truncated: false,
+      }),
+    },
+  );
+  assert.equal(noList.ok, true, "без опции список не проверяется");
+});
+
+test("HEAD and redirects keep working with content-type filter", async () => {
+  const result = await safeFetch(
+    "https://a.example/next",
+    { acceptContentTypes: ["text/html"], maxRedirects: 3 },
+    {
+      lookup: async () => ["93.184.216.34"],
+      transport: async (url) =>
+        url.endsWith("/next")
+          ? {
+              status: 301,
+              headers: { location: "https://a.example/final" },
+              body: "",
+              truncated: false,
+            }
+          : {
+              status: 200,
+              headers: { "content-type": "text/html" },
+              body: "<html>done</html>",
+              truncated: false,
+            },
+    },
+  );
+  assert.equal(result.ok, true);
+  assert.equal(result.body, "<html>done</html>");
+  assert.equal(result.redirects, 1);
+});
