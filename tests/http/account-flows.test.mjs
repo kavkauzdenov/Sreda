@@ -14,6 +14,7 @@ import { migrate } from "../../src/server/db/migrate.ts";
 import { ensureBusinessEntity } from "../../src/server/intelligence/osint/entity-graph.ts";
 import { buildDiscoveryProfile } from "../../src/server/intelligence/osint/profile.ts";
 import { processQueuedDiscoveryRuns } from "../../src/server/intelligence/osint/runner.ts";
+import { runEnrichment } from "../../src/server/intelligence/osint/enrichment.ts";
 import { createBuiltinRegistry } from "../../src/server/intelligence/osint/providers/builtin.ts";
 import {
   NO_CLAIM_TEXT,
@@ -1047,6 +1048,196 @@ test("production HTTPS account and workspace lifecycle", { timeout: 120000 }, as
         });
         assert.equal(limited.status, 429, limited.text);
         assert.equal(limited.json.error.code, "RATE_LIMITED");
+      },
+    );
+
+    await t.test(
+      "Stage 4 intelligence over production HTTPS routes",
+      async () => {
+        const intelPath = (id, section) =>
+          `/api/v1/businesses/${id}/intelligence/osint/${section}`;
+        const sections = ["profile", "facts", "changes", "contradictions"];
+
+        // --- 401 без сессии на всех четырёх эндпоинтах ----------------------
+        for (const section of sections) {
+          const anonymous = await request(intelPath("biz_0000000000000000", section));
+          assert.equal(anonymous.status, 401, `${section}: ${anonymous.text}`);
+          assert.equal(anonymous.json.error.code, "UNAUTHENTICATED");
+        }
+
+        const owner = await account();
+        const created = await request("/api/v1/businesses", {
+          method: "POST",
+          cookie: owner.cookie,
+          body: { name: "Stage 4 Intelligence", timezone: "Europe/Moscow" },
+          headers: { "idempotency-key": randomUUID() },
+        });
+        assert.equal(created.status, 201, created.text);
+        const publicId = created.json.id;
+        const businessRow = await db
+          .selectFrom("business")
+          .select(["id"])
+          .where("public_id", "=", publicId)
+          .executeTakeFirstOrThrow();
+
+        // --- 405: read-only routes не принимают POST -------------------------
+        // 405 отдаёт сам Next (пустое тело): собственная ветка в хендлере
+        // недостижима — см. §24.7.
+        for (const section of sections) {
+          const wrongMethod = await request(intelPath(publicId, section), {
+            method: "POST",
+            body: {},
+          });
+          assert.equal(wrongMethod.status, 405, `${section}: ${wrongMethod.text}`);
+          assert.equal(wrongMethod.json, undefined, "тело405 — не JSON");
+        }
+
+        // --- 200 с пустыми нулями: бизнес без обогащения ---------------------
+        const emptyProfile = await request(intelPath(publicId, "profile"), {
+          cookie: owner.cookie,
+        });
+        assert.equal(emptyProfile.status, 200, emptyProfile.text);
+        assert.deepEqual(emptyProfile.json.counts, {
+          active: 0, stale: 0, retired: 0, changes: 0, contradictions: 0,
+        });
+        assert.equal(emptyProfile.json.resolution, null);
+        assert.equal(emptyProfile.json.lastRun, null);
+        const emptyFacts = await request(intelPath(publicId, "facts"), {
+          cookie: owner.cookie,
+        });
+        assert.equal(emptyFacts.status, 200, emptyFacts.text);
+        assert.equal(emptyFacts.json.total, 0);
+        assert.deepEqual(emptyFacts.json.items, []);
+
+        // --- посадка тем же слоем, что и фоновый воркер ---------------------
+        const label = "Кафе Ромашка Stage 4";
+        const entityId = await ensureBusinessEntity(db, {
+          businessId: businessRow.id,
+          profile: buildDiscoveryProfile({
+            name: label,
+            description: `${label} — тестовое заведение.`,
+            industry: "food",
+          }),
+        });
+        const srcA = await createSource(db, "https://stage4-intel.example/");
+        const srcB = await createSource(db, "https://stage4-intel.example");
+        await attachSource(db, entityId, srcA.sourceId);
+        await attachSource(db, entityId, srcB.sourceId);
+        await addObservation(db, {
+          entityId,
+          sourceId: srcA.sourceId,
+          content: `${label}. Телефон: 8 (3852) 55-10-10. Почта: info@stage4.example`,
+          observedAt: new Date("2026-01-08T10:00:00Z"),
+        });
+        const runOne = await runEnrichment(db, { businessId: businessRow.id });
+        assert.equal(runOne.status, "completed", runOne.error);
+        assert.equal(runOne.stats.factsExtracted, 5, "имя, телефон, почта, сайт, домен");
+        await addObservation(db, {
+          entityId,
+          sourceId: srcB.sourceId,
+          content: `${label}. Телефон: 8 (3852) 55-22-33`,
+          observedAt: new Date("2026-01-09T10:00:00Z"),
+        });
+        const runTwo = await runEnrichment(db, { businessId: businessRow.id });
+        assert.equal(runTwo.status, "completed", runTwo.error);
+        assert.equal(runTwo.stats.contradictionsDetected, 1, "телефон противоречит");
+
+        // --- 200: профиль «кто это и что о нём известно» --------------------
+        const profile = await request(intelPath(publicId, "profile"), {
+          cookie: owner.cookie,
+        });
+        assert.equal(profile.status, 200, profile.text);
+        assert.equal(profile.json.businessId, businessRow.id);
+        assert.deepEqual(profile.json.counts, {
+          active: 9, stale: 0, retired: 0, changes: 9, contradictions: 1,
+        });
+        assert.deepEqual(profile.json.names, [label]);
+        assert.deepEqual(profile.json.phones, [PHONE_A, PHONE_B]);
+        assert.deepEqual(profile.json.emails, ["info@stage4.example"]);
+        assert.deepEqual(profile.json.websites, ["https://stage4-intel.example"]);
+        assert.deepEqual(profile.json.domains, ["stage4-intel.example"]);
+        assert.equal(profile.json.resolution.status, "AMBIGUOUS");
+        assert.equal(profile.json.lastRun.status, "completed");
+
+        // --- 200: страница фактов с провенансом и фильтром ------------------
+        const facts = await request(`${intelPath(publicId, "facts")}?limit=100`, {
+          cookie: owner.cookie,
+        });
+        assert.equal(facts.status, 200, facts.text);
+        assert.equal(facts.json.total, 9);
+        for (const fact of facts.json.items) {
+          assert.equal(fact.source.name, "Наблюдаемый источник");
+          assert.match(fact.origin, /^(source_url|observation_text|source_context)$/);
+          assert.ok(fact.observationId, "drill-down к Stage 3");
+        }
+        const phones = await request(
+          `${intelPath(publicId, "facts")}?factType=phone&limit=10`,
+          { cookie: owner.cookie },
+        );
+        assert.equal(phones.json.total, 2);
+        assert.deepEqual(
+          phones.json.items.map((fact) => fact.value).sort(),
+          [PHONE_A, PHONE_B],
+        );
+        const bogus = await request(
+          `${intelPath(publicId, "facts")}?factType=rating`,
+          { cookie: owner.cookie },
+        );
+        assert.equal(bogus.status, 200);
+        assert.equal(bogus.json.total, 0, "неизвестный тип — пустая страница");
+        const paged = await request(
+          `${intelPath(publicId, "facts")}?limit=4&offset=0`,
+          { cookie: owner.cookie },
+        );
+        assert.equal(paged.json.items.length, 4);
+        const pagedNext = await request(
+          `${intelPath(publicId, "facts")}?limit=4&offset=4`,
+          { cookie: owner.cookie },
+        );
+        assert.notEqual(paged.json.items[0].id, pagedNext.json.items[0].id);
+
+        // --- 200: лента изменений -------------------------------------------
+        const changes = await request(
+          `${intelPath(publicId, "changes")}?limit=50`,
+          { cookie: owner.cookie },
+        );
+        assert.equal(changes.status, 200, changes.text);
+        assert.equal(changes.json.total, 9);
+        const kinds = changes.json.items.map((change) => change.changeKind);
+        assert.equal(kinds.filter((kind) => kind === "FIRST_SEEN").length, 6);
+        assert.equal(kinds.filter((kind) => kind === "SOURCE_CHANGED").length, 3);
+        const sourceChanged = changes.json.items.find(
+          (change) => change.changeKind === "SOURCE_CHANGED",
+        );
+        assert.ok(sourceChanged.source, "провенанс источника на change");
+
+        // --- 200: противоречия ----------------------------------------------
+        const contradictions = await request(
+          intelPath(publicId, "contradictions"),
+          { cookie: owner.cookie },
+        );
+        assert.equal(contradictions.status, 200, contradictions.text);
+        assert.equal(contradictions.json.contradictions.length, 1);
+        const [conflict] = contradictions.json.contradictions;
+        assert.equal(conflict.factType, "phone");
+        assert.equal(conflict.status, "unresolved");
+        assert.equal(conflict.valueCount, 2);
+        assert.equal(conflict.sourceCount, 2);
+        assert.deepEqual(
+          conflict.sides.map((side) => side.value).sort(),
+          [PHONE_A, PHONE_B],
+        );
+        assert.equal(conflict.sides[0].sources[0].name, "Наблюдаемый источник");
+
+        // --- 404: чужой пользователь неотличим от несуществующего ------------
+        const stranger = await account();
+        for (const section of sections) {
+          const foreign = await request(intelPath(publicId, section), {
+            cookie: stranger.cookie,
+          });
+          assert.equal(foreign.status, 404, `${section}: ${foreign.text}`);
+          assert.equal(foreign.json.error.code, "BUSINESS_NOT_FOUND");
+        }
       },
     );
   } finally {
