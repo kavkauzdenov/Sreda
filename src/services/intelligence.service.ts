@@ -1,7 +1,8 @@
 import { apiRequest } from "@/lib/apiClient";
 import type {
   IntelligenceOverview,
-  OsintDiscoveryRunOutcome,
+  OsintDiscoveryEnqueued,
+  OsintRunStatusInfo,
   OsintSnapshot,
 } from "@/lib/intelligence-types";
 
@@ -25,11 +26,23 @@ export async function getOsintSnapshot(
   return apiRequest<OsintSnapshot>(osintBase(businessId));
 }
 
+/** Ставит discovery run в очередь (§25): обход идёт в фоне. */
 export async function startOsintDiscovery(
   businessId: string,
-): Promise<OsintDiscoveryRunOutcome> {
-  return apiRequest<OsintDiscoveryRunOutcome>(
+  body: { seedUrls?: string[]; budget?: Record<string, unknown> } = {},
+): Promise<OsintDiscoveryEnqueued> {
+  return apiRequest<OsintDiscoveryEnqueued>(
     `${osintBase(businessId)}/discovery`,
-    { method: "POST", body: "{}" },
+    { method: "POST", body: JSON.stringify(body) },
+  );
+}
+
+/** Состояние run'а и его crawl-очереди. */
+export async function getOsintRunStatus(
+  businessId: string,
+  runId: string,
+): Promise<OsintRunStatusInfo> {
+  return apiRequest<OsintRunStatusInfo>(
+    `${osintBase(businessId)}/discovery/${encodeURIComponent(runId)}`,
   );
 }

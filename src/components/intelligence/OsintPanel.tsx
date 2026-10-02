@@ -6,7 +6,7 @@ import {
   startOsintDiscovery,
 } from "@/services/intelligence.service";
 import type {
-  OsintDiscoveryRunOutcome,
+  OsintDiscoveryEnqueued,
   OsintSnapshot,
 } from "@/lib/intelligence-types";
 
@@ -75,13 +75,12 @@ export function OsintPanel({ businessId }: { businessId: string }) {
     setNotice("");
     setError("");
     try {
-      const outcome: OsintDiscoveryRunOutcome = await startOsintDiscovery(
+      const outcome: OsintDiscoveryEnqueued = await startOsintDiscovery(
         businessId,
       );
       setNotice(
         `Запуск ${runStatusLabel(outcome.status.toLowerCase())}: ` +
-          `запросов ${outcome.queriesCount} · кандидатов ${outcome.candidatesCount}` +
-          (outcome.errors.length ? ` · ${outcome.errors.join(", ")}` : ""),
+          `seed-URL ${outcome.seeds} · обход пойдёт в фоне`,
       );
       setReloadKey((key) => key + 1);
     } catch (e: unknown) {
@@ -93,7 +92,9 @@ export function OsintPanel({ businessId }: { businessId: string }) {
 
   const counts = snapshot?.counts;
   const canRun = Boolean(
-    snapshot?.providers.some((provider) => provider.enabledByDefault),
+    snapshot?.providers.some(
+      (provider) => provider.enabledByDefault && provider.available,
+    ),
   );
 
   return (
@@ -106,7 +107,13 @@ export function OsintPanel({ businessId }: { businessId: string }) {
           <p className="account-footnote">
             {snapshot
               ? `Провайдеры: ${snapshot.providers
-                  .map((provider) => `${provider.label} (${provider.policy})`)
+                  .map(
+                    (provider) =>
+                      `${provider.label} (${provider.policy})` +
+                      (provider.available
+                        ? ""
+                        : ` — недоступен: ${provider.unavailableReason ?? "нет конфигурации"}`),
+                  )
                   .join(", ")}`
               : "Загрузка источников…"}
           </p>

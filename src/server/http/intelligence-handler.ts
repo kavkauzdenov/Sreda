@@ -1,6 +1,6 @@
 import { getRuntime } from "../runtime";
 import { createApplication } from "./application";
-import { json, respond, requireOrigin } from "./errors";
+import { json, readJson, respond, requireOrigin } from "./errors";
 import { limit } from "./limits";
 import { BusinessBrainService } from "../intelligence/business-brain";
 import { OsintService } from "../intelligence/osint-service";
@@ -36,7 +36,12 @@ export function intelligenceOsintSnapshotHandler(
   });
 }
 
-/** `POST /api/v1/businesses/[id]/intelligence/osint/discovery` — запуск run'а. */
+/**
+ * `POST /api/v1/businesses/[id]/intelligence/osint/discovery` — постановка
+ * run'а в очередь (§25). Тело опционально: `{ seedUrls?, budget? }`.
+ * Никакой сети в запросе: обход идёт в фоновом воркере, состояние —
+ * `GET .../discovery/[runId]`.
+ */
 export function intelligenceOsintDiscoveryHandler(
   request: Request,
   publicId: string,
@@ -53,11 +58,38 @@ export function intelligenceOsintDiscoveryHandler(
       5,
       60,
     );
-    const outcome = await new OsintService(runtime.db).startDiscovery(
+    const contentType = request.headers.get("content-type")?.toLowerCase() ?? "";
+    const body = contentType.startsWith("application/json")
+      ? await readJson(request)
+      : {};
+    const outcome = await new OsintService(runtime.db).enqueueDiscovery(
       user.id,
       publicId,
+      {
+        seedUrls: body.seedUrls,
+        budget: body.budget,
+      },
     );
     return json(outcome, 201);
+  });
+}
+
+/**
+ * `GET /api/v1/businesses/[id]/intelligence/osint/discovery/[runId]` —
+ * состояние run'а и его crawl-очереди.
+ */
+export function intelligenceOsintRunStatusHandler(
+  request: Request,
+  publicId: string,
+  runId: string,
+) {
+  return respond(request, async () => {
+    if (request.method !== "GET") return json({ error: "method" }, 405);
+    const runtime = getRuntime();
+    const user = await createApplication(runtime).requireUser(request.headers);
+    return json(
+      await new OsintService(runtime.db).getRunStatus(user.id, publicId, runId),
+    );
   });
 }
 

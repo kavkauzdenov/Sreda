@@ -8,6 +8,9 @@ import {
 import { queueBookingReminder } from "../src/server/booking/worker.ts";
 import { processEntityReminder } from "../src/server/calendar/worker.ts";
 import { processSetupDrafts } from "../src/server/solutions/setup-draft-worker.ts";
+import { processQueuedDiscoveryRuns } from "../src/server/intelligence/osint/runner.ts";
+import { createBuiltinRegistry } from "../src/server/intelligence/osint/providers/builtin.ts";
+import { createRobotsChecker } from "../src/server/intelligence/osint/robots.ts";
 import { runtimeConfig } from "../src/server/identity/config.ts";
 import type { Database } from "../src/server/db/schema.ts";
 
@@ -25,6 +28,7 @@ const heartbeatNames = [
   "booking_reminders",
   "entity_reminders",
   "setup_drafts",
+  "osint",
 ] as const;
 
 async function heartbeat(name: (typeof heartbeatNames)[number]) {
@@ -64,6 +68,15 @@ try {
       await processSetupDrafts(db);
       await heartbeat("setup_drafts");
 
+      // OSINT discovery: реестр и robots-кэш свежие на каждый тик — один
+      // run получает собственный emit-once набор провайдеров (§25).
+      await processQueuedDiscoveryRuns(db, {
+        registry: createBuiltinRegistry(),
+        crawl: { robots: createRobotsChecker() },
+        limit: 1,
+      });
+      await heartbeat("osint");
+
       await heartbeat("background");
       await new Promise((resolve) => setTimeout(resolve, 1000));
     } catch {
@@ -72,6 +85,6 @@ try {
     }
   }
 } finally {
-  await sql`delete from worker_heartbeat where name in ('background','notifications','autopost','booking_reminders','entity_reminders','setup_drafts')`.execute(db);
+  await sql`delete from worker_heartbeat where name in ('background','notifications','autopost','booking_reminders','entity_reminders','setup_drafts','osint')`.execute(db);
   await db.destroy();
 }

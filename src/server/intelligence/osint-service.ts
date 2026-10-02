@@ -4,14 +4,20 @@ import type { Database } from "../db/schema.ts";
 import type { Claim, Evidence } from "@/lib/intelligence-contracts.ts";
 import { requireBusiness } from "../access/permissions.ts";
 import { AppError } from "../http/errors.ts";
-import { createRegistry } from "./osint/providers/registry.ts";
-import { createOwnUrlsProvider } from "./osint/providers/own-urls.ts";
+import { createBuiltinRegistry } from "./osint/providers/builtin.ts";
+import type { ProviderRegistry } from "./osint/providers/registry.ts";
 import {
+  createDiscoveryRun,
   releaseStaleDiscoveryRuns,
   runDiscovery,
+  type CrawlPhaseOptions,
   type DiscoveryRunResult,
 } from "./osint/discovery.ts";
-import type { DiscoveryBudget } from "./osint/config.ts";
+import {
+  mergeDiscoveryBudget,
+  type DiscoveryBudget,
+} from "./osint/config.ts";
+import { normalizeExplicitSeeds } from "./osint/seed.ts";
 import {
   assertClaimSupportedKind,
   isClaimSupportedObservationKind,
@@ -21,7 +27,9 @@ import {
 import { extractClaims } from "./osint/claims.ts";
 import { assessClaims } from "./osint/assessment.ts";
 import type {
+  OsintDiscoveryEnqueued,
   OsintDiscoveryRunOutcome,
+  OsintRunStatusInfo,
   OsintSnapshot,
   Stage3Assessment,
   Stage3EntityInfo,
@@ -35,9 +43,25 @@ const CANDIDATE_LIMIT = 50;
 const LIST_LIMIT = 50;
 /** Сколько тенантских наблюдений читает bulk-оценка (§1 — без полного скана). */
 const ASSESSMENT_LIMIT = 200;
+/** Сколько неуспешных URL отдаёт статус run'а. */
+const RUN_FAILURE_LIMIT = 10;
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Опции сервиса. По умолчанию crawl выключен — синхронный startDiscovery
+ * ведёт себя ровно как на Этапе 2 (никакой сети в юнит-тестах). Включается
+ * явно E2E-тестами; HTTP-путь использует enqueueDiscovery + фоновый воркер.
+ */
+export type OsintServiceOptions = {
+  /** Crawl-фаза в синхронном startDiscovery. */
+  crawl?: boolean;
+  /** Настройки crawl-фазы (провайдер, robots, allowPrivateNetworks). */
+  crawlOptions?: CrawlPhaseOptions | null;
+  /** Готовый реестр (юнит-тесты); иначе собирается builtin-набор. */
+  registry?: ProviderRegistry;
+};
 
 /** Наблюдение + субъект, выбранный тем же ранжированием, что у v1. */
 type AssessmentRow = ObservationRow & {
@@ -59,11 +83,18 @@ const iso = (value: Date | string | null | undefined): string | null =>
  * HTTP route → OsintService → osint/discovery → osint/candidates → БД → audit.
  */
 export class OsintService {
-  constructor(private db: Kysely<Database>) {}
+  constructor(
+    private db: Kysely<Database>,
+    private options: OsintServiceOptions = {},
+  ) {}
 
-  /** Прозрачность: какими провайдерами реально пользуется run. */
+  /**
+   * Прозрачность: какими провайдерами реально пользуется run.
+   * Реестр создаётся свежим на каждый вызов — emit-once провайдеры
+   * (own_urls) отдают результаты ровно одному run'у.
+   */
   private registry() {
-    return createRegistry([createOwnUrlsProvider()]);
+    return this.options.registry ?? createBuiltinRegistry();
   }
 
   async getSnapshot(userId: string, publicId: string): Promise<OsintSnapshot> {
@@ -89,6 +120,9 @@ export class OsintService {
         "error",
         "created_at",
         "finished_at",
+        "depth",
+        "max_depth",
+        "stats",
       ])
       .where("business_id", "=", member.id)
       .orderBy("created_at", "desc")
@@ -218,12 +252,16 @@ export class OsintService {
     }
 
     return {
-      providers: this.registry().descriptors().map((descriptor) => ({
-        id: descriptor.id,
-        label: descriptor.label,
-        requiresNetwork: descriptor.requiresNetwork,
-        policy: descriptor.policy,
-        enabledByDefault: descriptor.enabledByDefault,
+      providers: this.registry().descriptorInfo().map((info) => ({
+        id: info.descriptor.id,
+        label: info.descriptor.label,
+        requiresNetwork: info.descriptor.requiresNetwork,
+        policy: info.descriptor.policy,
+        enabledByDefault: info.descriptor.enabledByDefault,
+        available: info.availability.available,
+        unavailableReason: info.availability.available
+          ? null
+          : info.availability.reason,
       })),
       counts: {
         runs: Number(runTotal?.n ?? 0),
@@ -247,6 +285,9 @@ export class OsintService {
         error: row.error,
         createdAt: iso(row.created_at) ?? "",
         finishedAt: iso(row.finished_at),
+        depth: row.depth,
+        maxDepth: row.max_depth,
+        stats: (row.stats ?? {}) as Record<string, unknown>,
       })),
       candidates: candidateRows.map((row) => ({
         id: row.id,
@@ -569,6 +610,11 @@ export class OsintService {
     });
   }
 
+  /**
+   * Синхронный запуск: create + execute в одном вызове. Так ведут себя
+   * юнит-тесты и инструменты; HTTP использует `enqueueDiscovery` (§25 —
+   * POST отвечает 201, обход идёт в фоновом воркере).
+   */
   async startDiscovery(
     userId: string,
     publicId: string,
@@ -584,11 +630,16 @@ export class OsintService {
     // Освобождаем run'ы, упавшие вместе с процессом — до старта нового.
     await releaseStaleDiscoveryRuns(this.db);
 
+    const crawl = this.options.crawl
+      ? (this.options.crawlOptions ?? {})
+      : null;
+
     const result: DiscoveryRunResult = await runDiscovery(this.db, {
       businessId: member.id,
       userId,
       registry: this.registry(),
       budget: options?.budget,
+      crawl,
     });
 
     return {
@@ -602,6 +653,160 @@ export class OsintService {
       reviewCount: result.reviewCount,
       rejectedCount: result.rejectedCount,
       errors: result.errors,
+    };
+  }
+
+  /**
+   * Ставит discovery run в очередь (§25): без сети, crawl-фаза исполняется
+   * фоновым воркером. seedUrls валидируются здесь — 422 с перечнем
+   * некорректных значений; бюджет только сжимается до капов.
+   */
+  async enqueueDiscovery(
+    userId: string,
+    publicId: string,
+    input?: { seedUrls?: unknown; budget?: unknown },
+  ): Promise<OsintDiscoveryEnqueued> {
+    const member = await requireBusiness(
+      this.db,
+      userId,
+      publicId,
+      "intelligence.manage",
+    );
+
+    await releaseStaleDiscoveryRuns(this.db);
+
+    const explicit = normalizeExplicitSeeds(input?.seedUrls);
+    if (explicit.invalid.length) {
+      throw new AppError(
+        422,
+        "INVALID_SEED_URL",
+        `Некорректные seed-URL: ${explicit.invalid
+          .slice(0, 3)
+          .map((value) => JSON.stringify(value))
+          .join(", ")}`,
+      );
+    }
+
+    const budget = mergeDiscoveryBudget(
+      input?.budget && typeof input.budget === "object" && !Array.isArray(input.budget)
+        ? input.budget
+        : {},
+    );
+
+    const created = await createDiscoveryRun(this.db, {
+      businessId: member.id,
+      registry: this.registry(),
+      budget,
+      crawl: true,
+      explicitSeeds: explicit.seeds,
+    });
+
+    return {
+      runId: created.runId,
+      status: "queued",
+      seeds: created.seedCount,
+    };
+  }
+
+  /**
+   * Статус одного run'а + его crawl-очереди (§25). Тенант-скоуп: чужой
+   * run_id → 404, без утечки факта существования.
+   */
+  async getRunStatus(
+    userId: string,
+    publicId: string,
+    runId: string,
+  ): Promise<OsintRunStatusInfo> {
+    const member = await requireBusiness(
+      this.db,
+      userId,
+      publicId,
+      "analytics.view",
+    );
+
+    if (!UUID_RE.test(runId))
+      throw new AppError(404, "DISCOVERY_RUN_NOT_FOUND", "Запуск не найден.");
+
+    const run = await this.db
+      .selectFrom("osint_discovery_runs")
+      .select([
+        "id",
+        "status",
+        "error",
+        "queries_count",
+        "results_count",
+        "candidates_count",
+        "accepted_count",
+        "review_count",
+        "rejected_count",
+        "duplicates_count",
+        "stats",
+        "created_at",
+        "started_at",
+        "finished_at",
+      ])
+      .where("id", "=", runId)
+      .where("business_id", "=", member.id)
+      .executeTakeFirst();
+
+    if (!run)
+      throw new AppError(404, "DISCOVERY_RUN_NOT_FOUND", "Запуск не найден.");
+
+    const queueCounts = await this.db
+      .selectFrom("osint_crawl_queue")
+      .select((eb) => ["status", eb.fn.countAll<number>().as("n")])
+      .where("run_id", "=", run.id)
+      .groupBy("status")
+      .execute();
+
+    const recentFailures = await this.db
+      .selectFrom("osint_crawl_queue")
+      .select(["url", "status", "skip_reason", "error"])
+      .where("run_id", "=", run.id)
+      .where("status", "in", ["failed", "skipped"])
+      .orderBy("updated_at", "desc")
+      .limit(RUN_FAILURE_LIMIT)
+      .execute();
+
+    const countBy = (status: string) =>
+      Number(queueCounts.find((row) => row.status === status)?.n ?? 0);
+    const queued = countBy("queued");
+    const fetching = countBy("fetching");
+    const fetched = countBy("fetched");
+    const failed = countBy("failed");
+    const skipped = countBy("skipped");
+
+    return {
+      runId: run.id,
+      status: run.status,
+      error: run.error,
+      counts: {
+        queries: run.queries_count,
+        results: run.results_count,
+        candidates: run.candidates_count,
+        accepted: run.accepted_count,
+        review: run.review_count,
+        rejected: run.rejected_count,
+        duplicates: run.duplicates_count,
+      },
+      queue: {
+        queued,
+        fetching,
+        fetched,
+        failed,
+        skipped,
+        total: queued + fetching + fetched + failed + skipped,
+      },
+      recentFailures: recentFailures.map((row) => ({
+        url: row.url,
+        status: row.status,
+        skipReason: row.skip_reason,
+        error: row.error,
+      })),
+      stats: (run.stats ?? {}) as Record<string, unknown>,
+      createdAt: iso(run.created_at) ?? "",
+      startedAt: iso(run.started_at),
+      finishedAt: iso(run.finished_at),
     };
   }
 }

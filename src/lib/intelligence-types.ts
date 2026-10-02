@@ -108,6 +108,9 @@ export type OsintProviderInfo = {
   requiresNetwork: boolean;
   policy: string;
   enabledByDefault: boolean;
+  /** false — провайдер исключён из run'ов (нет токена/конфига). */
+  available: boolean;
+  unavailableReason: string | null;
 };
 
 export type OsintRunInfo = {
@@ -122,6 +125,53 @@ export type OsintRunInfo = {
   duplicatesCount: number;
   error: string | null;
   createdAt: string;
+  finishedAt: string | null;
+  /** Глубина/лимит обхода и crawl-статистика (§25). */
+  depth: number;
+  maxDepth: number;
+  stats: Record<string, unknown>;
+};
+
+/** Ответ POST .../osint/discovery: run поставлен в очередь, сеть не тронута. */
+export type OsintDiscoveryEnqueued = {
+  runId: string;
+  status: string;
+  /** Сколько seed-строк реально записано в очередь. */
+  seeds: number;
+};
+
+/** Ответ GET .../osint/discovery/[runId]: состояние run'а и его очереди. */
+export type OsintRunStatusInfo = {
+  runId: string;
+  status: string;
+  error: string | null;
+  counts: {
+    queries: number;
+    results: number;
+    candidates: number;
+    accepted: number;
+    review: number;
+    rejected: number;
+    duplicates: number;
+  };
+  queue: {
+    queued: number;
+    fetching: number;
+    fetched: number;
+    failed: number;
+    skipped: number;
+    total: number;
+  };
+  /** Последние неуспешные/пропущенные URL (≤10) — диагностика. */
+  recentFailures: Array<{
+    url: string;
+    status: string;
+    skipReason: string | null;
+    error: string | null;
+  }>;
+  stats: Record<string, unknown>;
+  createdAt: string;
+  startedAt: string | null;
   finishedAt: string | null;
 };
 
