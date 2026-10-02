@@ -18,6 +18,7 @@ import {
   type DiscoveryBudget,
 } from "./osint/config.ts";
 import { normalizeExplicitSeeds } from "./osint/seed.ts";
+import { tenantObservationScope } from "./osint/scope.ts";
 import {
   assertClaimSupportedKind,
   isClaimSupportedObservationKind,
@@ -26,9 +27,20 @@ import {
 } from "./osint/evidence.ts";
 import { extractClaims } from "./osint/claims.ts";
 import { assessClaims } from "./osint/assessment.ts";
+import {
+  buildProfile,
+  listChanges,
+  listContradictions,
+  listFacts,
+} from "./osint/profile-projection.ts";
 import type {
   OsintDiscoveryEnqueued,
   OsintDiscoveryRunOutcome,
+  OsintIntelChange,
+  OsintIntelContradiction,
+  OsintIntelFact,
+  OsintIntelPage,
+  OsintIntelProfile,
   OsintRunStatusInfo,
   OsintSnapshot,
   Stage3Assessment,
@@ -327,34 +339,11 @@ export class OsintService {
   }
 
   /**
-   * Единый тенант-скоуп наблюдений (§7).
-   *
-   * Одна и та же предпосылка и у объяснения одного наблюдения (v1), и у
-   * bulk-оценки (v2): наблюдение глобальное, поэтому читается только через
-   * тенантский мост `osint_business_entities` (status <> 'rejected'), либо
-   * через `osint_entity_sources` → мост. Скоуп предполагает, что таблица
-   * наблюдений алиасирована как `o`.
+   * Единый тенант-скоуп наблюдений (§7) — делегирует общему фрагменту,
+   * чтобы enrichment Stage 4 и все читатели делили одну предпосылку.
    */
   private tenantScope(businessId: string) {
-    return sql<boolean>`
-      (
-        EXISTS (
-          SELECT 1
-          FROM osint_business_entities be
-          WHERE be.business_id = ${businessId}
-            AND be.entity_id = o.entity_id
-            AND be.status <> 'rejected'
-        )
-        OR EXISTS (
-          SELECT 1
-          FROM osint_entity_sources es
-          JOIN osint_business_entities be2 ON be2.entity_id = es.entity_id
-          WHERE es.source_id = o.source_id
-            AND be2.business_id = ${businessId}
-            AND be2.status <> 'rejected'
-        )
-      )
-    `;
+    return tenantObservationScope(businessId);
   }
 
   /**
@@ -808,5 +797,69 @@ export class OsintService {
       startedAt: iso(run.started_at),
       finishedAt: iso(run.finished_at),
     };
+  }
+
+  /* ================= Stage 4 intelligence layer (§26.12) ================= */
+
+  /** `GET .../osint/profile` — «кто это и что известно» из ACTIVE facts. */
+  async getIntelProfile(
+    userId: string,
+    publicId: string,
+  ): Promise<OsintIntelProfile> {
+    const member = await requireBusiness(
+      this.db,
+      userId,
+      publicId,
+      "analytics.view",
+    );
+    return buildProfile(this.db, member.id);
+  }
+
+  /** `GET .../osint/facts` — страница фактов с provenance и фильтром типа. */
+  async getIntelFacts(
+    userId: string,
+    publicId: string,
+    options: {
+      factType?: string | null;
+      limit?: string | null;
+      offset?: string | null;
+    } = {},
+  ): Promise<OsintIntelPage<OsintIntelFact>> {
+    const member = await requireBusiness(
+      this.db,
+      userId,
+      publicId,
+      "analytics.view",
+    );
+    return listFacts(this.db, member.id, options);
+  }
+
+  /** `GET .../osint/changes` — детерминированная лента изменений (§26.9). */
+  async getIntelChanges(
+    userId: string,
+    publicId: string,
+    options: { limit?: string | null; offset?: string | null } = {},
+  ): Promise<OsintIntelPage<OsintIntelChange>> {
+    const member = await requireBusiness(
+      this.db,
+      userId,
+      publicId,
+      "analytics.view",
+    );
+    return listChanges(this.db, member.id, options);
+  }
+
+  /** `GET .../osint/contradictions` — пересчитанные противоречия (§26.10). */
+  async getIntelContradictions(
+    userId: string,
+    publicId: string,
+  ): Promise<{ businessId: string; contradictions: OsintIntelContradiction[] }> {
+    const member = await requireBusiness(
+      this.db,
+      userId,
+      publicId,
+      "analytics.view",
+    );
+    return listContradictions(this.db, member.id);
   }
 }

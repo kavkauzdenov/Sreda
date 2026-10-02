@@ -5,6 +5,7 @@ import {
   releaseStaleDiscoveryRuns,
   type CrawlPhaseOptions,
 } from "./discovery.ts";
+import { enqueueEnrichment } from "./enrichment.ts";
 import type { ProviderRegistry } from "./providers/registry.ts";
 
 /**
@@ -63,6 +64,23 @@ export async function processQueuedDiscoveryRuns(
       if (run) {
         result.processed += 1;
         result.runIds.push(run.runId);
+        // Stage 4 (§26.11): discovery завершён → enrichment в очередь.
+        // Сбой постановки не должен отменить завершённый discovery —
+        // следующий run поставит enrichment повторно.
+        await db
+          .selectFrom("osint_discovery_runs")
+          .select("business_id")
+          .where("id", "=", run.runId)
+          .executeTakeFirst()
+          .then((runRow) =>
+            runRow
+              ? enqueueEnrichment(db, {
+                  businessId: runRow.business_id,
+                  discoveryRunId: run.runId,
+                })
+              : undefined,
+          )
+          .catch(() => undefined);
       }
     } catch {
       // Сбой до finish: run завис бы в running до stale-гашения — помечаем

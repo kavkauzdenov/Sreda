@@ -2,6 +2,11 @@ import { apiRequest } from "@/lib/apiClient";
 import type {
   IntelligenceOverview,
   OsintDiscoveryEnqueued,
+  OsintIntelChange,
+  OsintIntelContradiction,
+  OsintIntelFact,
+  OsintIntelPage,
+  OsintIntelProfile,
   OsintRunStatusInfo,
   OsintSnapshot,
 } from "@/lib/intelligence-types";
@@ -44,5 +49,48 @@ export async function getOsintRunStatus(
 ): Promise<OsintRunStatusInfo> {
   return apiRequest<OsintRunStatusInfo>(
     `${osintBase(businessId)}/discovery/${encodeURIComponent(runId)}`,
+  );
+}
+
+/* ==================== Stage 4 intelligence layer (§26.12) ================ */
+
+export async function getOsintIntelProfile(
+  businessId: string,
+): Promise<OsintIntelProfile> {
+  return apiRequest<OsintIntelProfile>(`${osintBase(businessId)}/profile`);
+}
+
+export async function getOsintIntelFacts(
+  businessId: string,
+  options: { factType?: string; limit?: number; offset?: number } = {},
+): Promise<OsintIntelPage<OsintIntelFact>> {
+  const params = new URLSearchParams();
+  if (options.factType) params.set("factType", options.factType);
+  if (options.limit !== undefined) params.set("limit", String(options.limit));
+  if (options.offset !== undefined) params.set("offset", String(options.offset));
+  const query = params.toString();
+  return apiRequest<OsintIntelPage<OsintIntelFact>>(
+    `${osintBase(businessId)}/facts${query ? `?${query}` : ""}`,
+  );
+}
+
+export async function getOsintIntelChanges(
+  businessId: string,
+  options: { limit?: number; offset?: number } = {},
+): Promise<OsintIntelPage<OsintIntelChange>> {
+  const params = new URLSearchParams();
+  if (options.limit !== undefined) params.set("limit", String(options.limit));
+  if (options.offset !== undefined) params.set("offset", String(options.offset));
+  const query = params.toString();
+  return apiRequest<OsintIntelPage<OsintIntelChange>>(
+    `${osintBase(businessId)}/changes${query ? `?${query}` : ""}`,
+  );
+}
+
+export async function getOsintIntelContradictions(
+  businessId: string,
+): Promise<{ businessId: string; contradictions: OsintIntelContradiction[] }> {
+  return apiRequest<{ businessId: string; contradictions: OsintIntelContradiction[] }>(
+    `${osintBase(businessId)}/contradictions`,
   );
 }

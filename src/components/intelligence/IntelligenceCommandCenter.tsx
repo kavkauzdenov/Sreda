@@ -6,6 +6,7 @@ import { BusinessSwitcher } from "@/components/dashboard/BusinessSwitcher";
 import { LoadingPanel } from "@/components/dashboard/LoadingPanel";
 import { getIntelligenceOverview } from "@/services/intelligence.service";
 import { OsintPanel } from "@/components/intelligence/OsintPanel";
+import { IntelligenceProfilePanel } from "@/components/intelligence/IntelligenceProfilePanel";
 import type {
   BusinessInsight,
   BusinessRecommendation,
@@ -250,6 +251,8 @@ export function IntelligenceCommandCenter() {
       ) : null}
 
       <OsintPanel businessId={businessId} />
+
+      <IntelligenceProfilePanel businessId={businessId} />
 
       {previewRec ? (
         <dialog

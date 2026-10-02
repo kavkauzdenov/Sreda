@@ -133,3 +133,81 @@ export function intelligenceOsintAssessmentHandler(
     );
   });
 }
+
+/**
+ * Stage 4 (§26.12): четыре GET-чтения intelligence-слоя. Только чтение,
+ * без rate-limit (нет записи и нет SSRF-вектора — enrichment исполняется
+ * в воркере), drill-down по provenance — существующий observation slice.
+ *
+ * `GET .../osint/profile` — «кто это и что о нём известно».
+ */
+export function intelligenceOsintProfileHandler(
+  request: Request,
+  publicId: string,
+) {
+  return respond(request, async () => {
+    if (request.method !== "GET") return json({ error: "method" }, 405);
+    const runtime = getRuntime();
+    const user = await createApplication(runtime).requireUser(request.headers);
+    return json(
+      await new OsintService(runtime.db).getIntelProfile(user.id, publicId),
+    );
+  });
+}
+
+/** `GET .../osint/facts?page` — страница фактов, фильтр `?factType=`. */
+export function intelligenceOsintFactsHandler(
+  request: Request,
+  publicId: string,
+) {
+  return respond(request, async () => {
+    if (request.method !== "GET") return json({ error: "method" }, 405);
+    const runtime = getRuntime();
+    const user = await createApplication(runtime).requireUser(request.headers);
+    const params = new URL(request.url).searchParams;
+    return json(
+      await new OsintService(runtime.db).getIntelFacts(user.id, publicId, {
+        factType: params.get("factType"),
+        limit: params.get("limit"),
+        offset: params.get("offset"),
+      }),
+    );
+  });
+}
+
+/** `GET .../osint/changes` — лента изменений, `?limit=&offset=`. */
+export function intelligenceOsintChangesHandler(
+  request: Request,
+  publicId: string,
+) {
+  return respond(request, async () => {
+    if (request.method !== "GET") return json({ error: "method" }, 405);
+    const runtime = getRuntime();
+    const user = await createApplication(runtime).requireUser(request.headers);
+    const params = new URL(request.url).searchParams;
+    return json(
+      await new OsintService(runtime.db).getIntelChanges(user.id, publicId, {
+        limit: params.get("limit"),
+        offset: params.get("offset"),
+      }),
+    );
+  });
+}
+
+/** `GET .../osint/contradictions` — активные противоречия со сторонами. */
+export function intelligenceOsintContradictionsHandler(
+  request: Request,
+  publicId: string,
+) {
+  return respond(request, async () => {
+    if (request.method !== "GET") return json({ error: "method" }, 405);
+    const runtime = getRuntime();
+    const user = await createApplication(runtime).requireUser(request.headers);
+    return json(
+      await new OsintService(runtime.db).getIntelContradictions(
+        user.id,
+        publicId,
+      ),
+    );
+  });
+}

@@ -9,6 +9,7 @@ import { queueBookingReminder } from "../src/server/booking/worker.ts";
 import { processEntityReminder } from "../src/server/calendar/worker.ts";
 import { processSetupDrafts } from "../src/server/solutions/setup-draft-worker.ts";
 import { processQueuedDiscoveryRuns } from "../src/server/intelligence/osint/runner.ts";
+import { processQueuedEnrichments } from "../src/server/intelligence/osint/enrichment.ts";
 import { createBuiltinRegistry } from "../src/server/intelligence/osint/providers/builtin.ts";
 import { createRobotsChecker } from "../src/server/intelligence/osint/robots.ts";
 import { runtimeConfig } from "../src/server/identity/config.ts";
@@ -75,6 +76,10 @@ try {
         crawl: { robots: createRobotsChecker() },
         limit: 1,
       });
+
+      // Stage 4 (§26.11): enrichment очередь — facts/changes/contradictions
+      // считаются в воркере, не в HTTP-запросе. Тот же heartbeat "osint".
+      await processQueuedEnrichments(db, { limit: 1 });
       await heartbeat("osint");
 
       await heartbeat("background");
