@@ -61,6 +61,13 @@ export type OsintObservationKind =
   | "post"
   | "listing";
 
+export type OsintCrawlQueueStatus =
+  | "queued"
+  | "fetching"
+  | "fetched"
+  | "failed"
+  | "skipped";
+
 export type OsintFindingType =
   | "REPUTATION"
   | "COMPETITOR"
@@ -410,8 +417,27 @@ export interface OsintTables {
     value: Generated<unknown>;
     confidence: Generated<string>;
     source_observation_id: string | null;
-    valid_from: Generated<Date>;
+    valid_from: Date | null;
     valid_to: Date | null;
+    created_at: Generated<Date>;
+    updated_at: Generated<Date>;
+  };
+  /** Очередь URL discovery run (§25): состояния, приоритет, дедуп. */
+  osint_crawl_queue: {
+    id: string;
+    run_id: string;
+    business_id: string;
+    url: string;
+    normalized_url: string;
+    depth: Generated<number>;
+    priority: Generated<number>;
+    status: Generated<OsintCrawlQueueStatus>;
+    skip_reason: string | null;
+    error: string | null;
+    attempts: Generated<number>;
+    http_status: number | null;
+    from_url: string | null;
+    fetched_at: Date | null;
     created_at: Generated<Date>;
     updated_at: Generated<Date>;
   };
