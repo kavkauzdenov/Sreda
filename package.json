@@ -9,6 +9,7 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test tests/*.test.mjs",
+    "test:pg": "node --import tsx --test tests/postgres/*.test.mjs",
     "test:http": "node --import tsx --test tests/http/*.test.mjs",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test e2e/ui-system.spec.mjs e2e/contrast-computed.spec.mjs",

@@ -21,6 +21,7 @@ import {
   type DiscoveryProfile,
 } from "./profile.ts";
 import { buildDiscoveryQueries } from "./queries.ts";
+import { jsonbArray } from "./schema.ts";
 import type { ProviderRegistry } from "./providers/registry.ts";
 
 /**
@@ -147,7 +148,7 @@ export async function runDiscovery(
       status: "queued",
       profile: profile as unknown as Record<string, unknown>,
       budget: budget as unknown as Record<string, unknown>,
-      providers: providerIds,
+      providers: jsonbArray(providerIds),
       queries_count: 0,
       results_count: 0,
       candidates_count: 0,

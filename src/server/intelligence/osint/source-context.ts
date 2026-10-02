@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Kysely } from "kysely";
 import type { Database } from "../../db/schema.ts";
+import { jsonbArray } from "./schema.ts";
 import type { OsintSourceHistoryKind } from "./schema.ts";
 
 /**
@@ -114,8 +115,8 @@ export async function upsertSourceContext(
       region: input.patch.region ?? null,
       country: input.patch.country ?? null,
       address: input.patch.address ?? null,
-      contacts: input.patch.contacts ?? [],
-      domains: input.patch.domains ?? [],
+      contacts: jsonbArray(input.patch.contacts),
+      domains: jsonbArray(input.patch.domains),
       social_links: input.patch.social_links ?? {},
       known_owner_entity_id: input.patch.known_owner_entity_id ?? null,
       metadata: input.patch.metadata ?? {},
@@ -158,7 +159,9 @@ export async function upsertSourceContext(
     const prev = normalizeExisting(field, existing[field]);
     if (serialize(next) === serialize(prev)) continue;
     changedFields.push(field);
-    updates[field] = next === null ? null : (input.patch[field] as never);
+    // Нормализованное значение: для jsonb-полей next уже JSON-строка, сырой
+    // массив/объект в колонку jsonb не уходит (см. jsonbArray).
+    updates[field] = next;
     snapshot[field] = { from: prev, to: next };
   }
 
@@ -229,7 +232,7 @@ async function writeSourceHistory(
       id: randomUUID(),
       source_id: input.sourceId,
       change_kind: input.changeKind,
-      changed_fields: input.changedFields,
+      changed_fields: jsonbArray(input.changedFields),
       snapshot: input.snapshot,
       valid_from: input.validFrom,
       valid_to: null,

@@ -35,6 +35,10 @@ jobs:
       - name: Shell syntax checks
         run: bash -n deploy/release.sh deploy/backup.sh deploy/restore-drill.sh
       - run: npm test
+      # Опт-ин-сьют на НАСТОЯЩЕЙ PostgreSQL из service postgres:17.
+      # TEST_DATABASE_URL задан на уровне job; при его отсутствии сьют
+      # падает с явной ошибкой настройки, а не «зеленеет» пропуском.
+      - run: npm run test:pg
       - run: npm run lint -- --max-warnings=0
       - run: npm run typecheck
       - run: npm run build

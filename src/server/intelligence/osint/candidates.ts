@@ -5,6 +5,7 @@ import type { ClassifiedCandidate } from "./classifier.ts";
 import { decideCandidate, scoreCandidate } from "./entity-resolution.ts";
 import { ensureBusinessEntity } from "./entity-graph.ts";
 import { upsertSourceContext } from "./source-context.ts";
+import { jsonbArray } from "./schema.ts";
 import type { AutoAcceptRuleId, MatchThresholds, MatchWeights } from "./config.ts";
 import type { DiscoveryProfile } from "./profile.ts";
 
@@ -87,7 +88,7 @@ export async function persistCandidate(
         .set({
           status: decision.status,
           confidence: String(scored.score),
-          match_reasons: scored.reasons,
+          match_reasons: jsonbArray(scored.reasons),
           discovered_at: new Date(),
           updated_at: new Date(),
         })
@@ -127,8 +128,8 @@ export async function persistCandidate(
       query: input.query,
       search_position: input.position,
       confidence: String(scored.score),
-      match_reasons: scored.reasons,
-      evidence: scored.signals,
+      match_reasons: jsonbArray(scored.reasons),
+      evidence: jsonbArray(scored.signals),
       status: decision.status,
       decided_by_user_id: null,
       decided_at: null,

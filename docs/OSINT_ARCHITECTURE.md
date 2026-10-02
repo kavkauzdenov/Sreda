@@ -1846,6 +1846,10 @@ Stage 2, вставленных в PGlite с настоящими огранич
 
 ### 24.6 Честно: что не проверено (Stage 3 v2)
 
+> Пункты «Реальная PostgreSQL не проверялась» и «HTTP-ручка не покрыта
+> HTTP-тестами» ниже закрыты в §24.7 (интеграционное покрытие). Остальные
+> ограничения раздела действуют.
+
 - **Реальная PostgreSQL не проверялась.** `TEST_DATABASE_URL` в этом окружении
   не задан, поэтому все тесты Stage 3 (и v1, и v2) шли на **PGlite** —
   встроенном in-process Postgres-совместимом движке. Ограничения, FK и
@@ -1863,3 +1867,92 @@ Stage 2, вставленных в PGlite с настоящими огранич
 - Оценка **не устанавливает истинность claims** и не выдаёт вероятность:
   `Corroboration.confidence` — пол извлечения, `independence` — всегда
   `"unknown"`, `Contradiction` всегда `unresolved`.
+
+### 24.7 Интеграционное покрытие и сериализация JSONB (freeze audit)
+
+**Почему PGlite не выявил дефект сериализации.** Драйвер `pg` при записи
+значения в колонку `jsonb` проходит через `prepareValue`: объект уходит в
+`JSON.stringify` (`prepareObject`), а **массив — в литеральный
+постгресовский массив** `{a,b}`. Пустой массив становится `{}`, непустой —
+`invalid input syntax for type json` (`22P02`). PGlite использует собственную
+сериализацию, где массив корректен, поэтому все Stage 2/3 тесты на PGlite
+проходили, а реальная PostgreSQL 17 отказывала уже на первом
+`ensureBusinessEntity` (`entity-graph.ts` → `aliases`). Локальные юниты
+ловят семантику и ограничения, но не сериализацию провайдера — разрыв
+закрывается только прогоном против настоящего сервера.
+
+**Почему введён `jsonbArray()`.** Явное кодирование массива в JSON-строку до
+отправки в `pg` — единственный способ корректно записать массив в `jsonb`.
+Helper в `src/server/intelligence/osint/schema.ts` возвращает
+`JSON.stringify(value ?? [])` с типовым приведением к `string[]`, чтобы не
+менять Kysely-типы колонок: чтение не затронуто, деградации
+(`null/undefined` → `[]`) нет. Это не новый паттерн, а приведение OSINT к
+уже существующей конвенции проекта: вне OSINT массивы кодируются явно
+(`posts/service.ts`, `bot/router.ts`, `booking/worker.ts`, `orders/service.ts`,
+`leads/setup.ts` — `JSON.stringify(...)`; `analytics/files/service.ts` —
+`as unknown as string`).
+
+**Затронутые модули** (9 вызовов `jsonbArray()` + 1 ручной фикс — всего 10
+затронутых мест, все в OSINT Stage 2):
+
+| Файл | Вызовы |
+|---|---|
+| `entity-graph.ts` | `:85` `aliases`, `:165` `evidence` |
+| `candidates.ts` | `:91` `match_reasons` (UPDATE), `:131` `match_reasons`, `:132` `evidence` |
+| `source-context.ts` | `:118` `contacts`, `:119` `domains`, `:235` `changed_fields` |
+| `discovery.ts` | `:151` `providers` |
+| `source-context.ts` (UPDATE-путь) | `updates[field] = next` — ручная правка, helper не вызывается |
+
+Все целевые колонки — `jsonb NOT NULL DEFAULT '[]'`
+(`069`: `providers`, `aliases`, `match_reasons`, `evidence`, `sources`;
+`070`: `evidence`, `contacts`, `domains`, `changed_fields`). Каждый вход
+`jsonbArray()` — массив (`string[]`, `MatchSignal[]`, `[{kind,name}]`,
+`unknown[]` из хоста); ни одного объекта-входа. Остальные jsonb-записи —
+объекты (`social_links`, `fingerprint`, `profile`, `budget`, `stats`,
+`metadata`, `snapshot`, `relations.evidence`) — идут через `prepareObject`
+и не задеты.
+
+**Существующие проверки.**
+
+- PostgreSQL: `tests/postgres/osint-stage3-assessment.test.mjs` (10 подтестов,
+  opt-in, `npm run test:pg`) — версия сервера 17; LATERAL/provenance; 404
+  cross-tenant и вне членства; идемпотентность writer; битые строки →
+  `skipped`, не 503; CHECK/UNIQUE/FK + `business_member_role_check`; LIMIT
+  200; детерминизм. Проверяет фактическую запись **через `jsonbArray()`** на
+  реальной PG: иначе сьют невозможен (падает на `22P02`).
+- HTTP: `tests/http/account-flows.test.mjs` — append-блок Stage 3 v2 через
+  реальные route/middleware (`next start` + HTTPS-прокси): 401/405/200 для
+  owner/admin/operator, 404, пустой результат, corroboration/contradiction,
+  отсутствие утечки тенанта, битая строка → 200, LIMIT 200.
+- CI (`.github/workflows/verify.yml`): service `postgres:17`, шаг
+  `npm run test:pg` после `npm test`, затем `test:http`.
+
+**Что PG-проверки НЕ покрывают.** Сьют написан под один исправленный путь —
+`entity-graph` (`ensureBusinessEntity` → `aliases`/`evidence`) плюс чтение
+наблюдений и ограничения. `candidates`, `source-context`,
+`discovery` на **реальной** PostgreSQL не прогоняются: их вызовы
+`jsonbArray()` покрыты статически (тип входа + тип колонки), но не
+поведенчески. Покрытие **не полное** — 10 затронутых мест охвачены
+разнородно (9 статически, ~2-3 поведенчески).
+
+**Ограничения, которые остаются.**
+
+1. **Остатки того же класса вне OSINT — не исправлены** (вне скоупа;
+   статически обоснованы, поведенчески не проверялись):
+   `analytics/files/service.ts:169` (`columns_json` ← `string[]`),
+   `posts/service.ts:557` (`duplicate` → `post.buttons` ← чтение массива),
+   `posts/worker.ts:214` (occurrence → `post.buttons`).
+2. `403` на assessment endpoint структурно недостижим (owner/admin/operator
+   имеют `analytics.view`); ветка `405` с телом в хендлере мертва (Next
+   отдаёт пустое тело); неподдерживаемый `kind` → `unsupported_kind` без
+   уведомления.
+3. **`npm test` с `TEST_DATABASE_URL` локально не идемпотентен**: тесты
+   пишут прямо в базу, накопление мусора даёт `RATE_LIMITED`/
+   `IDENTITY_CONFLICT` (на свежей базе — 673/673). В CI достаточно свежей
+   БД: service-контейнер `postgres:17` создаётся на каждый job. Локально —
+   пересоздавать базу руками.
+4. `test:pg` и `test:http` требуют **уже запущенный** локальный
+   PostgreSQL; сами контейнеры/сервисы не поднимают и не должны поднимать
+   (`npm test` на PGlite контейнеров не требует вовсе).
+5. PGlite остаётся рабочим гейтом для семантики и изоляции тенантов; она
+   **не заменяет** прогон против настоящей PostgreSQL для провайдера БД.

@@ -7,6 +7,7 @@ import {
 } from "./entity-resolution.ts";
 import { normalizeText, tokenize } from "./text.ts";
 import type { DiscoveryProfile } from "./profile.ts";
+import { jsonbArray } from "./schema.ts";
 import type {
   OsintBusinessEntityStatus,
   OsintRelationType,
@@ -81,7 +82,7 @@ export async function ensureGlobalEntity(
       display_name: input.displayName.slice(0, 300),
       normalized_name: input.normalizedName,
       identity_key: input.identityKey,
-      aliases: input.aliases ?? [],
+      aliases: jsonbArray(input.aliases),
       category: input.category ?? null,
       city: input.city ?? null,
       region: input.region ?? null,
@@ -161,7 +162,7 @@ export async function linkBusinessEntity(
       relationship,
       confidence,
       status: input.status ?? "linked",
-      evidence: input.evidence ?? [],
+      evidence: jsonbArray(input.evidence),
       decided_by_user_id: input.decidedByUserId ?? null,
       decided_at: input.decidedByUserId ? new Date() : null,
       created_at: new Date(),

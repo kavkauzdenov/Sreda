@@ -11,6 +11,17 @@ import https from "node:https";
 import { Pool } from "pg";
 import { Kysely, PostgresDialect } from "kysely";
 import { migrate } from "../../src/server/db/migrate.ts";
+import { ensureBusinessEntity } from "../../src/server/intelligence/osint/entity-graph.ts";
+import { buildDiscoveryProfile } from "../../src/server/intelligence/osint/profile.ts";
+import {
+  NO_CLAIM_TEXT,
+  PHONE_A,
+  PHONE_B,
+  addObservation,
+  addObservations,
+  attachSource,
+  createSource,
+} from "../helpers/osint-stage3-fixtures.mjs";
 
 // This suite exercises real Next production routes. It never uses an existing
 // application database: a random disposable database is created on local PG.
@@ -628,6 +639,287 @@ test("production HTTPS account and workspace lifecycle", { timeout: 120000 }, as
         `cross-tenant expected 404/403 got ${cross.status}`,
       );
     });
+
+    // Stage 3 v2: реальный Next-маршрут, middleware и auth — без прямых
+    // вызовов сервиса. Посадочные данные пишутся в ту же тестовую базу,
+    // которую видит поднятое production-приложение.
+    await t.test(
+      "Stage 3 v2 OSINT assessment over production HTTPS routes",
+      async () => {
+        const path = (id) =>
+          `/api/v1/businesses/${id}/intelligence/osint/assessment`;
+
+        // --- контракт ответов и маршрутизация --------------------------
+        const anonymous = await request(path("biz_0000000000000000"));
+        assert.equal(anonymous.status, 401, anonymous.text);
+        assert.equal(anonymous.json.error.code, "UNAUTHENTICATED");
+        assert.equal(typeof anonymous.json.error.message, "string");
+        assert.equal(
+          anonymous.json.error.requestId,
+          anonymous.headers["x-request-id"],
+        );
+        assert.equal(
+          anonymous.json.error.request_id,
+          anonymous.json.error.requestId,
+          "request_id — зеркало requestId для эксплуатации",
+        );
+        assert.equal(anonymous.headers["cache-control"], "no-store");
+
+        // --- субъекты: три роли из business_member_role_check -----------
+        const owner = await account();
+        const created = await request("/api/v1/businesses", {
+          method: "POST",
+          cookie: owner.cookie,
+          body: { name: "Stage 3 HTTP", timezone: "Europe/Moscow" },
+          headers: { "idempotency-key": randomUUID() },
+        });
+        assert.equal(created.status, 201, created.text);
+        const publicId = created.json.id;
+        const businessRow = await db
+          .selectFrom("business")
+          .select("id")
+          .where("public_id", "=", publicId)
+          .executeTakeFirstOrThrow();
+
+        const members = { owner };
+        for (const role of ["admin", "operator"]) {
+          const member = await account();
+          const invite = await request(
+            `/api/v1/businesses/${publicId}/invitations`,
+            {
+              method: "POST",
+              cookie: owner.cookie,
+              body: { userId: member.user.id, role },
+            },
+          );
+          assert.equal(invite.status, 201, invite.text);
+          assert.equal(
+            (
+              await request(`/api/v1/invitations/${invite.json.id}/accept`, {
+                method: "POST",
+                cookie: member.cookie,
+                body: {},
+              })
+            ).status,
+            200,
+          );
+          members[role] = member;
+        }
+
+        // POST в GET-маршрут: 405 выдаёт сам хендлер.
+        const wrongMethod = await request(path(publicId), {
+          method: "POST",
+          cookie: owner.cookie,
+          body: {},
+        });
+        // route.ts экспортирует только GET, поэтому 405 отдаёт сама
+        // маршрутизация Next до вызова хендлера (пустое тело): ветка
+        // `json({ error: "method" }, 405)` в intelligence-handler для этого
+        // маршрута недостижима.
+        assert.equal(wrongMethod.status, 405, wrongMethod.text);
+        assert.equal(wrongMethod.json ?? null, null);
+
+        // --- посадка данных Stage 2 → Stage 3 ----------------------------
+        const label = "Stage 3 HTTP " + randomBytes(3).toString("hex");
+        const entityId = await ensureBusinessEntity(db, {
+          businessId: businessRow.id,
+          profile: buildDiscoveryProfile({
+            name: label,
+            description: `${label} — HTTP-фикстура.`,
+            industry: "food",
+          }),
+        });
+
+        const own = await createSource(db);
+        const corroborating = await createSource(db);
+        await attachSource(db, entityId, own.sourceId);
+        await attachSource(db, entityId, corroborating.sourceId);
+        await addObservation(db, {
+          entityId,
+          sourceId: own.sourceId,
+          content: `${label}. Телефон: 8 (3852) 55-10-10. Сайт: https://stage3-http.invalid/`,
+        });
+        await addObservation(db, {
+          entityId,
+          sourceId: corroborating.sourceId,
+          content: `${label}. Телефон: 8 (3852) 55-22-33. Сайт: https://stage3-http.invalid/`,
+        });
+        await addObservation(db, {
+          entityId,
+          sourceId: own.sourceId,
+          content: `${label}. Телефон: 8 (3852) 55-10-10. Сайт: https://stage3-http.invalid/`,
+          contentHash: " ",
+        });
+        await addObservation(db, {
+          entityId,
+          sourceId: corroborating.sourceId,
+          content: NO_CLAIM_TEXT,
+        });
+
+        const assessed = await request(path(publicId), { cookie: owner.cookie });
+        assert.equal(assessed.status, 200, assessed.text);
+        assert.equal(assessed.headers["cache-control"], "no-store");
+        assert.equal(assessed.json.error, undefined, "успех не завёрнут в error");
+        assert.equal(assessed.json.observationCount, 4, "все четыре строки в scope");
+        assert.equal(
+          assessed.json.skippedObservations,
+          2,
+          "битая строка + строка без фактов пропущены, но не роняют ответ",
+        );
+        assert.equal(assessed.json.reason, null);
+        const body = assessed.json;
+
+        // --- все три роли проходят analytics.view -------------------------
+        // 403 структурно недостижим: owner/admin/operator имеют analytics.view,
+        // а роль вне CHECK ('owner','admin','operator') невозможна — это
+        // доказывает tests/postgres (business_member_role_check, SQLSTATE 23514).
+        for (const role of ["owner", "admin", "operator"]) {
+          const byRole = await request(path(publicId), {
+            cookie: members[role].cookie,
+          });
+          assert.equal(byRole.status, 200, `${role}: ${byRole.text}`);
+          assert.equal(byRole.json.observationCount, 4, role);
+        }
+
+        // --- форма успешного ответа, claims и provenance -------------------
+        // Claims в ответе — это claimCount + provenance (указатель на Claim),
+        // отдельного массива claims у группы нет.
+        assert.ok(body.groups.length >= 2, "phone + website группы");
+        assert.ok(body.claimCount >= 4, "несколько claims на несколько источников");
+        for (const group of body.groups) {
+          assert.equal(typeof group.predicate, "string");
+          assert.ok(group.claimCount >= 1, group.predicate);
+          assert.equal(group.provenance.length, group.claimCount, group.predicate);
+          for (const pointer of group.provenance) {
+            assert.equal(pointer.observationId, pointer.evidenceRef.observationId);
+            assert.ok(group.observations.includes(pointer.observationId));
+            assert.ok(group.sources.includes(pointer.sourceId));
+          }
+        }
+
+        // --- коррекция и конфликт ------------------------------------------
+        const phone = body.groups.find((group) => group.predicate === "phone");
+        assert.ok(phone, "phone-группа присутствует");
+        assert.equal(phone.rule, "value_mismatch");
+        assert.equal(phone.contradictions.length, 1);
+        assert.equal(phone.contradictions[0].resolution, "unresolved");
+        assert.equal(phone.contradictions[0].status, "unresolved");
+        assert.deepEqual(
+          phone.contradictions[0].sides.map((side) => side.value).sort(),
+          [PHONE_A, PHONE_B].sort(),
+          "обе стороны читаются из БД, а не из кеша запроса",
+        );
+
+        const website = body.groups.find(
+          (group) => group.predicate === "website",
+        );
+        assert.ok(website, "website-группа присутствует");
+        assert.equal(website.corroboration.status, "corroborated");
+        assert.equal(
+          website.corroboration.distinctSourceCount,
+          2,
+          "два источника подтверждают одно и то же значение",
+        );
+
+        // --- чужой тенант: данные лежат в той же базе, но не утекают --------
+        const stranger = await account();
+        const foreignCreated = await request("/api/v1/businesses", {
+          method: "POST",
+          cookie: stranger.cookie,
+          body: { name: "Stage 3 Foreign", timezone: "UTC" },
+          headers: { "idempotency-key": randomUUID() },
+        });
+        assert.equal(foreignCreated.status, 201, foreignCreated.text);
+        const foreignPublicId = foreignCreated.json.id;
+        const foreignRow = await db
+          .selectFrom("business")
+          .select("id")
+          .where("public_id", "=", foreignPublicId)
+          .executeTakeFirstOrThrow();
+        const foreignLabel = "Foreign " + randomBytes(3).toString("hex");
+        const foreignEntityId = await ensureBusinessEntity(db, {
+          businessId: foreignRow.id,
+          profile: buildDiscoveryProfile({
+            name: foreignLabel,
+            description: `${foreignLabel} — чужой тенант.`,
+            industry: "food",
+          }),
+        });
+        const foreignSource = await createSource(db);
+        await attachSource(db, foreignEntityId, foreignSource.sourceId);
+        await addObservation(db, {
+          entityId: foreignEntityId,
+          sourceId: foreignSource.sourceId,
+          content: `${foreignLabel}. Телефон: 8 (3852) 55-77-77.`,
+        });
+
+        const serialised = JSON.stringify(body);
+        assert.ok(!serialised.includes(foreignLabel), "чужая метка не утекла");
+        assert.ok(!serialised.includes("55-77-77"), "чужое значение не утекло");
+        assert.ok(!serialised.includes(foreignSource.sourceId), "чужой источник");
+        assert.ok(!serialised.includes(foreignEntityId), "чужая сущность");
+        assert.ok(!serialised.includes(foreignPublicId), "чужой public_id");
+
+        const foreignDenied = await request(path(foreignPublicId), {
+          cookie: owner.cookie,
+        });
+        assert.equal(foreignDenied.status, 404, foreignDenied.text);
+        assert.equal(foreignDenied.json.error.code, "BUSINESS_NOT_FOUND");
+        assert.equal(
+          typeof foreignDenied.json.error.requestId,
+          "string",
+          "ошибка отдаётся в единой форме AppError",
+        );
+        assert.equal(
+          foreignDenied.json.error.request_id,
+          foreignDenied.json.error.requestId,
+        );
+        assert.equal(
+          (await request(path(publicId), { cookie: stranger.cookie })).status,
+          404,
+          "чужой бизнес неотличим от несуществующего",
+        );
+        assert.equal(
+          (await request(path("biz_0000000000000000"), { cookie: owner.cookie }))
+            .status,
+          404,
+        );
+
+        // --- пустой результат: 200, а не 404/500 ---------------------------
+        const emptyCreated = await request("/api/v1/businesses", {
+          method: "POST",
+          cookie: stranger.cookie,
+          body: { name: "Stage 3 Empty", timezone: "UTC" },
+          headers: { "idempotency-key": randomUUID() },
+        });
+        assert.equal(emptyCreated.status, 201, emptyCreated.text);
+        const empty = await request(path(emptyCreated.json.id), {
+          cookie: stranger.cookie,
+        });
+        assert.equal(empty.status, 200, empty.text);
+        assert.equal(empty.json.observationCount, 0);
+        assert.deepEqual(empty.json.groups, []);
+        assert.equal(empty.json.reason, "insufficient_evidence");
+
+        // --- ограниченное чтение: ASSESSMENT_LIMIT --------------------------
+        await addObservations(db, {
+          entityId,
+          sourceId: own.sourceId,
+          count: 205,
+          contentOf: (index) =>
+            `${label} №${index}. Телефон: 8 (3852) 55-10-10. Сайт: https://stage3-http.invalid/`,
+        });
+        const bounded = await request(path(publicId), { cookie: owner.cookie });
+        assert.equal(bounded.status, 200, bounded.text);
+        assert.equal(bounded.json.observationCount, 200, "LIMIT 200, не полный скан");
+        for (const group of bounded.json.groups) {
+          assert.ok(
+            group.distinctObservationCount <= 200,
+            `${group.predicate}: счётчик не выходит за предел чтения`,
+          );
+        }
+      },
+    );
   } finally {
     await stopApp();
     if (proxy) { proxy.closeAllConnections(); await new Promise((resolve) => proxy.close(resolve)); }

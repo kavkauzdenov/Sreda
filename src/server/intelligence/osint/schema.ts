@@ -1,5 +1,18 @@
 import type { Generated } from "kysely";
 
+/**
+ * Запись JSON-массива в jsonb-колонку через драйвер pg.
+ *
+ * Драйвер сериализует топовый JS-массив как литерал массива PostgreSQL
+ * (`{a,b}`), а не как JSON — колонка jsonb отвечает `22P02 invalid input
+ * syntax for type json`. Объекты драйвер сериализует сам (prepareObject →
+ * JSON.stringify), массивы — нет. Кодируем явно; на чтение это не влияет:
+ * pg разбирает jsonb обратно в JS-массив.
+ */
+export function jsonbArray<T>(value: readonly T[] | null | undefined): string[] {
+  return JSON.stringify(value ?? []) as unknown as string[];
+}
+
 /** Один источник-тип наружу; расширяемый текстовый provider в отдельной колонке. */
 export type OsintSourceType =
   | "website"
