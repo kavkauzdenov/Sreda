@@ -145,6 +145,96 @@ export type OsintAttributeKind =
   | "coordinates"
   | "working_hours";
 
+/**
+ * Закрытый словарь типов Fact Stage 4 (§26.2). Public identifiers (tax/registration/
+ * license) присутствуют только как типы — детерминированная экстракция их не
+ * добывает из произвольного текста (§26.2): строка создаётся только если
+ * структурированный источник уже несёт значение.
+ */
+export type OsintFactType =
+  | "business_name"
+  | "brand_name"
+  | "legal_name"
+  | "phone"
+  | "email"
+  | "address"
+  | "city"
+  | "region"
+  | "country"
+  | "postal_code"
+  | "website"
+  | "domain"
+  | "telegram"
+  | "vk"
+  | "instagram"
+  | "facebook"
+  | "youtube"
+  | "tiktok"
+  | "other_social"
+  | "category"
+  | "service"
+  | "product"
+  | "opening_hours"
+  | "registration_identifier"
+  | "tax_identifier"
+  | "license_identifier";
+
+export const OSINT_FACT_TYPES: readonly OsintFactType[] = [
+  "business_name",
+  "brand_name",
+  "legal_name",
+  "phone",
+  "email",
+  "address",
+  "city",
+  "region",
+  "country",
+  "postal_code",
+  "website",
+  "domain",
+  "telegram",
+  "vk",
+  "instagram",
+  "facebook",
+  "youtube",
+  "tiktok",
+  "other_social",
+  "category",
+  "service",
+  "product",
+  "opening_hours",
+  "registration_identifier",
+  "tax_identifier",
+  "license_identifier",
+];
+
+/**
+ * Жизненный цикл Fact (§26.8):
+ *  - ACTIVE    — подтверждён последним enrichment;
+ *  - STALE     — исчез из источника без замены (может вернуться);
+ *  - RETIRED   — вытеснен новым значением того же источника (есть change event).
+ */
+export type OsintFactStatus = "ACTIVE" | "STALE" | "RETIRED";
+
+/** Переходы stored-состояния → состояние после enrichment (§26.9). */
+export type OsintChangeKind =
+  | "FIRST_SEEN"
+  | "VALUE_CHANGED"
+  | "VALUE_REAPPEARED"
+  | "VALUE_DISAPPEARED"
+  | "SOURCE_CHANGED";
+
+export const OSINT_CHANGE_KINDS: readonly OsintChangeKind[] = [
+  "FIRST_SEEN",
+  "VALUE_CHANGED",
+  "VALUE_REAPPEARED",
+  "VALUE_DISAPPEARED",
+  "SOURCE_CHANGED",
+];
+
+/** Очередь enrichment Stage 4 (§26.11): ограниченный retry, без бесконечных. */
+export type OsintEnrichmentStatus = "queued" | "running" | "completed" | "failed";
+
 /** numeric(4,3) читается из PostgreSQL как строка — как и money-поля проекта. */
 export interface OsintTables {
   osint_discovery_runs: {
@@ -439,6 +529,71 @@ export interface OsintTables {
     from_url: string | null;
     fetched_at: Date | null;
     created_at: Generated<Date>;
+    updated_at: Generated<Date>;
+  };
+  /** Fact layer Stage 4 (§26.1): каноническое значение + raw + provenance. */
+  osint_intelligence_facts: {
+    id: string;
+    business_id: string;
+    entity_id: string | null;
+    fact_type: OsintFactType;
+    fact_key: string;
+    value: string;
+    raw_value: string;
+    source_id: string;
+    observation_id: string;
+    status: Generated<OsintFactStatus>;
+    fingerprint: string;
+    first_seen_at: Generated<Date>;
+    last_seen_at: Generated<Date>;
+    observed_at: Generated<Date>;
+    extracted_at: Generated<Date>;
+    metadata: Generated<unknown>;
+    created_at: Generated<Date>;
+    updated_at: Generated<Date>;
+  };
+  /** Change events (§26.9): переходы детерминированы, дедуп по fingerprint. */
+  osint_fact_changes: {
+    id: string;
+    business_id: string;
+    entity_id: string | null;
+    fact_type: OsintFactType;
+    fact_key: string;
+    change_kind: OsintChangeKind;
+    old_value: string | null;
+    new_value: string | null;
+    source_id: string | null;
+    observation_id: string | null;
+    detected_at: Generated<Date>;
+    fingerprint: string;
+    metadata: Generated<unknown>;
+    created_at: Generated<Date>;
+  };
+  /** Пересчитываемые contradictions (§26.10): стороны в jsonb, без победителя. */
+  osint_intelligence_contradictions: {
+    id: string;
+    business_id: string;
+    fact_type: OsintFactType;
+    sides: unknown;
+    value_count: Generated<number>;
+    source_count: Generated<number>;
+    status: Generated<"unresolved" | "resolved">;
+    detected_at: Generated<Date>;
+    updated_at: Generated<Date>;
+    created_at: Generated<Date>;
+  };
+  /** Очередь enrichment (§26.11): один активный run на бизнес (partial UNIQUE). */
+  osint_enrichment_runs: {
+    id: string;
+    business_id: string;
+    discovery_run_id: string | null;
+    status: Generated<OsintEnrichmentStatus>;
+    attempts: Generated<number>;
+    error: string | null;
+    stats: Generated<unknown>;
+    created_at: Generated<Date>;
+    started_at: Date | null;
+    finished_at: Date | null;
     updated_at: Generated<Date>;
   };
 }

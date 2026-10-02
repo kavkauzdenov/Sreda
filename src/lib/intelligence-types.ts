@@ -384,3 +384,142 @@ export type Stage3Assessment = {
   /** Пустая проекция — нормальный ответ обработки, а не ошибка (§12). */
   reason: "insufficient_evidence" | null;
 };
+
+/* ==========================================================================
+ * Stage 4 intelligence layer (§26): wire-контракты четырёх GET-эндпоинтов
+ * `GET .../intelligence/osint/{profile,facts,changes,contradictions}`.
+ *
+ * Детерминированный read model: никаких оценок «качества бизнеса» — только
+ * извлечённые факты, их provenance, история изменений и противоречия.
+ * Даты — ISO-строки (JSON-сериализация), значения — канонические.
+ * ======================================================================== */
+
+export type OsintIntelFactType =
+  | "business_name" | "brand_name" | "legal_name"
+  | "phone" | "email"
+  | "address" | "city" | "region" | "country" | "postal_code"
+  | "website" | "domain"
+  | "telegram" | "vk" | "instagram" | "facebook" | "youtube" | "tiktok"
+  | "other_social"
+  | "category" | "service" | "product" | "opening_hours"
+  | "registration_identifier" | "tax_identifier" | "license_identifier";
+
+export type OsintIntelFactStatus = "ACTIVE" | "STALE" | "RETIRED";
+
+export type OsintIntelChangeKind =
+  | "FIRST_SEEN"
+  | "VALUE_CHANGED"
+  | "VALUE_REAPPEARED"
+  | "VALUE_DISAPPEARED"
+  | "SOURCE_CHANGED";
+
+export type OsintIntelEnrichmentStatus =
+  | "queued" | "running" | "completed" | "failed";
+
+/** Источник факта — drill-down идёт в существующий Stage 3 observation slice. */
+export type OsintIntelSourceRef = {
+  id: string;
+  name: string;
+  url: string;
+};
+
+export type OsintIntelFact = {
+  id: string;
+  factType: OsintIntelFactType;
+  factKey: string;
+  value: string;
+  rawValue: string;
+  status: OsintIntelFactStatus;
+  source: OsintIntelSourceRef;
+  observationId: string;
+  /** Происхождение кандидата: source_context | source_url | observation_text. */
+  origin: string | null;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  observedAt: string;
+};
+
+export type OsintIntelPage<T> = {
+  businessId: string;
+  total: number;
+  limit: number;
+  offset: number;
+  items: T[];
+};
+
+export type OsintIntelChange = {
+  id: string;
+  factType: OsintIntelFactType;
+  factKey: string;
+  changeKind: OsintIntelChangeKind;
+  oldValue: string | null;
+  newValue: string | null;
+  source: OsintIntelSourceRef | null;
+  observationId: string | null;
+  detectedAt: string;
+};
+
+/** Сторона противоречия: одно активное значение и его источники (§26.10). */
+export type OsintIntelContradictionSide = {
+  value: string;
+  sources: OsintIntelSourceRef[];
+  observations: string[];
+  firstSeen: string;
+  lastSeen: string;
+};
+
+export type OsintIntelContradiction = {
+  id: string;
+  factType: OsintIntelFactType;
+  status: "unresolved" | "resolved";
+  valueCount: number;
+  sourceCount: number;
+  sides: OsintIntelContradictionSide[];
+  detectedAt: string;
+  updatedAt: string;
+};
+
+/** Класс сопоставления — классификация процесса, не оценка бизнеса (§26.6). */
+export type OsintIntelResolution = {
+  status: "EXACT" | "STRONG" | "CANDIDATE" | "AMBIGUOUS" | "NO_MATCH";
+  entityId: string | null;
+  entityName: string | null;
+  explanation: string;
+  signals: { signal: string; matched: boolean; detail: string }[];
+};
+
+export type OsintIntelLastRun = {
+  id: string;
+  status: OsintIntelEnrichmentStatus;
+  attempts: number;
+  error: string | null;
+  createdAt: string;
+  finishedAt: string | null;
+  stats: Record<string, unknown> | null;
+};
+
+/** `GET .../osint/profile` — «кто это и что о нём известно». */
+export type OsintIntelProfile = {
+  businessId: string;
+  resolution: OsintIntelResolution | null;
+  names: string[];
+  phones: string[];
+  emails: string[];
+  websites: string[];
+  domains: string[];
+  socials: { factType: OsintIntelFactType; value: string }[];
+  categories: string[];
+  address: string | null;
+  city: string | null;
+  region: string | null;
+  country: string | null;
+  counts: {
+    active: number;
+    stale: number;
+    retired: number;
+    changes: number;
+    contradictions: number;
+  };
+  byType: { factType: OsintIntelFactType; count: number }[];
+  lastRun: OsintIntelLastRun | null;
+};
