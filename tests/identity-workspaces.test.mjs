@@ -7,6 +7,10 @@ import { Kysely, PGliteDialect, PostgresDialect, sql } from "kysely";
 import { PGlite } from "@electric-sql/pglite";
 import { Pool } from "pg";
 import { createIdentity } from "../src/server/identity/auth.ts";
+import {
+  acceptLogin,
+  loginCredential,
+} from "../src/server/identity/login-guard.ts";
 import { WorkspaceService } from "../src/server/workspaces/service.ts";
 import { InvitationService } from "../src/server/invitations/service.ts";
 import { ConnectionService } from "../src/server/connections/service.ts";
@@ -1370,29 +1374,32 @@ test(
 
 // Pause the real library after it has verified a password, before it inserts a
 // session. Explicit barriers make the formerly vulnerable ordering deterministic.
+
+// A fresh betterAuth instance registers its own runtime schema check, and its
+// first request awaits database introspection inside better-auth's onRequest —
+// outside better-call's error boundary. A transient database error there fails
+// the in-flight sign-in before the password barrier and misreports the race.
+// Schema drift is asserted by the dedicated migration tests instead.
+function createBarrierAuth(verify) {
+  return betterAuth({
+    ...auth.options,
+    advanced: {
+      ...auth.options.advanced,
+      database: { ...auth.options.advanced.database, validateSchema: false },
+    },
+    emailAndPassword: {
+      ...auth.options.emailAndPassword,
+      password: { verify },
+    },
+  });
+}
+
 for (const operation of ["change", "recover"]) {
   test(
     `in-flight login cannot survive password ${operation}`,
     { timeout: 20000 },
     async () => {
-      const maxAttempts = 3;
-      let lastError;
-      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        try {
-          await assertInFlightLoginCannotSurvive(operation);
-          return;
-        } catch (error) {
-          lastError = error;
-          if (
-            !(error instanceof Error) ||
-            !/Login finished before verification barrier/i.test(error.message) ||
-            attempt === maxAttempts
-          ) {
-            throw error;
-          }
-        }
-      }
-      throw lastError;
+      await assertInFlightLoginCannotSurvive(operation);
     },
   );
 }
@@ -1403,19 +1410,11 @@ async function assertInFlightLoginCannotSurvive(operation) {
       const { codes } = await recovery.issue(a.internalId, password);
       const verified = Promise.withResolvers();
       const resume = Promise.withResolvers();
-      const delayedAuth = betterAuth({
-        ...auth.options,
-        emailAndPassword: {
-          ...auth.options.emailAndPassword,
-          password: {
-            verify: async (input) => {
-              const valid = await verifyPassword(input);
-              verified.resolve();
-              await resume.promise;
-              return valid;
-            },
-          },
-        },
+      const delayedAuth = createBarrierAuth(async (input) => {
+        const valid = await verifyPassword(input);
+        verified.resolve();
+        await resume.promise;
+        return valid;
       });
       const handler = createAuthHandler({
         db,
@@ -1433,8 +1432,14 @@ async function assertInFlightLoginCannotSurvive(operation) {
       try {
         await Promise.race([
           verified.promise,
-          pending.then(() => {
-            throw new Error("Login finished before verification barrier");
+          pending.then(async (early) => {
+            const detail = await early
+              .clone()
+              .text()
+              .catch(() => "");
+            throw new Error(
+              `Login finished before verification barrier: HTTP ${early.status} ${detail}`,
+            );
           }),
         ]);
         if (operation === "change") {
@@ -2450,19 +2455,11 @@ for (const operation of ["enable", "change", "disable"]) {
       if (operation !== "enable") await configurePin(a);
       const verified = Promise.withResolvers();
       const resume = Promise.withResolvers();
-      const delayedAuth = betterAuth({
-        ...auth.options,
-        emailAndPassword: {
-          ...auth.options.emailAndPassword,
-          password: {
-            verify: async (input) => {
-              const valid = await verifyPassword(input);
-              verified.resolve();
-              await resume.promise;
-              return valid;
-            },
-          },
-        },
+      const delayedAuth = createBarrierAuth(async (input) => {
+        const valid = await verifyPassword(input);
+        verified.resolve();
+        await resume.promise;
+        return valid;
       });
       const handler = createAuthHandler({
         db,
@@ -2483,8 +2480,14 @@ for (const operation of ["enable", "change", "disable"]) {
       try {
         await Promise.race([
           verified.promise,
-          pending.then(() => {
-            throw new Error("Login finished before barrier");
+          pending.then(async (early) => {
+            const detail = await early
+              .clone()
+              .text()
+              .catch(() => "");
+            throw new Error(
+              `Login finished before barrier: HTTP ${early.status} ${detail}`,
+            );
           }),
         ]);
         await configurePin(
@@ -2515,6 +2518,76 @@ for (const operation of ["enable", "change", "disable"]) {
     },
   );
 }
+
+test(
+  "in-flight login cannot survive PIN disable at the credential guard",
+  async () => {
+    const a = await login();
+    await configurePin(a);
+    const beforeSignin = new Set(
+      (await db
+        .selectFrom("session")
+        .select("id")
+        .where("userId", "=", a.internalId)
+        .execute())
+        .map((row) => row.id),
+    );
+    const established = await pinSignin(a, "0826");
+    assert.equal(established.status, 200);
+    const issued = (
+      await db
+        .selectFrom("session")
+        .select(["id", "token"])
+        .where("userId", "=", a.internalId)
+        .execute()
+    ).filter((row) => !beforeSignin.has(row.id));
+    assert.equal(issued.length, 1);
+    const inFlight = issued[0];
+    const before = await loginCredential(db, a.username);
+    assert.ok(before?.pin_hash, "snapshot captured the PIN hash");
+    // Control: the snapshot and the freshly issued session are accepted while
+    // the PIN state still matches the snapshot.
+    assert.equal(
+      await acceptLogin(db, before, inFlight.token, secret, "0826"),
+      "accepted",
+    );
+    assert.equal(
+      (
+        await db
+          .selectFrom("session")
+          .select("id")
+          .where("token", "=", inFlight.token)
+          .execute()
+      ).length,
+      1,
+      "the accepted session survives the control check",
+    );
+    // The concurrent request invalidates the PIN state between password
+    // verification and acceptLogin: the stale snapshot must be rejected and
+    // the session the in-flight login would release must be destroyed.
+    await pins.configure(a.internalId, inFlight.id, {
+      enabled: false,
+      currentPassword: password,
+      currentPin: "0826",
+    });
+    assert.equal(
+      await acceptLogin(db, before, inFlight.token, secret, "0826"),
+      "credentials",
+    );
+    assert.equal(
+      (
+        await db
+          .selectFrom("session")
+          .select("id")
+          .where("token", "=", inFlight.token)
+          .execute()
+      ).length,
+      0,
+      "the in-flight session is destroyed",
+    );
+    assert.deepEqual(await pins.status(a.internalId), { enabled: false });
+  },
+);
 
 test(
   "concurrent wrong PIN requests enforce one shared five-attempt lock on PostgreSQL",
