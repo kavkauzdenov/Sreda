@@ -39,7 +39,7 @@
   "devDependencies": {
     "@electric-sql/pglite": "0.5.8",
     "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
+    "@types/node": "^26",
     "@types/nodemailer": "8.0.1",
     "@types/pg": "8.23.1",
     "@types/react": "^19",
