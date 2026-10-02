@@ -1956,3 +1956,171 @@ Helper в `src/server/intelligence/osint/schema.ts` возвращает
    (`npm test` на PGlite контейнеров не требует вовсе).
 5. PGlite остаётся рабочим гейтом для семантики и изоляции тенантов; она
    **не заменяет** прогон против настоящей PostgreSQL для провайдера БД.
+
+## 25. Stage 3 full — crawl-фаза discovery и оркестрация (реализовано)
+
+### 25.1 Поток данных
+
+```
+POST .../osint/discovery          (HTTP, без сети, 201)
+  → OsintService.enqueueDiscovery   seed-валидация → 422, бюджет → кламп капов
+  → createDiscoveryRun              status=queued + seed-очередь (072)
+фоновый воркер (scripts/background-worker.mts, heartbeat "osint")
+  → processQueuedDiscoveryRuns      releaseStale → queued по created_at
+  → executeDiscoveryRun             атомарный claim queued→running
+      search-фаза (§7, без изменений): провайдеры → classify → candidates
+      crawl-фаза (§25): accepted-кандидаты run'а → очередь depth 0
+        → runCrawl: claim FOR UPDATE SKIP LOCKED → robots → web_page
+        → normalizePage → classify(method=website_link) → persistCandidate
+        → ensureSource + контекст (§1) + ensureObservation(kind=page)
+        → ссылки по follow-политике → очередь depth+1
+      finish(status, errors, stats={crawl}) → osint_discovery_runs + audit
+GET  .../osint/discovery/[runId]   OsintRunStatusInfo (счётчики очереди, failures)
+```
+
+Жизненный цикл разделён намеренно: POST отвечает `201 {runId, status:"queued",
+seeds}` и не трогает сеть (`started_at = null`); исполнение — воркером или
+тем же `processQueuedDiscoveryRuns` в HTTP-тестах. Синхронный
+`OsintService.startDiscovery` сохранён для юнит-тестов/E2E: crawl там
+**выключен по умолчанию** (`OsintServiceOptions.crawl`), старые вызовы ведут
+себя ровно как на Этапе 2.
+
+### 25.2 Очередь URL (миграция `072_osint_crawl_v1.sql`)
+
+`osint_crawl_queue`: `run_id`/`business_id` (FK, cascade), `url`/
+`normalized_url` (≤2048), `depth` (0–25), `priority`, `status`
+(`queued|fetching|fetched|failed|skipped` + CHECK), `skip_reason`, `error`,
+`attempts`, `http_status`, `from_url`, `fetched_at`,
+`UNIQUE (run_id, normalized_url)` + 2 индекса.
+
+- **Дедуп и циклы**: уникальность пары (run, url) делает повторные ссылки и
+  петли бесплатными — строка не появляется дважды.
+- **Claim**: `UPDATE … WHERE id IN (SELECT … FOR UPDATE SKIP LOCKED) ORDER BY
+  priority DESC, depth ASC, created_at ASC` — два воркера никогда не
+  загружают один URL (проверено на реальной PG).
+- **Resume**: перезапуск продолжает с `queued`; строка, застрявшая в
+  `fetching` упавшего процесса, не переохватывается — её гасит
+  `releaseStaleDiscoveryRuns` (run → `failed/stale_run_expired`, очередь →
+  `skipped`).
+- **Бюджеты** гасят остаток `skipped` с причиной `budget_*` (не `failed`) и
+  пишутся в `stats.crawl.budgetHits`.
+
+### 25.3 Seed'ы (`seed.ts`)
+
+Приоритеты детерминированы: `explicit` 110 → `profile_website` 100 →
+`profile_social` 95 → `profile_domain` 90 → `run_candidate` 85 →
+`prior_source` 80 → `prior_candidate` 70; капы `MAX_EXPLICIT_SEEDS=20`,
+`MAX_SEEDS=40`. Нормализация через общий `normalizeUrl`: невалидный явный
+seed → **422 `INVALID_SEED_URL`** с перечнем (первые 3). Прежние строки
+тенанта идут через мост `osint_entity_sources` → `osint_business_entities`
+(≠ rejected) — источник одного владельца становится сидом следующего run'а.
+
+### 25.4 Провайдеры (§25 расширяет §7)
+
+| id | тип | policy | сеть | availability |
+|---|---|---|---|---|
+| `own_urls` | search | `structured_data` | нет | всегда (emit-once на инстанс) |
+| `vk` | search | `official_api` | `api.vk.com/method/groups.search` v5.199 | токен `OSINT_VK_API_TOKEN`; без него `available:false, reason:osint_vk_token_missing` |
+| `web_page` | page/crawl | `public_web` | SSRF-safe GET страниц | всегда |
+
+Реестр (`providers/registry.ts`) держит оба вида раздельно: `select()`
+фильтрует `disabled` и недоступных (недоступный vk молча выпадает из run'а,
+snapshot показывает причину), `selectPage()` отдаёт crawl-провайдера,
+`descriptorInfo()` — дескрипторы с динамической доступностью для UI.
+Реестр создаётся **свежим на каждый вызов/run** — иначе emit-once
+`own_urls` отдал бы результаты только первому run'у. VK-лимит — in-memory
+`rateLimitPerMinute` (30/мин по умолчанию), `provider_rate_limited` →
+ошибка провайдера → правило статуса partial/failed как у любых провайдеров.
+
+### 25.5 Загрузка и парсинг страниц
+
+`web_page` → `safeFetch` (§16: DNS → проверка всех IP → ручной redirect)
+с новым `acceptContentTypes: [text/html, application/xhtml+xml, text/plain]` —
+чужой тип отклоняется `unsupported_content_type`, тело не читается.
+`extraction/html.ts` — hand-written парсер без зависимостей (title/meta/
+JSON-LD/anchors/`<base>`/`<link rel=canonical>`/lang/текст, лимиты
+`MAX_HTML_LENGTH=2MB`, `MAX_TEXT_LENGTH=60k`, `MAX_LINKS=300`).
+`extraction/page.ts` — `normalizePage` → `ParsedPage`, где **каждое поле
+несёт `ExtractionOrigin`** (`html_title`, `meta_description`, `jsonld_same_as`,
+`canonical_link`, `anchor`, `visible_text`, …), плюс `contentHash` (sha256
+материала — изменился контент → новый hash), контакты, домены, sameAs и
+text/plain-ветка.
+
+### 25.6 Безопасность, robots, бюджеты
+
+- **SSRF**: весь network I/O через `safeFetch`; приватные диапазоны
+  запрещены, `allowPrivateNetworks` — только тесты/dev (E2E включает явно).
+- **robots.txt** (`robots.ts`): группа `*` + конкретный UA, самый длинный
+  паттерн выигрывает, `Allow` при равной длине, `$`-anchor и `*`; кэш на
+  origin живёт один run; недоступный robots → разрешено (RFC 9309);
+  запрет → строка `skipped/robots_disallowed` с паттерном в `error`.
+- **Бюджеты**: `mergeDiscoveryBudget` клампит каждое поле капами
+  `BUDGET_CAPS` (только ужесточение); новые поля `maxConcurrency` (≤8),
+  `maxLinksPerPage` (≤200); жёсткие лимиты — страницы/запросы/длительность/
+  глубина/конкурентность, исчерпание — в `stats.crawl.budgetHits`.
+- **Follow-политика**: обход только registrable-доменов профиля и seed'ов
+  (+ сам хост, если registrable-домена нет — IP/localhost) и **хостов**
+  соцсетей профиля; чужие сайты из ссылок не запрашиваются вовсе.
+- **Rate limit** POST: 5/60s на `user+business` (`429 RATE_LIMITED`).
+
+### 25.7 Статусы run'а и статистика
+
+Search-статусы Этапа 2 сохранены (`no_providers_available` → partial,
+провайдер-ошибки → failed по правилу `queries ≤ providerFailures`,
+abort → partial). Crawl добавляет: `hardFail = failed>0 && fetched==0 &&
+seeds>0` → **failed**; `softFail = failed>0 || errors>0 || budgetHits>0` →
+**partial**. Итог пишется в `osint_discovery_runs.stats = {crawl:
+CrawlStats}` (seeds/fetched/failed/skipped/linksDiscovered/requestsUsed/
+robotsFetched/candidates*/observationsCreated/depthReached/budgetHits/
+errors) + в audit-метаданные. Сбой оркестрации до `finish` ловит runner →
+`failed/orchestration_error`.
+
+### 25.8 API и UI
+
+- `POST /api/v1/businesses/[id]/intelligence/osint/discovery` — тело
+  опционально `{seedUrls?, budget?}` (без content-type json — `{}`),
+  ответ **201 `OsintDiscoveryEnqueued`**; ошибки: 401, 403 (нет
+  `intelligence.manage`), 422 `INVALID_SEED_URL`, 429 `RATE_LIMITED`.
+- `GET .../discovery/[runId]` — `OsintRunStatusInfo`: счётчики run'а,
+  `queue {queued,fetching,fetched,failed,skipped,total}`, ≤10
+  `recentFailures` (url/status/skipReason/error), `stats`, timestamps;
+  тенант-скоуп: чужой/не-uuid → 404 `DISCOVERY_RUN_NOT_FOUND` (не-член
+  бизнеса → 404 `BUSINESS_NOT_FOUND` — неотличимо).
+- UI (`OsintPanel`): кнопка ставит run в очередь («В очереди»), провайдеры
+  показывают `available`/`unavailableReason`; env
+  `OSINT_VK_API_TOKEN=` добавлен в `deploy/app.env.example`.
+
+### 25.9 Тесты
+
+| Файл | Что доказывает |
+|---|---|
+| `tests/osint-html-page.test.mjs` | парсер, провенанс, hash, лимиты, og-fallback |
+| `tests/osint-providers.test.mjs` | vk availability/ошибки/rate-limit; web_page content-type+SSRF; реестр |
+| `tests/osint-safe-fetch.test.mjs` (append) | `acceptContentTypes`: reject/charset/redirect/без опции |
+| `tests/osint-robots.test.mjs` | парсинг групп, longest-match/Allow tie, кэш, мёртвый robots |
+| `tests/osint-crawl.test.mjs` (PGlite, 10) | follow-политика, глубина, циклы/дедуп/resume, бюджеты, robots, статусы failed/partial/completed, abort, конкурентный claim, провенанс наблюдений/контекста |
+| `tests/osint-stage3-crawl-e2e.test.mjs` | полный путь на node:http-фикстуре: 201→execute→robots skip→наблюдение с телом→stats; SSRF-guard без `allowPrivateNetworks` |
+| `tests/postgres/osint-stage3-crawl.test.mjs` | реальная PG17: CHECK/UNIQUE/FK 072, SKIP LOCKED двумя соединениями, атомарный claim run'а, бюджет в jsonb stats, тенант-скоуп статуса, идемпотентность миграций |
+| `tests/http/account-flows.test.mjs` (append) | 401/422/201 (budget-капы в jsonb строки)/200 статус/404 тенант/исполнение runner'ом/429 rate limit |
+| `tests/osint-integration.test.mjs` (правка) | snapshot: три провайдера, vk недоступен без токена |
+
+CI (`verify.yml`, не менялся): `npm test` → `test:pg` → `lint` →
+`typecheck` → `build` → `test:http` → docker build.
+
+### 25.10 Известные ограничения
+
+1. Crawl-кандидаты и их accepted/review счётчики пишутся в
+   `stats.crawl`, **не в** итоговые колонки run'а (`candidates_count` и т.д.
+   отражают search-фазу) — UI читает оба источника.
+2. Follow соцсетей — по **хосту** (вся `vk.com`), не по точной ссылке
+   профиля; для IP-фикстур follow тоже host-уровневый (порт в `normalizeUrl`
+   отбрасывается).
+3. Кэш robots на origin без TTL может выдать несколько параллельных
+   загрузок robots.txt в первом batch — бюджет считает фактическое число.
+4. `allowPrivateNetworks` и fixture-провайдеры — только тесты/dev; в
+   production web_page всегда с SSRF-guard.
+5. Токен VK не обязан быть в CI: провайдер обязан быть недоступен и не
+   ронять run; `OSINT_VK_API_TOKEN=` пуст в `deploy/app.env.example`.
+6. HTTP-сьют (`test:http`) исполняет run'ы `crawl: null` (search-фаза) —
+   crawl через реальный Next-маршрут покрыт E2E на сервисном слое, а не на
+   `next start`.
