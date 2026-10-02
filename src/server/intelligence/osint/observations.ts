@@ -33,6 +33,16 @@ export type ObservedMaterial = {
   snippet: string | null;
   provider: string;
   method: OsintDiscoveryMethod;
+  /**
+   * Нормализованный текст страницы (crawl-фаза, §25). Без него content —
+   * title+snippet+url ровно как в Stage 2; с ним — реальный материал
+   * загруженного документа.
+   */
+  body?: string | null;
+  /** Вид наблюдения; по умолчанию search_result (Stage 2), crawl → page. */
+  kind?: OsintObservationKind;
+  /** Провенанс загрузки (depth, http_status, fetched_at — без тенантских id). */
+  metadata?: Record<string, unknown>;
 };
 
 export type ObservationSkipReason =
@@ -55,15 +65,18 @@ export type EnsureObservationInput = {
 };
 
 /**
- * Content наблюдения: title, snippet и сам URL, разделённые переводом строки.
+ * Content наблюдения: title, snippet/body и сам URL, разделённые переводом
+ * строки.
  *
  * URL входит в content осознанно: `scoreCandidate` Stage 2 уже считает
  * «наблюдаемым материалом» ровно title + snippet + url, поэтому здесь та же
  * семантика. Это даёт Stage 3 трассируемый `website`-Claim, чей `textSpan`
- * безошибочно лежит внутри `Evidence.content`.
+ * безошибочно лежит внутри `Evidence.content`. Crawl добавляет body — тогда
+ * content отражает саму страницу, а не только её выдачу в поиске.
  */
 export function observationContent(observed: ObservedMaterial): string {
-  return [observed.title, observed.snippet, observed.url]
+  const excerpt = observed.snippet?.trim() ? observed.snippet : observed.body;
+  return [observed.title, excerpt, observed.url]
     .map((part) => (part ?? "").trim())
     .filter((part) => part.length > 0)
     .join("\n");
@@ -125,7 +138,7 @@ export async function ensureObservation(
       observed_at: input.observedAt ?? new Date(),
       content_hash: contentHash,
       language: null,
-      kind: input.kind ?? "search_result",
+      kind: input.kind ?? input.observed.kind ?? "search_result",
       rating: null,
       rating_max: null,
       latitude: null,
@@ -135,6 +148,7 @@ export async function ensureObservation(
       // тенантском osint_source_candidates (правило 070 — не светить
       // discovery_run_id в публичный слой).
       metadata: {
+        ...(input.observed.metadata ?? {}),
         provider: input.observed.provider,
         discovery_method: input.observed.method,
       },

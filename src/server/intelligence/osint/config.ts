@@ -81,6 +81,10 @@ export type DiscoveryBudget = {
   maxSources: number;
   maxObservations: number;
   maxRequests: number;
+  /** Параллельные загрузки в crawl-фазе (§25). */
+  maxConcurrency: number;
+  /** Сколько ссылок страницы можно ставить в очередь. */
+  maxLinksPerPage: number;
 };
 
 export const DEFAULT_DISCOVERY_BUDGET: DiscoveryBudget = {
@@ -96,7 +100,50 @@ export const DEFAULT_DISCOVERY_BUDGET: DiscoveryBudget = {
   maxSources: 40,
   maxObservations: 200,
   maxRequests: 40,
+  maxConcurrency: 4,
+  maxLinksPerPage: 50,
 };
+
+/** Жёсткие верхние границы — клиентский бюджет только сжимается (§25). */
+const BUDGET_CAPS: Record<keyof DiscoveryBudget, { min: number; max: number }> = {
+  maxQueries: { min: 1, max: 50 },
+  maxSearchResults: { min: 1, max: 200 },
+  maxCandidates: { min: 1, max: 100 },
+  maxPages: { min: 1, max: 50 },
+  maxTotalBytes: { min: 10_000, max: 5_000_000 },
+  maxDurationMs: { min: 1_000, max: 120_000 },
+  maxDepth: { min: 0, max: 5 },
+  maxEntities: { min: 1, max: 200 },
+  maxSources: { min: 1, max: 100 },
+  maxObservations: { min: 1, max: 400 },
+  maxRequests: { min: 1, max: 100 },
+  maxConcurrency: { min: 1, max: 8 },
+  maxLinksPerPage: { min: 1, max: 200 },
+};
+
+function clampInt(value: unknown, fallback: number, cap: { min: number; max: number }): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  const int = Math.trunc(parsed);
+  return Math.min(cap.max, Math.max(cap.min, int));
+}
+
+/**
+ * Нормализует бюджет из недоверенного источника (HTTP body, jsonb run'а):
+ * каждое поле — целое в пределах [min, max], неизвестное/битое — дефолт.
+ * Только ужесточение: поднять лимиты выше капов нельзя.
+ */
+export function mergeDiscoveryBudget(raw: unknown): DiscoveryBudget {
+  const input =
+    raw && typeof raw === "object" && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>)
+      : {};
+  const result = {} as DiscoveryBudget;
+  for (const key of Object.keys(BUDGET_CAPS) as (keyof DiscoveryBudget)[]) {
+    result[key] = clampInt(input[key], DEFAULT_DISCOVERY_BUDGET[key], BUDGET_CAPS[key]);
+  }
+  return result;
+}
 
 /**
  * Порядок попыток для traversal (§24). Официальный сайт надёжнее директории,

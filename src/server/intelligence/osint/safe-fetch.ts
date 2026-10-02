@@ -11,6 +11,11 @@ export type TransportInit = {
   headers: Record<string, string>;
   maxBytes: number;
   signal?: AbortSignal;
+  /**
+   * Если задано, defaultTransport не читает тело ответа с другим
+   * content-type — бандл экономится до отказа в safeFetch.
+   */
+  acceptContentTypes?: readonly string[];
 };
 
 export type TransportResponse = {
@@ -35,6 +40,13 @@ export type SafeFetchOptions = {
   /** Только для тестов/dev: разрешить приватные диапазоны. */
   allowPrivateNetworks?: boolean;
   signal?: AbortSignal;
+  /**
+   * Белый список content-type (по префиксу, без параметров charset).
+   * Ответ с другим типом отклоняется как `unsupported_content_type`,
+   * не загружая тело. Без опции список не проверяется (обратная
+   * совместимость).
+   */
+  acceptContentTypes?: readonly string[];
 };
 
 export type SafeFetchRejectReason =
@@ -48,7 +60,8 @@ export type SafeFetchRejectReason =
   | "http_error"
   | "timeout"
   | "aborted"
-  | "transport_error";
+  | "transport_error"
+  | "unsupported_content_type";
 
 export type SafeFetchResult =
   | {
@@ -148,6 +161,18 @@ async function defaultLookup(hostname: string): Promise<string[]> {
   return records.map((record) => record.address);
 }
 
+/** Префиксное сравнение content-type без учёта charset и регистра. */
+function contentTypeAllowed(
+  contentType: string | null | undefined,
+  allowed: readonly string[] | undefined,
+): boolean {
+  if (!allowed?.length) return true;
+  if (!contentType) return true;
+  const lower = contentType.toLowerCase().split(";")[0]?.trim() ?? "";
+  if (!lower) return true;
+  return allowed.some((entry) => lower.startsWith(entry.toLowerCase()));
+}
+
 async function defaultTransport(
   url: string,
   init: TransportInit,
@@ -167,6 +192,10 @@ async function defaultTransport(
   const declared = Number(headers["content-length"] ?? "");
   if (Number.isFinite(declared) && declared > init.maxBytes) {
     return { status: response.status, headers, body: "", truncated: true };
+  }
+
+  if (!contentTypeAllowed(headers["content-type"], init.acceptContentTypes)) {
+    return { status: response.status, headers, body: "", truncated: false };
   }
 
   if (init.method === "HEAD" || !response.body) {
@@ -257,6 +286,7 @@ export async function safeFetch(
         },
         maxBytes,
         signal,
+        acceptContentTypes: options.acceptContentTypes,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -281,6 +311,12 @@ export async function safeFetch(
 
     if (response.status >= 400)
       return reject("http_error", String(response.status));
+
+    if (!contentTypeAllowed(response.headers["content-type"], options.acceptContentTypes))
+      return reject(
+        "unsupported_content_type",
+        response.headers["content-type"] ?? "missing",
+      );
 
     return {
       ok: true,

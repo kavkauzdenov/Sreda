@@ -2,6 +2,7 @@ import type { DiscoveryIntent } from "../config.ts";
 import type { OsintSourceType } from "../schema.ts";
 import type { GeneratedQuery } from "../queries.ts";
 import type { DiscoveryProfile } from "../profile.ts";
+import type { ParsedPage } from "../extraction/page.ts";
 
 /**
  * Контракт OSINT-провайдера (§13). Провайдер возвращает СЫРЫЕ результаты —
@@ -37,7 +38,16 @@ export type ProviderPolicy =
   | "official_api"
   | "search_api"
   | "structured_data"
+  | "public_web"
   | "disabled";
+
+/**
+ * Доступность провайдера в этом окружении: VK API без токена, недоступный
+ * по конфигу провайдер — исключается из выборки и виден в snapshot'е.
+ */
+export type ProviderAvailability =
+  | { available: true }
+  | { available: false; reason: string };
 
 export type ProviderDescriptor = {
   id: string;
@@ -59,4 +69,29 @@ export type ProviderDescriptor = {
 export type OsintProvider = {
   descriptor: ProviderDescriptor;
   search(input: ProviderSearchInput): Promise<ProviderSearchOutput>;
+  /** Динамическая доступность; без метода — считается доступным. */
+  availability?: () => ProviderAvailability;
+};
+
+export type PageFetchInput = {
+  url: string;
+  signal?: AbortSignal;
+  /** Ограничение на размер тела (байты); по умолчанию — у провайдера. */
+  maxBytes?: number;
+  timeoutMs?: number;
+};
+
+export type PageFetchOutput =
+  | { ok: true; page: ParsedPage }
+  | { ok: false; reason: string; detail?: string };
+
+/**
+ * Провайдер «загрузка конкретной страницы» для crawl-фазы (§25):
+ * контракт единый для HTTP-провайдера и официальных API, возвращающих
+ * документы (будущие 2GIS/поисковые index'ы).
+ */
+export type OsintPageProvider = {
+  descriptor: ProviderDescriptor;
+  fetchPage(input: PageFetchInput): Promise<PageFetchOutput>;
+  availability?: () => ProviderAvailability;
 };
