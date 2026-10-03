@@ -8,6 +8,7 @@ import { getIntelligenceOverview } from "@/services/intelligence.service";
 import { OsintPanel } from "@/components/intelligence/OsintPanel";
 import { IntelligenceProfilePanel } from "@/components/intelligence/IntelligenceProfilePanel";
 import { ResearchPassportPanel } from "@/components/intelligence/ResearchPassportPanel";
+import { OsintResearchAgentPanel } from "@/components/intelligence/OsintResearchAgentPanel";
 import type {
   BusinessInsight,
   BusinessRecommendation,
@@ -250,6 +251,10 @@ export function IntelligenceCommandCenter() {
           </p>
         </>
       ) : null}
+
+      {/* Zero-config точка входа: одна кнопка вместо выбора провайдеров,
+          целей и источников. Дальше система исследует сама. */}
+      <OsintResearchAgentPanel businessId={businessId} />
 
       <ResearchPassportPanel businessId={businessId} />
 

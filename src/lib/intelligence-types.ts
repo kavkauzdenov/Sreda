@@ -697,3 +697,72 @@ export type OsintResearchLaunched = {
   /** false → активный запуск уже есть, возвращён существующий. */
   created: boolean;
 };
+
+/* ------------------------------------------------------------------ */
+/* Автономное исследование (§31, §51, §53)                             */
+/* ------------------------------------------------------------------ */
+
+/** Режим глубины. Deep отличается не качеством, а объёмом и глубиной. */
+export type OsintResearchMode = "quick" | "standard" | "deep";
+
+export type OsintResearchPlanView = {
+  mode: OsintResearchMode;
+  identity: {
+    name: string;
+    city: string | null;
+    /** Насколько уверенно опознан бизнес. */
+    confidence: number;
+    /** Есть ли сильный идентификатор: телефон, домен, адрес. */
+    confirmed: boolean;
+    /** Что уже известно о бизнесе. */
+    found: string[];
+  };
+  /** Направления исследования, которые агент развивает. */
+  areas: {
+    key: string;
+    label: string;
+    status: "working" | "done" | "blocked";
+  }[];
+  nextActions: {
+    query: string;
+    purpose: string;
+    reason: string;
+  }[];
+  /** Чего система пока не знает. Пустой список вводит в заблуждение. */
+  unknown: string[];
+};
+
+export type OsintResearchStarted = {
+  runId: string;
+  status: string;
+  /** false → активное исследование уже шло, вернулось оно же. */
+  created: boolean;
+  plan: OsintResearchPlanView | null;
+};
+
+export type OsintResearchProgress = {
+  runId: string;
+  status: string;
+  phase: string;
+  stats: {
+    queries: number;
+    completed: number;
+    pending: number;
+    sources: number;
+    facts: number;
+    barrenActions: number;
+  };
+  nextActions: { query: string; purpose: string; reason: string }[];
+  /**
+   * Недоступные источники. Это НЕ ошибки исследования — это состояния
+   * источников, и по каждому видно, что система продолжает иначе.
+   */
+  blockedSources: {
+    name: string;
+    status: string;
+    detail: string;
+    nextAction: string;
+  }[];
+  unknown: string[];
+  error: string | null;
+};

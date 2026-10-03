@@ -1,4 +1,4 @@
-import { apiRequest } from "@/lib/apiClient";
+import { apiRequest, ClientError } from "@/lib/apiClient";
 import type {
   IntelligenceOverview,
   OsintDiscoveryEnqueued,
@@ -11,8 +11,11 @@ import type {
   OsintSnapshot,
   OsintResearch,
   OsintResearchLaunched,
+  OsintResearchMode,
   OsintResearchPreview,
+  OsintResearchProgress,
   OsintResearchSaved,
+  OsintResearchStarted,
 } from "@/lib/intelligence-types";
 
 export async function getIntelligenceOverview(
@@ -135,4 +138,51 @@ export async function launchOsintResearch(
     `${osintBase(businessId)}/research/launch`,
     { method: "POST", body: JSON.stringify(body) },
   );
+}
+
+/* ------------------------------------------------------------------ */
+/* Автономное исследование — zero-config запуск и прогресс             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Запускает исследование без настройки: пользователь уже описал бизнес
+ * при создании, система сама строит план и исследует.
+ */
+export async function startOsintResearch(
+  businessId: string,
+  mode: OsintResearchMode = "standard",
+): Promise<OsintResearchStarted> {
+  return apiRequest(`${osintBase(businessId)}/research/start`, {
+    method: "POST",
+    body: JSON.stringify({ mode }),
+  });
+}
+
+/** Прогресс исследования: что найдено, что сейчас, что дальше. */
+export async function getOsintResearchProgress(
+  businessId: string,
+  runId: string,
+): Promise<OsintResearchProgress> {
+  return apiRequest(
+    `${osintBase(businessId)}/research/start/${encodeURIComponent(runId)}`,
+  );
+}
+
+/**
+ * Прогресс последнего исследования бизнеса.
+ *
+ * До первого запуска возвращает null — это штатное состояние, а не сбой,
+ * поэтому UI показывает пустое состояние с кнопкой запуска.
+ */
+export async function getLatestOsintResearch(
+  businessId: string,
+): Promise<OsintResearchProgress | null> {
+  try {
+    return await apiRequest(
+      `${osintBase(businessId)}/research/start/latest`,
+    );
+  } catch (error) {
+    if (error instanceof ClientError && error.status === 404) return null;
+    throw error;
+  }
 }
