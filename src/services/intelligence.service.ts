@@ -1,4 +1,4 @@
-import { apiRequest } from "@/lib/apiClient";
+import { apiRequest, ClientError } from "@/lib/apiClient";
 import type {
   IntelligenceOverview,
   OsintDiscoveryEnqueued,
@@ -166,4 +166,23 @@ export async function getOsintResearchProgress(
   return apiRequest(
     `${osintBase(businessId)}/research/start/${encodeURIComponent(runId)}`,
   );
+}
+
+/**
+ * Прогресс последнего исследования бизнеса.
+ *
+ * До первого запуска возвращает null — это штатное состояние, а не сбой,
+ * поэтому UI показывает пустое состояние с кнопкой запуска.
+ */
+export async function getLatestOsintResearch(
+  businessId: string,
+): Promise<OsintResearchProgress | null> {
+  try {
+    return await apiRequest(
+      `${osintBase(businessId)}/research/start/latest`,
+    );
+  } catch (error) {
+    if (error instanceof ClientError && error.status === 404) return null;
+    throw error;
+  }
 }

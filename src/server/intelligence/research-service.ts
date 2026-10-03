@@ -260,3 +260,27 @@ export async function getResearchProgress(
     error: run.error,
   };
 }
+
+/**
+ * Прогресс последнего исследования бизнеса.
+ *
+ * Нужен UI, чтобы показать состояние без того, чтобы пользователь помнил
+ * идентификатор запуска. Если исследований ещё не было — null, а не ошибка:
+ * до первого запуска это штатное состояние, а не сбой.
+ */
+export async function getLatestResearchProgress(
+  db: Kysely<Database>,
+  userId: string,
+  publicId: string,
+) {
+  const member = await requireBusiness(db, userId, publicId, "analytics.view");
+  const latest = await db
+    .selectFrom("osint_discovery_runs")
+    .select("id")
+    .where("business_id", "=", member.id)
+    .orderBy("created_at", "desc")
+    .limit(1)
+    .executeTakeFirst();
+  if (!latest) return null;
+  return getResearchProgress(db, userId, publicId, latest.id);
+}
