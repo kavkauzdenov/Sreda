@@ -54,6 +54,22 @@ async function registerAndBusiness(page) {
   }
 }
 
+const GREETINGS = ["Доброй ночи", "Доброе утро", "Добрый день", "Добрый вечер"];
+
+/** The greeting is filled in after hydration, so wait for the phrase, not just text. */
+async function hydratedGreeting(page) {
+  await page.waitForFunction(
+    (phrases) => {
+      const el = document.querySelector('[data-testid="dashboard-greeting"]');
+      const text = (el?.textContent ?? "").trim();
+      return phrases.some((p) => text.startsWith(p));
+    },
+    GREETINGS,
+    { timeout: 20_000 },
+  );
+  return (await page.getByTestId("dashboard-greeting").innerText()).trim();
+}
+
 async function openDashboard(page) {
   const res = await page.goto(baseURL + "/dashboard", {
     waitUntil: "domcontentloaded",
@@ -63,6 +79,10 @@ async function openDashboard(page) {
     throw new Error(`NETWORK_UNAVAILABLE: dashboard ${res?.status()}`);
   }
   await expect(page.getByTestId("dashboard-greeting")).toBeVisible({ timeout: 30_000 });
+  // The hero renders immediately but the data-driven sections mount only after
+  // useDashboardData resolves — wait for that, otherwise assertions race loading.
+  await expect(page.locator(".biznesoty-quick")).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".loading-panel")).toHaveCount(0, { timeout: 30_000 });
 }
 
 for (const viewport of VIEWPORTS) {
@@ -79,21 +99,10 @@ for (const viewport of VIEWPORTS) {
       if (!hasStorage) await registerAndBusiness(page);
       await openDashboard(page);
 
-      const greeting = page.getByTestId("dashboard-greeting");
-      await expect(greeting).toBeVisible();
-      // The greeting is rendered client-side; wait for the hydrated value.
-      await page.waitForFunction(
-        () => (document.querySelector('[data-testid="dashboard-greeting"]')?.textContent ?? "").trim().length > 0,
-        null,
-        { timeout: 15_000 },
-      );
-
-      // The greeting is one of exactly four phrases (a bare name before hydration).
-      const text = (await greeting.innerText()).trim();
-      const allowed = ["Доброй ночи", "Доброе утро", "Добрый день", "Добрый вечер"];
+      const text = await hydratedGreeting(page);
       const base = text.split(",")[0].trim();
       expect(
-        allowed.includes(base),
+        GREETINGS.includes(base),
         `приветствие «${text}» не соответствует времени суток`,
       ).toBe(true);
 
@@ -111,7 +120,7 @@ for (const viewport of VIEWPORTS) {
         if (h < 18) return "Добрый день";
         return "Добрый вечер";
       });
-      const text = (await page.getByTestId("dashboard-greeting").innerText()).trim();
+      const text = await hydratedGreeting(page);
       expect(
         text.split(",")[0].trim(),
         `ожидалось «${expected}» для локального времени браузера, получено «${text}»`,
