@@ -33,6 +33,20 @@ import { buildIdentityFromSeed } from "../../src/server/intelligence/osint/resea
 import { queriesForHypothesis } from "../../src/server/intelligence/osint/research/query-generator.ts";
 import { expectPgRejection, scenario } from "../helpers/osint-stage3-fixtures.mjs";
 
+/**
+ * Жёсткое удаление бизнеса для проверки каскада.
+ *
+ * Приложение бизнес не удаляет, а архивирует (archived_at) и отзывает
+ * участников — это осознанное мягкое удаление. Но ON DELETE CASCADE мы
+ * проверить обязаны, а он не срабатывает, пока живы строки business_member
+ * (FK business_member_business_id_fkey). Поэтому dependents удаляются в
+ * порядке зависимостей, а затем сам бизнес.
+ */
+async function hardDeleteBusiness(db, businessId) {
+  await db.deleteFrom("business_member").where("business_id", "=", businessId).execute();
+  await db.deleteFrom("business").where("id", "=", businessId).execute();
+}
+
 async function makeRun(db, businessId, overrides = {}) {
   const id = randomUUID();
   await db
@@ -452,10 +466,7 @@ test(
           businessId: ctx.business.id,
           hypotheses: hypothesisFixture().slice(0, 2),
         });
-        await db
-          .deleteFrom("business")
-          .where("id", "=", ctx.business.id)
-          .execute();
+        await hardDeleteBusiness(db, ctx.business.id);
         const rows = await sql`
           select count(*)::text as n
           from osint_research_hypotheses where run_id = ${runId}

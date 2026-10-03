@@ -73,6 +73,20 @@ async function makeRun(db, businessId, overrides = {}) {
 }
 
 /**
+ * Жёсткое удаление бизнеса для проверки каскада.
+ *
+ * Приложение бизнес не удаляет, а архивирует (archived_at) и отзывает
+ * участников — это осознанное мягкое удаление. Но ON DELETE CASCADE мы
+ * проверить обязаны, а он не срабатывает, пока живы строки business_member
+ * (FK business_member_business_id_fkey). Поэтому dependents удаляются в
+ * порядке зависимостей, а затем сам бизнес.
+ */
+async function hardDeleteBusiness(db, businessId) {
+  await db.deleteFrom("business_member").where("business_id", "=", businessId).execute();
+  await db.deleteFrom("business").where("id", "=", businessId).execute();
+}
+
+/**
  * Задаёт бизнесу домен.
  *
  * Это не обход проверок, а условие её срабатывания: источник принимается
@@ -793,8 +807,18 @@ test(
           await db.selectFrom("osint_research_hypotheses").select("dedupe_key").where("run_id", "=", run2).execute()
         ).map((k) => k.dedupe_key);
 
-        const shared = keysA.filter((k) => keysB.includes(k));
-        assert.equal(shared.length, 0, `разные факты не должны давать одну гипотезу: ${JSON.stringify(shared)}`);
+        // Entity-производные гипотезы у одного и того же бизнеса совпадают
+        // by design (ключ ...:entity:<id>), поэтому сравниваем только те
+        // ключи, что выведены из факта.
+        const factKeys = (keys) => keys.filter((k) => !k.includes(":entity:"));
+        const shared = factKeys(keysA).filter((k) => factKeys(keysB).includes(k));
+        assert.equal(
+          shared.length,
+          0,
+          `разные факты не должны давать одну и ту же гипотезу: ${JSON.stringify(shared)}`,
+        );
+        assert.ok(factKeys(keysA).length > 0, "гипотеза из факта обязана появиться");
+        assert.ok(factKeys(keysB).length > 0, "гипотеза из факта обязана появиться");
       });
 
       /* ============================================================== */
@@ -1082,7 +1106,7 @@ test(
         `.execute(db);
         assert.ok(Number(factsB.rows[0].n) > 0);
 
-        await db.deleteFrom("business").where("id", "=", ctxB.business.id).execute();
+        await hardDeleteBusiness(db, ctxB.business.id);
         const afterCascade = await sql`
           select count(*)::text as n from osint_intelligence_facts where business_id = ${ctxB.business.id}
         `.execute(db);
