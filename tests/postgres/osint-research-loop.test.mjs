@@ -24,6 +24,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import { Pool } from "pg";
+import { copyFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { mkdtemp, rm } from "node:fs/promises";
 import { Kysely, PostgresDialect, sql } from "kysely";
 import { migrate } from "../../src/server/db/migrate.ts";
 import { ProviderRegistry } from "../../src/server/intelligence/osint/providers/registry.ts";
@@ -1323,6 +1327,124 @@ test(
       if (db) await db.destroy();
       await admin.query(`DROP DATABASE IF EXISTS "${databaseName}" WITH (FORCE)`).catch(() => {});
       await admin.end();
+    }
+  },
+);
+
+/**
+ * Путь ОБНОВЛЕНИЯ: база, уже доведённая до 074, получает 075.
+ *
+ * Проверка на чистой базе не доказывает обновление: 075 добавляет таблицы и
+ * колонки к уже существующим, и важно убедиться, что (а) данные, созданные
+ * до обновления, переживают миграцию, (б) новые объекты появляются, (в)
+ * миграция повторно идемпотентна.
+ *
+ * Это ровно то, что произойдёт с production (там сейчас 069–074).
+ */
+test(
+  "Обновление 074 → 075 на PostgreSQL 17 сохраняет данные",
+  { timeout: 300_000 },
+  async () => {
+    assert.ok(
+      process.env.TEST_DATABASE_URL,
+      "TEST_DATABASE_URL is not set — this suite requires a real PostgreSQL 17",
+    );
+    const source = new URL(process.env.TEST_DATABASE_URL);
+    assert.ok(
+      ["localhost", "127.0.0.1", "[::1]"].includes(source.hostname),
+      "Only a local test PostgreSQL is allowed (never a production host)",
+    );
+    assert.match(source.pathname, /test/i, "The database must be a test database");
+
+    const databaseName = "biznesoty_upgrade_pg_" + randomBytes(8).toString("hex");
+    const admin = new Pool({ connectionString: source.href, max: 1 });
+    let db;
+    const staging = await mkdtemp(join(tmpdir(), "sreda-migrations-"));
+
+    try {
+      await admin.query(`CREATE DATABASE "${databaseName}"`);
+      source.pathname = "/" + databaseName;
+      const pool = new Pool({ connectionString: source.href, max: 4 });
+      db = new Kysely({ dialect: new PostgresDialect({ pool }) });
+      const migrations = new URL("../../migrations", import.meta.url).pathname;
+
+      // Каталог со всеми миграциями, КРОМЕ 075 — состояние production.
+      for (const name of readdirSync(migrations)) {
+        if (name.endsWith(".sql") && !name.startsWith("075_")) {
+          copyFileSync(join(migrations, name), join(staging, name));
+        }
+      }
+      await migrate(db, staging);
+
+      const ctx = await scenario(db, "Обновление");
+      const runId = await makeRun(db, ctx.business.id, { status: "running" });
+      const beforeRows = await sql`select count(*)::text as n from osint_discovery_runs`.execute(db);
+      const businessBefore = await sql`select count(*)::text as n from business`.execute(db);
+      assert.equal(Number(businessBefore.rows[0].n) > 0, true, "фикстура должна создать бизнес");
+
+      // ── Обновление до 075 ────────────────────────────────────────────
+      await migrate(db, migrations);
+
+      const applied = await sql`select name from sreda_migration order by name`.execute(db);
+      const names = applied.rows.map((row) => String(row.name));
+      assert.equal(
+        names.filter((n) => n.startsWith("075_")).length,
+        1,
+        "075 должна примениться ровно один раз",
+      );
+
+      // Данные до обновления уцелели.
+      const afterRows = await sql`select count(*)::text as n from osint_discovery_runs`.execute(db);
+      assert.equal(
+        afterRows.rows[0].n,
+        beforeRows.rows[0].n,
+        "миграция не должна терять существующие запуски",
+      );
+      const run = await db
+        .selectFrom("osint_discovery_runs")
+        .select(["id", "status", "phase", "coverage", "knowledge", "agent_stats"])
+        .where("id", "=", runId)
+        .executeTakeFirst();
+      assert.ok(run, "существующий run должен остаться на месте");
+      assert.equal(run.status, "running", "существующий статус не должен меняться миграцией");
+      assert.equal(run.phase, "idle", "новая колонка phase получает значение по умолчанию");
+
+      // Новые таблицы 075 доступны и принимают запись.
+      await persistActions(db, {
+        runId,
+        businessId: ctx.business.id,
+        actions: [
+          {
+            query: {
+              query: '"Кафе Ромашка" после обновления',
+              purpose: "identity",
+              priority: 55,
+              derivedFrom: "после 075",
+              dedupeKey: `upgrade:${randomUUID()}`,
+            },
+          },
+        ],
+      });
+      const written = await db
+        .selectFrom("osint_research_actions")
+        .select("query")
+        .where("run_id", "=", runId)
+        .execute();
+      assert.equal(written.length, 1, "новая таблица 075 должна принимать запись");
+
+      // Повторный migrate ничего не ломает.
+      await migrate(db, migrations);
+      const afterAgain = await sql`select name from sreda_migration`.execute(db);
+      assert.equal(
+        afterAgain.rows.length,
+        applied.rows.length,
+        "повторный migrate не должен добавлять записи",
+      );
+    } finally {
+      if (db) await db.destroy();
+      await admin.query(`DROP DATABASE IF EXISTS "${databaseName}" WITH (FORCE)`).catch(() => {});
+      await admin.end();
+      await rm(staging, { recursive: true, force: true }).catch(() => {});
     }
   },
 );
