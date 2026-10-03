@@ -1377,7 +1377,21 @@ test(
       await migrate(db, staging);
 
       const ctx = await scenario(db, "Обновление");
-      const runId = await makeRun(db, ctx.business.id, { status: "running" });
+      // В состоянии 074 колонки phase ещё нет, поэтому run создаём напрямую,
+      // без makeRun: он рассчитан уже на схему после 075.
+      const runId = randomUUID();
+      await db
+        .insertInto("osint_discovery_runs")
+        .values({
+          id: runId,
+          business_id: ctx.business.id,
+          status: "running",
+          profile: {},
+          budget: {},
+          providers: "[]",
+          queries_count: 0,
+        })
+        .execute();
       const beforeRows = await sql`select count(*)::text as n from osint_discovery_runs`.execute(db);
       const businessBefore = await sql`select count(*)::text as n from business`.execute(db);
       assert.equal(Number(businessBefore.rows[0].n) > 0, true, "фикстура должна создать бизнес");
