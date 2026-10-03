@@ -43,11 +43,17 @@ async function heartbeat(name: (typeof heartbeatNames)[number]) {
 }
 
 let stopping = false;
+// SIGTERM гасит незавершённый discovery: сигнал уходит в воркер, run
+// корректно закрывается (partial/skipped) вместо гибели под SIGKILL'ом и
+// 15-минутного stale-таймера.
+const shutdown = new AbortController();
 process.on("SIGTERM", () => {
   stopping = true;
+  shutdown.abort(new Error("worker_stopping"));
 });
 process.on("SIGINT", () => {
   stopping = true;
+  shutdown.abort(new Error("worker_stopping"));
 });
 
 try {
@@ -75,6 +81,7 @@ try {
         registry: createBuiltinRegistry(),
         crawl: { robots: createRobotsChecker() },
         limit: 1,
+        signal: shutdown.signal,
       });
 
       // Stage 4 (§26.11): enrichment очередь — facts/changes/contradictions
@@ -84,8 +91,21 @@ try {
 
       await heartbeat("background");
       await new Promise((resolve) => setTimeout(resolve, 1000));
-    } catch {
-      console.error(JSON.stringify({ code: "BACKGROUND_WORKER_ERROR" }));
+    } catch (error) {
+      const message = (
+        error instanceof Error
+          ? `${error.name}: ${error.message}`
+          : String(error)
+      )
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 300);
+      console.error(
+        JSON.stringify({
+          code: "BACKGROUND_WORKER_ERROR",
+          error: message || "unknown_error",
+        }),
+      );
       await new Promise((resolve) => setTimeout(resolve, 2000));
     }
   }

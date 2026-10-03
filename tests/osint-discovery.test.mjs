@@ -9,9 +9,11 @@ import { Kysely, PGliteDialect } from "kysely";
 import { PGlite } from "@electric-sql/pglite";
 import { migrate } from "../src/server/db/migrate.ts";
 import {
+  createDiscoveryRun,
   releaseStaleDiscoveryRuns,
   runDiscovery,
 } from "../src/server/intelligence/osint/discovery.ts";
+import { processQueuedDiscoveryRuns } from "../src/server/intelligence/osint/runner.ts";
 import { createRegistry } from "../src/server/intelligence/osint/providers/registry.ts";
 import { createMockProvider } from "../src/server/intelligence/osint/providers/mock.ts";
 import { buildDiscoveryProfile } from "../src/server/intelligence/osint/profile.ts";
@@ -439,4 +441,67 @@ test("stale running/queued runs are released as failed", async () => {
     .executeTakeFirstOrThrow();
   assert.equal(fresh.status, "running");
   assert.equal(fresh.error, null);
+});
+
+test("pre-claim orchestration failure leaves the queued run untouched", async () => {
+  const uid = await makeUser();
+  const biz = await makeBusiness(uid, "Кафе Ромашка");
+  const created = await createDiscoveryRun(db, {
+    businessId: biz.id,
+    registry: registryReturningResults(),
+    profile: PROFILE,
+  });
+
+  // Второй SELECT discovery-строки — уже внутри executeDiscoveryRun, до
+  // claim'а: имитируем сбой подсистемы в окне выборки очереди → claim.
+  let selects = 0;
+  const exploding = new Proxy(db, {
+    get(target, prop) {
+      if (prop === "selectFrom") {
+        return (table) => {
+          if (table === "osint_discovery_runs") {
+            selects += 1;
+            if (selects >= 2) throw new Error("simulated pre-claim failure");
+          }
+          return target.selectFrom(table);
+        };
+      }
+      const value = Reflect.get(target, prop, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+
+  const result = await processQueuedDiscoveryRuns(exploding, {
+    registry: registryReturningResults(),
+    releaseStale: false,
+  });
+  assert.equal(selects, 2, "сбой случился ровно в окне SELECT→claim");
+  assert.equal(result.processed, 0);
+  assert.equal(result.failed, 1);
+
+  const run = await db
+    .selectFrom("osint_discovery_runs")
+    .selectAll()
+    .where("id", "=", created.runId)
+    .executeTakeFirstOrThrow();
+  assert.equal(
+    run.status,
+    "queued",
+    "run, не успевший стать running, не помечается failed",
+  );
+  assert.equal(run.error, null);
+  assert.equal(run.finished_at, null);
+
+  // Следующий тик при здоровой БД доводит run до завершения.
+  const healthy = await processQueuedDiscoveryRuns(db, {
+    registry: registryReturningResults(),
+    releaseStale: false,
+  });
+  assert.equal(healthy.processed, 1);
+  const finished = await db
+    .selectFrom("osint_discovery_runs")
+    .selectAll()
+    .where("id", "=", created.runId)
+    .executeTakeFirstOrThrow();
+  assert.equal(finished.status, "completed");
 });

@@ -1,5 +1,6 @@
 import type { Kysely } from "kysely";
 import type { Database } from "../../db/schema.ts";
+import { log } from "../../observability/log.ts";
 import {
   executeDiscoveryRun,
   releaseStaleDiscoveryRuns,
@@ -7,6 +8,15 @@ import {
 } from "./discovery.ts";
 import { enqueueEnrichment } from "./enrichment.ts";
 import type { ProviderRegistry } from "./providers/registry.ts";
+
+/** Причина сбоя — без тел ответов, тел запросов и любых секретов. */
+function errorMessage(error: unknown): string {
+  const text =
+    error instanceof Error
+      ? `${error.name}: ${error.message}`
+      : String(error);
+  return text.replace(/\s+/g, " ").trim().slice(0, 300) || "unknown_error";
+}
 
 /**
  * Фоновый исполнитель discovery run'ов (§25): очередь queued → execute.
@@ -65,8 +75,9 @@ export async function processQueuedDiscoveryRuns(
         result.processed += 1;
         result.runIds.push(run.runId);
         // Stage 4 (§26.11): discovery завершён → enrichment в очередь.
-        // Сбой постановки не должен отменить завершённый discovery —
-        // следующий run поставит enrichment повторно.
+        // Сбой постановки не должен отменить завершённый discovery, но
+        // обязан быть виден: без enrichment эти наблюдения никогда не
+        // дадут facts/changes, а молчаливый .catch() прятал бы отказ.
         await db
           .selectFrom("osint_discovery_runs")
           .select("business_id")
@@ -80,22 +91,35 @@ export async function processQueuedDiscoveryRuns(
                 })
               : undefined,
           )
-          .catch(() => undefined);
+          .catch((error: unknown) => {
+            log("error", "OSINT_ENRICHMENT_ENQUEUE_FAILED", {
+              discovery_run_id: run.runId,
+              error: errorMessage(error),
+            });
+          });
       }
-    } catch {
-      // Сбой до finish: run завис бы в running до stale-гашения — помечаем
-      // сразу, чтобы статус был виден в snapshot'е.
+    } catch (error) {
+      // Сбой оркестрации: текст сохраняется и логируется — иначе причину
+      // падения невозможно диагностировать постфактум. Здоровый run,
+      // НЕ успевший стать running (сбой SELECT/claim до claim'а), не
+      // помечается failed: у discovery нет повторов, failed терминален —
+      // его заберёт следующий тик.
       result.failed += 1;
+      const message = errorMessage(error);
+      log("error", "DISCOVERY_RUN_ORCHESTRATION_ERROR", {
+        run_id: row.id,
+        error: message,
+      });
       await db
         .updateTable("osint_discovery_runs")
         .set({
           status: "failed",
-          error: "orchestration_error",
+          error: `orchestration_error: ${message}`.slice(0, 500),
           finished_at: new Date(),
           updated_at: new Date(),
         })
         .where("id", "=", row.id)
-        .where("status", "in", ["queued", "running"])
+        .where("status", "=", "running")
         .execute()
         .catch(() => undefined);
     }
