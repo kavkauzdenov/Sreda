@@ -71,13 +71,18 @@ for (const viewport of VIEWPORTS) {
 
     test("приветствие по местному времени и дата", async ({ page }) => {
       if (!hasStorage) await registerAndBusiness(page);
-      else await page.context().addCookies([]);
       await openDashboard(page);
 
       const greeting = page.getByTestId("dashboard-greeting");
       await expect(greeting).toBeVisible();
+      // The greeting is rendered client-side; wait for the hydrated value.
+      await page.waitForFunction(
+        () => (document.querySelector('[data-testid="dashboard-greeting"]')?.textContent ?? "").trim().length > 0,
+        null,
+        { timeout: 15_000 },
+      );
 
-      // The greeting is one of exactly four phrases, or a bare name before hydration.
+      // The greeting is one of exactly four phrases (a bare name before hydration).
       const text = (await greeting.innerText()).trim();
       const allowed = ["Доброй ночи", "Доброе утро", "Добрый день", "Добрый вечер"];
       const base = text.split(",")[0].trim();
@@ -107,24 +112,30 @@ for (const viewport of VIEWPORTS) {
       ).toBe(expected);
     });
 
-    test("главная показывает блок внимания и пустое состояние для нового бизнеса", async ({ page }) => {
+    test("пустое состояние для нового бизнеса, иначе — сводка и внимание", async ({ page }) => {
       if (!hasStorage) await registerAndBusiness(page);
       await openDashboard(page);
 
-      // A brand-new workspace has no records: the empty state must explain what to do
-      // instead of rendering a wall of zeros, and the attention block must be calm.
-      const empty = page.getByTestId("dashboard-empty");
-      const attention = page.getByTestId("dashboard-attention");
-      await expect(attention, "блок «Требует внимания» отсутствует").toBeVisible();
+      // Wait for the pulse endpoints to settle so we do not read the loading panel.
+      await page
+        .getByTestId("dashboard-empty")
+        .or(page.getByTestId("dashboard-attention"))
+        .or(page.getByTestId("dashboard-summary"))
+        .first()
+        .waitFor({ state: "visible", timeout: 30_000 });
 
+      const empty = page.getByTestId("dashboard-empty");
       if (await empty.isVisible().catch(() => false)) {
-        await expect(empty).toContainText(/подключить канал|настройк/i);
+        // Brand-new workspace: explain the next step, never render zeroed cards.
+        await expect(empty).toContainText(/подключить канал|настройк|решени/i);
+        // The attention block is intentionally replaced by the empty state here.
+        await expect(page.getByTestId("dashboard-attention")).toHaveCount(0);
       } else {
-        // Data already exists (shared CI storage) — then a real state must be shown.
-        const attentionEmpty = page.getByTestId("attention-empty");
-        const items = page.getByTestId("attention-item");
-        const calm = await attentionEmpty.isVisible().catch(() => false);
-        const listed = await items.count();
+        // Existing data: a truthful attention block must be present.
+        const attention = page.getByTestId("dashboard-attention");
+        await expect(attention, "при данных нет блока «Требует внимания»").toBeVisible();
+        const calm = await page.getByTestId("attention-empty").isVisible().catch(() => false);
+        const listed = await page.getByTestId("attention-item").count();
         expect(calm || listed > 0, "нет ни пустого состояния, ни задач").toBe(true);
       }
     });

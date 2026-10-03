@@ -127,7 +127,9 @@ for (const viewport of VIEWPORTS) {
       const toggle = page.getByRole("button", { name: /показать пароль/i });
       await toggle.waitFor({ state: "visible", timeout: 30_000 });
 
-      await input.focus();
+      // Fill first, then Tab, so focus lands on the toggle and stays there.
+      await input.click();
+      await input.fill(SECRET);
       await page.keyboard.press("Tab");
       await expect(toggle).toBeFocused();
 
@@ -141,11 +143,18 @@ for (const viewport of VIEWPORTS) {
       ).not.toBe("none");
       expect(parseFloat(outline.width), "толщина контура фокуса = 0").toBeGreaterThan(0);
 
-      // Activated by keyboard, the value survives.
-      await input.fill(SECRET);
+      // Enter on the focused button toggles visibility (type="button", no submit).
       await page.keyboard.press("Enter");
       await expect(input).toHaveAttribute("type", "text");
+      expect(await input.inputValue(), "значение потерялось при активации с клавиатуры").toBe(SECRET);
+
+      // Space toggles it back and the value still survives.
+      await page.keyboard.press("Space");
+      await expect(input).toHaveAttribute("type", "password");
       expect(await input.inputValue()).toBe(SECRET);
+
+      // The toggle must not have submitted the form (we are still on /login).
+      expect(new URL(page.url()).pathname).toBe("/login");
     });
 
     test("страница логина не имеет горизонтального переполнения", async ({ page }) => {
