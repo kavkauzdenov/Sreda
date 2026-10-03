@@ -184,10 +184,24 @@ export class OsintService {
       .where("business_id", "=", member.id)
       .executeTakeFirstOrThrow();
 
+    // Отклонённые мосты не дают видимости §4 — не считаем их и не
+    // показываем (счётчики и список согласованы с drill-down).
     const bridgeTotal = await sql<{ n: number }>`
       SELECT count(DISTINCT entity_id)::int AS n
       FROM osint_business_entities
       WHERE business_id = ${member.id}
+        AND status <> 'rejected'
+    `.execute(this.db);
+
+    // Источники — настоящий COUNT через мосты (≠ rejected) → связи
+    // entity_sources: список ниже обрезан LIST_LIMIT, длина массива
+    // sourceIds врала бы на больших данных.
+    const sourcesTotal = await sql<{ n: number }>`
+      SELECT count(DISTINCT es.source_id)::int AS n
+      FROM osint_business_entities be
+      JOIN osint_entity_sources es ON es.entity_id = be.entity_id
+      WHERE be.business_id = ${member.id}
+        AND be.status <> 'rejected'
     `.execute(this.db);
 
     // Глобальный слой читается только через тенантский мост §4.
@@ -195,6 +209,7 @@ export class OsintService {
       .selectFrom("osint_business_entities")
       .select(["entity_id", "relationship", "status"])
       .where("business_id", "=", member.id)
+      .where("status", "<>", "rejected")
       .orderBy("created_at", "desc")
       .limit(LIST_LIMIT)
       .execute();
@@ -232,7 +247,7 @@ export class OsintService {
           .select([
             "id",
             "name",
-            "url",
+            "normalized_url",
             "type",
             "trust_level",
             "status",
@@ -281,7 +296,7 @@ export class OsintService {
         pending: countByStatus("candidate"),
         accepted: countByStatus("accepted"),
         rejected: countByStatus("rejected"),
-        sources: sourceIds.length,
+        sources: Number(sourcesTotal.rows[0]?.n ?? 0),
         entities: Number(bridgeTotal.rows[0]?.n ?? 0),
       },
       runs: runs.map((row) => ({
@@ -328,7 +343,7 @@ export class OsintService {
       sources: sourceRows.map((row) => ({
         id: row.id,
         name: row.name,
-        url: row.url,
+        url: row.normalized_url,
         type: row.type,
         trustLevel: row.trust_level,
         status: row.status,

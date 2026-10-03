@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { Kysely, PGliteDialect, sql } from "kysely";
 import { PGlite } from "@electric-sql/pglite";
 import { migrate } from "../src/server/db/migrate.ts";
+import { OsintService } from "../src/server/intelligence/osint-service.ts";
 
 const db = new Kysely({ dialect: new PGliteDialect({ pglite: new PGlite() }) });
 before(() => migrate(db, new URL("../migrations", import.meta.url).pathname));
@@ -35,6 +36,11 @@ const TENANT_TABLES = [
   "osint_competitor_candidates",
   "osint_findings",
   "osint_finding_evidence",
+  "osint_crawl_queue",
+  "osint_intelligence_facts",
+  "osint_fact_changes",
+  "osint_intelligence_contradictions",
+  "osint_enrichment_runs",
 ];
 
 const TENANT_REFS = [
@@ -46,6 +52,11 @@ const TENANT_REFS = [
   "'osint_competitor_candidates'",
   "'osint_findings'",
   "'osint_finding_evidence'",
+  "'osint_crawl_queue'",
+  "'osint_intelligence_facts'",
+  "'osint_fact_changes'",
+  "'osint_intelligence_contradictions'",
+  "'osint_enrichment_runs'",
 ].join(",");
 
 async function makeUser() {
@@ -192,11 +203,23 @@ test("tenant state never crosses tenants", async () => {
     })
     .execute();
 
-  // Тенант-скоуп: runs, candidates, facts, findings.
+  // Тенант-скоуп: runs, candidates, facts, findings + таблицы 072/073.
   for (const biz of [bizA, bizB]) {
+    const runId = randomUUID();
     await db
       .insertInto("osint_discovery_runs")
-      .values({ id: randomUUID(), business_id: biz.id })
+      .values({ id: runId, business_id: biz.id })
+      .execute();
+    const crawlUrl = `https://crawl-${biz.name.toLowerCase()}.example.org/`;
+    await db
+      .insertInto("osint_crawl_queue")
+      .values({
+        id: randomUUID(),
+        run_id: runId,
+        business_id: biz.id,
+        url: crawlUrl,
+        normalized_url: crawlUrl,
+      })
       .execute();
     await db
       .insertInto("osint_source_candidates")
@@ -235,6 +258,51 @@ test("tenant state never crosses tenants", async () => {
         last_seen_at: new Date(),
       })
       .execute();
+    await db
+      .insertInto("osint_intelligence_facts")
+      .values({
+        id: randomUUID(),
+        business_id: biz.id,
+        entity_id: entityId,
+        fact_type: "phone",
+        fact_key: `799900000${biz.name}`,
+        value: `799900000${biz.name}`,
+        raw_value: `8 (999) 000-00-0${biz.name}`,
+        source_id: sourceId,
+        observation_id: observationId,
+        status: "ACTIVE",
+        fingerprint: `fp-${biz.name}`,
+      })
+      .execute();
+    await db
+      .insertInto("osint_fact_changes")
+      .values({
+        id: randomUUID(),
+        business_id: biz.id,
+        entity_id: entityId,
+        fact_type: "phone",
+        fact_key: `799900000${biz.name}`,
+        change_kind: "FIRST_SEEN",
+        new_value: `799900000${biz.name}`,
+        source_id: sourceId,
+        observation_id: observationId,
+        fingerprint: `chg-${biz.name}`,
+      })
+      .execute();
+    await db
+      .insertInto("osint_intelligence_contradictions")
+      .values({
+        id: randomUUID(),
+        business_id: biz.id,
+        fact_type: "phone",
+        value_count: 1,
+        source_count: 1,
+      })
+      .execute();
+    await db
+      .insertInto("osint_enrichment_runs")
+      .values({ id: randomUUID(), business_id: biz.id, status: "queued" })
+      .execute();
   }
 
   const runsA = await db
@@ -266,6 +334,30 @@ test("tenant state never crosses tenants", async () => {
     .execute();
   assert.equal(findingsForB.length, 1);
   assert.equal(findingsForB[0].title, "finding-B");
+
+  // Таблицы 072/073: каждый тенант видит ровно свои строки.
+  const separation = [
+    ["osint_crawl_queue", "id"],
+    ["osint_intelligence_facts", "id"],
+    ["osint_fact_changes", "id"],
+    ["osint_intelligence_contradictions", "id"],
+    ["osint_enrichment_runs", "id"],
+  ];
+  for (const [table, key] of separation) {
+    const rowsA = await db
+      .selectFrom(table)
+      .select(key)
+      .where("business_id", "=", bizA.id)
+      .execute();
+    const rowsB = await db
+      .selectFrom(table)
+      .select(key)
+      .where("business_id", "=", bizB.id)
+      .execute();
+    assert.equal(rowsA.length, 1, `${table}: строка тенанта A`);
+    assert.equal(rowsB.length, 1, `${table}: строка тенанта B`);
+    assert.notEqual(rowsA[0][key], rowsB[0][key], `${table}: строки разные`);
+  }
 
   // Публичный слой общий — оба тенанта видят одни и те же строки.
   await db
@@ -315,4 +407,27 @@ test("tenant state never crosses tenants", async () => {
       and column_name in ('client','lead','note','password','billing','telegram_user_id')
   `.execute(db);
   assert.deepEqual(columns.rows, [], "приватные поля в OSINT-слое не хранятся");
+});
+
+test("run status of another tenant is not found", async () => {
+  const uid = await makeUser();
+  const bizA = await makeBusiness(uid, "Status A");
+  const bizB = await makeBusiness(uid, "Status B");
+  const runA = randomUUID();
+  await db
+    .insertInto("osint_discovery_runs")
+    .values({ id: runA, business_id: bizA.id })
+    .execute();
+
+  const service = new OsintService(db);
+  // Участник B читает через свой бизнес — run тенанта A не виден.
+  await assert.rejects(
+    () => service.getRunStatus(uid, bizB.public_id, runA),
+    (error) =>
+      error.code === "DISCOVERY_RUN_NOT_FOUND" && error.status === 404,
+    "кросс-tenant run не читается даже при членстве в другом бизнесе",
+  );
+
+  const own = await service.getRunStatus(uid, bizA.public_id, runA);
+  assert.equal(own.runId, runA, "владелец видит свой run");
 });

@@ -674,6 +674,10 @@ async function executeEnrichment(
             observation_id: detail.observationId,
             entity_id: detail.entityId,
             updated_at: now,
+            // Происхождение обновляется вместе с fact'ой: без этого путь
+            // обновления терял origin (и run_id), оставляя устаревшую
+            // провенанс-запись от первой выдержки.
+            metadata: { origin: detail.origin, run_id: runId },
           })
           .where("id", "=", existing.id)
           .execute();
@@ -709,6 +713,7 @@ async function executeEnrichment(
               observation_id: detail.observationId,
               entity_id: detail.entityId,
               updated_at: now,
+              metadata: { origin: detail.origin, run_id: runId },
             }),
           )
           .execute();

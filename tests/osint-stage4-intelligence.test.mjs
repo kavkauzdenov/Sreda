@@ -349,4 +349,42 @@ test("Stage 4: intelligence E2E — факты, изменения, против
       "строк фактов не прибавилось",
     );
   });
+
+  await t.test("повторное обогащение обновляет происхождение факта", async () => {
+    const target = await db
+      .selectFrom("osint_intelligence_facts")
+      .select(["id", "metadata"])
+      .where("business_id", "=", ctx.business.id)
+      .where("status", "=", "ACTIVE")
+      .executeTakeFirstOrThrow();
+
+    // Симулируем устаревшую провенанс-запись: путь обновления обязан
+    // перезаписать origin/run_id свежими значениями, а не оставить
+    // первую выдержку (оба update-пути: existing-ветка и doUpdateSet).
+    await db
+      .updateTable("osint_intelligence_facts")
+      .set({ metadata: { origin: "tampered", run_id: "tampered" } })
+      .where("id", "=", target.id)
+      .execute();
+
+    const enq = await enqueueEnrichment(db, { businessId: ctx.business.id });
+    assert.equal(enq.created, true);
+    const tick = await processQueuedEnrichments(db, { limit: 1 });
+    assert.deepEqual(tick, { processed: 1, completed: 1, failed: 0 });
+
+    const updated = await db
+      .selectFrom("osint_intelligence_facts")
+      .select("metadata")
+      .where("id", "=", target.id)
+      .executeTakeFirstOrThrow();
+    const metadata =
+      typeof updated.metadata === "string"
+        ? JSON.parse(updated.metadata)
+        : updated.metadata;
+    assert.ok(
+      ORIGINS.has(metadata.origin),
+      `origin=${metadata.origin} после обновления`,
+    );
+    assert.equal(metadata.run_id, enq.runId, "run_id — свежий запуск");
+  });
 });

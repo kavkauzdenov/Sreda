@@ -133,6 +133,120 @@ test("owner can run discovery and read the snapshot", async () => {
   );
 });
 
+test("snapshot ignores rejected bridges and serves normalized source urls", async () => {
+  const uid = await makeUser();
+  const biz = await makeBusiness(uid, "Отклонённые мосты");
+  const service = new OsintService(db);
+  const now = new Date();
+
+  const makeEntity = async (suffix) => {
+    const id = randomUUID();
+    await db
+      .insertInto("osint_entities")
+      .values({
+        id,
+        display_name: `Сущность ${suffix}`,
+        normalized_name: `сущность ${suffix}`,
+        identity_key: `domain:${suffix}.example.org`,
+        created_at: now,
+        updated_at: now,
+      })
+      .execute();
+    return id;
+  };
+  const makeSource = async (rawUrl, normalizedUrl) => {
+    const id = randomUUID();
+    await db
+      .insertInto("osint_sources")
+      .values({
+        id,
+        type: "website",
+        provider: "mock",
+        url: rawUrl,
+        normalized_url: normalizedUrl,
+        name: "Источник",
+        created_at: now,
+        updated_at: now,
+      })
+      .execute();
+    return id;
+  };
+
+  const linkedEntity = await makeEntity("linked");
+  const rejectedEntity = await makeEntity("rejected");
+  const keptSource = await makeSource(
+    "https://Kept.Example.org/path/?utm_source=x&fbclid=zz",
+    "https://kept.example.org/path",
+  );
+  const droppedSource = await makeSource(
+    "https://dropped.example.org/",
+    "https://dropped.example.org",
+  );
+  await db
+    .insertInto("osint_entity_sources")
+    .values([
+      {
+        entity_id: linkedEntity,
+        source_id: keptSource,
+        confidence: "1",
+        created_at: now,
+      },
+      {
+        entity_id: rejectedEntity,
+        source_id: droppedSource,
+        confidence: "1",
+        created_at: now,
+      },
+    ])
+    .execute();
+  await db
+    .insertInto("osint_business_entities")
+    .values([
+      {
+        business_id: biz.id,
+        entity_id: linkedEntity,
+        relationship: "ABOUT",
+        confidence: "1",
+        status: "linked",
+        created_at: now,
+        updated_at: now,
+      },
+      {
+        business_id: biz.id,
+        entity_id: rejectedEntity,
+        relationship: "ABOUT",
+        confidence: "1",
+        status: "rejected",
+        created_at: now,
+        updated_at: now,
+      },
+    ])
+    .execute();
+
+  const snapshot = await service.getSnapshot(uid, biz.public_id);
+  assert.equal(
+    snapshot.counts.entities,
+    1,
+    "отклонённый мост не даёт видимости §4",
+  );
+  assert.deepEqual(
+    snapshot.entities.map((entity) => entity.id),
+    [linkedEntity],
+    "rejected-сущность не попадает в список",
+  );
+  assert.equal(
+    snapshot.counts.sources,
+    1,
+    "источник отклонённого моста не считается",
+  );
+  assert.equal(snapshot.sources.length, 1);
+  assert.equal(
+    snapshot.sources[0].url,
+    "https://kept.example.org/path",
+    "снимок отдаёт normalized_url, а не исходный URL",
+  );
+});
+
 test("snapshot of another business never leaks candidates", async () => {
   const uid = await makeUser();
   const bizA = await makeBusiness(uid, "A");
