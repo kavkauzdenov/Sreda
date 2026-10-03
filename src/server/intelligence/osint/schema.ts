@@ -52,6 +52,84 @@ export type OsintDiscoveryRunStatus =
   | "partial"
   | "failed";
 
+/**
+ * Фаза автономного исследования (§46). Отдельна от статуса: статус отвечает
+ * «чем закончилось», фаза — «чем занят прямо сейчас».
+ */
+export type OsintResearchPhase =
+  | "idle"
+  | "planning"
+  | "searching"
+  | "discovering"
+  | "extracting"
+  | "resolving"
+  | "enriching"
+  | "evaluating"
+  | "saturating";
+
+/** Назначение исследовательского действия — внутреннее рассуждение агента. */
+export type OsintResearchPurpose =
+  | "identity"
+  | "contact"
+  | "website"
+  | "social"
+  | "reviews"
+  | "maps"
+  | "legal"
+  | "news"
+  | "products"
+  | "services"
+  | "prices"
+  | "vacancies"
+  | "locations"
+  | "competitors"
+  | "mentions"
+  | "reputation"
+  | "changes"
+  | "verification";
+
+export type OsintResearchActionKind = "search" | "fetch" | "verify";
+export type OsintResearchActionStatus =
+  | "pending"
+  | "running"
+  | "done"
+  | "failed"
+  | "skipped"
+  | "exhausted";
+export type OsintResearchOutcome =
+  | "pending"
+  | "productive"
+  | "empty"
+  | "duplicate"
+  | "blocked"
+  | "error";
+
+export type OsintHypothesisType = OsintResearchPurpose | "corroboration" | "contradiction";
+export type OsintHypothesisStatus =
+  | "open"
+  | "testing"
+  | "confirmed"
+  | "refuted"
+  | "exhausted"
+  | "skipped";
+
+/**
+ * Таксономия недоступности источника (§38). Это НЕ ошибки исследования:
+ * blocked/robots_disallowed/captcha/rate_limited — состояние источника,
+ * исследование продолжается другой веткой.
+ */
+export type OsintSourceAccessStatus =
+  | "accessible"
+  | "blocked"
+  | "robots_disallowed"
+  | "captcha"
+  | "rate_limited"
+  | "timeout"
+  | "not_found"
+  | "requires_auth"
+  | "unsupported_content"
+  | "transport_error";
+
 export type OsintEntityKind = "business" | "location" | "organization";
 
 export type OsintObservationKind =
@@ -273,6 +351,20 @@ export interface OsintTables {
     root_entity_id: string | null;
     /** Детерминированные extra-запросы (фразы паспорта) — в начале списка. */
     extra_queries: Generated<unknown[]>;
+    /**
+     * Тонкий жизненный цикл агента (§46). `status` намеренно не расширяем:
+     * он зафиксирован контрактом и asserted в тестах, поэтому фаза — отдельная
+     * колонка, а не новое значение статуса.
+     */
+    phase: Generated<OsintResearchPhase>;
+    /** Какие ветки исследования агент решил развивать и почему. */
+    plan: Generated<Record<string, unknown>>;
+    /** Отчёт о покрытии и насыщении: что исследовано, что неизвестно. */
+    coverage: Generated<Record<string, unknown>>;
+    /** Подтверждённое знание run'а — бэкендинг планировщика (fact → гипотеза). */
+    knowledge: Generated<Record<string, unknown>>;
+    /** Счётчики агента: база метрики «полезные факты на действие» (§69). */
+    agent_stats: Generated<Record<string, unknown>>;
   };
   osint_entities: {
     id: string;
@@ -644,6 +736,75 @@ export interface OsintTables {
     created_at: Generated<Date>;
     started_at: Date | null;
     finished_at: Date | null;
+    updated_at: Generated<Date>;
+  };
+  /**
+   * Исследовательское действие — единица работы агента (§21). Тенант-скоуп:
+   * действие отвечает на вопрос про ЭТОТ бизнес.
+   */
+  osint_research_actions: {
+    id: string;
+    run_id: string;
+    business_id: string;
+    parent_action_id: string | null;
+    /** FK на osint_research_hypotheses добавляется в 075 — здесь только тип. */
+    hypothesis_id: string | null;
+    kind: Generated<OsintResearchActionKind>;
+    purpose: Generated<OsintResearchPurpose>;
+    query: Generated<string>;
+    target_url: string | null;
+    reason: Generated<string>;
+    priority: Generated<number>;
+    status: Generated<OsintResearchActionStatus>;
+    outcome: Generated<OsintResearchOutcome>;
+    results_count: Generated<number>;
+    new_sources: Generated<number>;
+    new_facts: Generated<number>;
+    new_entities: Generated<number>;
+    error: string | null;
+    dedupe_key: string;
+    executed_at: Date | null;
+    created_at: Generated<Date>;
+    updated_at: Generated<Date>;
+  };
+  /**
+   * Исследовательская гипотеза — проверяемое утверждение (§7). Тенант-скоуп.
+   */
+  osint_research_hypotheses: {
+    id: string;
+    run_id: string;
+    business_id: string;
+    parent_hypothesis_id: string | null;
+    type: Generated<OsintHypothesisType>;
+    statement: Generated<string>;
+    reason: Generated<string>;
+    priority: Generated<number>;
+    confidence: Generated<number>;
+    status: Generated<OsintHypothesisStatus>;
+    source_entity_id: string | null;
+    subject_key: Generated<string>;
+    subject_value: Generated<string>;
+    actions_used: Generated<number>;
+    dedupe_key: string;
+    resolved_at: Date | null;
+    created_at: Generated<Date>;
+    updated_at: Generated<Date>;
+  };
+  /**
+   * Доступность источника. ГЛОБАЛЬНАЯ таблица — блокировка сайта касается
+   * всех тенантов; никакого business_id и никаких FK на business/user.
+   */
+  osint_source_access: {
+    source_id: string;
+    status: Generated<OsintSourceAccessStatus>;
+    http_status: number | null;
+    detail: Generated<string>;
+    consecutive_count: Generated<number>;
+    last_status_code: string | null;
+    last_checked_at: Generated<Date>;
+    last_success_at: Date | null;
+    first_blocked_at: Date | null;
+    created_at: Generated<Date>;
     updated_at: Generated<Date>;
   };
 }
