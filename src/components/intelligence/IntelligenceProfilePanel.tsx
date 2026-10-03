@@ -13,6 +13,7 @@ import type {
   OsintIntelFact,
   OsintIntelProfile,
 } from "@/lib/intelligence-types";
+import { osintRunStatusLabel } from "@/lib/osintLabels";
 
 /**
  * Stage 4 (§26.13): четыре вопроса к intelligence-слою —
@@ -76,8 +77,25 @@ const RESOLUTION_LABELS: Record<string, string> = {
   NO_MATCH: "без совпадения",
 };
 
+/**
+ * Fallbacks degrade to a neutral phrase rather than echoing the raw enum — an
+ * unmapped code must never surface in the customer view. The real value stays
+ * available in the API/DB for diagnostics.
+ */
 function typeLabel(factType: string): string {
-  return FACT_TYPE_LABELS[factType] ?? factType;
+  return FACT_TYPE_LABELS[factType] ?? "Другое";
+}
+
+function changeKindLabel(kind: string): string {
+  return CHANGE_KIND_LABELS[kind] ?? "Изменение";
+}
+
+function factStatusLabel(status: string): string {
+  return FACT_STATUS_LABELS[status] ?? "на проверке";
+}
+
+function resolutionLabel(resolution: string): string {
+  return RESOLUTION_LABELS[resolution] ?? "на проверке";
 }
 
 function formatDate(value: string): string {
@@ -240,7 +258,7 @@ export function IntelligenceProfilePanel({
         <h2 className="intelligence-section-title">Что мы знаем о бизнесе</h2>
         <p className="account-footnote">
           {profile?.lastRun
-            ? `Последнее обогащение: ${profile.lastRun.status === "completed" ? "готово" : profile.lastRun.status} · ${formatDate(profile.lastRun.createdAt)}`
+            ? `Последнее обогащение: ${osintRunStatusLabel(profile.lastRun.status).toLowerCase()} · ${formatDate(profile.lastRun.createdAt)}`
             : loading
               ? "Загрузка…"
               : "Обогащение ещё не запускалось — запустите OSINT-сбор выше, факты появятся после фонового прохода."}
@@ -273,7 +291,7 @@ export function IntelligenceProfilePanel({
               <li>
                 Сопоставление:{" "}
                 {profile.resolution
-                  ? `${RESOLUTION_LABELS[profile.resolution.status] ?? profile.resolution.status}${profile.resolution.entityName ? ` → «${profile.resolution.entityName}»` : ""}`
+                  ? `${resolutionLabel(profile.resolution.status)}${profile.resolution.entityName ? ` → «${profile.resolution.entityName}»` : ""}`
                   : "нет данных — обогащение ещё не выполнялось"}
               </li>
             </ul>
@@ -349,7 +367,7 @@ export function IntelligenceProfilePanel({
                     {facts.map((fact) => (
                       <li key={fact.id} data-testid="intel-fact">
                         <strong>{fact.value}</strong> · {typeLabel(fact.factType)}{" "}
-                        · {FACT_STATUS_LABELS[fact.status] ?? fact.status}
+                        · {factStatusLabel(fact.status)}
                         <FactProvenance fact={fact} businessId={businessId} />
                       </li>
                     ))}
@@ -381,7 +399,7 @@ export function IntelligenceProfilePanel({
               <ul className="setup-progress__list">
                 {changes.map((change) => (
                   <li key={change.id} data-testid={`intel-change-${change.changeKind}`}>
-                    {CHANGE_KIND_LABELS[change.changeKind] ?? change.changeKind} ·{" "}
+                    {changeKindLabel(change.changeKind)} ·{" "}
                     {typeLabel(change.factType)}:{" "}
                     {change.oldValue ? `«${change.oldValue}»` : null}
                     {change.oldValue && change.newValue ? " → " : null}

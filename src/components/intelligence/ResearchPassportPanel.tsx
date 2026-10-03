@@ -15,6 +15,13 @@ import type {
   OsintResearchUrl,
   OsintResearchUrlRole,
 } from "@/lib/intelligence-types";
+import {
+  osintProviderLabel,
+  osintProviderRoleLabel,
+  osintProviderState,
+  osintRunErrorSummary,
+  osintRunStatusLabel,
+} from "@/lib/osintLabels";
 
 const STEPS = [
   "О бизнесе",
@@ -71,11 +78,12 @@ function goalLevelLabel(level: OsintResearchGoal["level"]): string {
   return "Недоступно";
 }
 
+/**
+ * Launch statuses are queued | running | completed | failed. Delegating to the
+ * shared map keeps an unexpected value from being mislabelled as «В очереди».
+ */
 function launchStatusLabel(status: string): string {
-  if (status === "completed") return "Готово";
-  if (status === "failed") return "Ошибка";
-  if (status === "running") return "Выполняется";
-  return "В очереди";
+  return osintRunStatusLabel(status);
 }
 
 export function ResearchPassportPanel({ businessId }: { businessId: string }) {
@@ -660,25 +668,37 @@ export function ResearchPassportPanel({ businessId }: { businessId: string }) {
             Источники и ограничения
           </h3>
           <ul className="setup-progress__list" data-testid="research-providers">
-            {(research?.providers ?? []).map((provider) => (
-              <li key={`${provider.role}-${provider.id}`}>
-                <strong>{provider.label}</strong>{" "}
-                <span className="account-footnote">
-                  {provider.role === "search" ? "поиск" : "обход страниц"}
-                </span>{" "}
-                <span
-                  className={
-                    provider.available ? "account-footnote" : "account-error"
-                  }
+            {(research?.providers ?? []).map((provider) => {
+              const state = osintProviderState({
+                available: provider.available,
+                reason: provider.reason,
+              });
+              return (
+                <li
+                  key={`${provider.role}-${provider.id}`}
+                  data-source-state={state.state}
                 >
-                  {provider.available
-                    ? provider.willParticipate
-                      ? "будет участвовать"
-                      : "доступен"
-                    : `недоступен: ${provider.reason ?? "нет конфигурации"}`}
-                </span>
-              </li>
-            ))}
+                  <strong>{osintProviderLabel(provider.id, provider.label)}</strong>{" "}
+                  <span className="account-footnote">
+                    {osintProviderRoleLabel(provider.role)}
+                  </span>{" "}
+                  <span
+                    className={
+                      provider.available ? "account-footnote" : "account-error"
+                    }
+                  >
+                    {provider.available
+                      ? provider.willParticipate
+                        ? "будет участвовать"
+                        : "доступен"
+                      : state.label}
+                  </span>
+                  {!provider.available && state.detail ? (
+                    <span className="account-footnote"> — {state.detail}</span>
+                  ) : null}
+                </li>
+              );
+            })}
           </ul>
           <p className="account-footnote">
             Политика источников: только публичные разрешённые источники, robots
@@ -727,13 +747,14 @@ export function ResearchPassportPanel({ businessId }: { businessId: string }) {
                   .filter((provider) => provider.willParticipate)
                   .map((provider) => (
                     <li key={`${provider.role}-${provider.id}`}>
-                      {provider.label} ({provider.role === "search" ? "поиск" : "обход"})
+                      {osintProviderLabel(provider.id, provider.label)} (
+                      {osintProviderRoleLabel(provider.role)})
                     </li>
                   ))}
                 {plan.providers.filter((p) => p.willParticipate).length ===
                 0 ? (
                   <li className="account-footnote">
-                    Ни один провайдер не участвует — запуск бессмысленно.
+                    Ни один источник не участвует — запуск бессмысленно.
                   </li>
                 ) : null}
               </ul>
@@ -943,7 +964,9 @@ export function ResearchPassportPanel({ businessId }: { businessId: string }) {
                 </li>
               ) : null}
               {research.launch.error ? (
-                <li className="account-error">{research.launch.error}</li>
+                <li className="account-error">
+                  {osintRunErrorSummary(research.launch.error)}
+                </li>
               ) : null}
             </ul>
           ) : (

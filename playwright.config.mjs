@@ -24,7 +24,10 @@ export default defineConfig({
     {
       name: "webkit",
       use: { browserName: "webkit" },
-      testMatch: /(ui-system|clients-v2|orders-v2)\.spec\.mjs/,
+      // WebKit covers the auth layout and the UX-refactor surfaces too, so the
+      // webkit jobs can never pass vacuously on a spec they do not match.
+      testMatch:
+        /(ui-system|clients-v2|orders-v2|password-field|dashboard-ux)\.spec\.mjs/,
     },
   ],
 });

@@ -6,6 +6,7 @@ import type { Claim, Evidence } from "@/lib/intelligence-contracts.ts";
 import { requireBusiness } from "../access/permissions.ts";
 import { AppError } from "../http/errors.ts";
 import { logIntelligenceEvent } from "./audit.ts";
+import { log } from "../observability/log.ts";
 import { createBuiltinRegistry } from "./osint/providers/builtin.ts";
 import type { ProviderRegistry } from "./osint/providers/registry.ts";
 import {
@@ -343,8 +344,21 @@ export class OsintService {
       });
     }
 
+    const descriptors = this.registry().descriptorInfo();
+    // Diagnostics: an unavailable provider is a configuration fact, not an error.
+    // The raw reason code goes to structured logs only — the UI translates it
+    // (see src/lib/osintLabels.ts) so customers never see adapter internals.
+    for (const info of descriptors) {
+      if (info.availability.available) continue;
+      log("warn", "osint.provider_unavailable", {
+        provider: info.descriptor.id,
+        reason: info.availability.reason,
+        business: publicId,
+      });
+    }
+
     return {
-      providers: this.registry().descriptorInfo().map((info) => ({
+      providers: descriptors.map((info) => ({
         id: info.descriptor.id,
         label: info.descriptor.label,
         requiresNetwork: info.descriptor.requiresNetwork,
@@ -710,6 +724,18 @@ export class OsintService {
       budget: options?.budget,
       crawl,
     });
+
+    // Diagnostics: exact failure codes stay in structured logs. The customer view
+    // gets a human summary (src/lib/osintLabels.ts#osintRunErrorSummary), so a real
+    // fault is never hidden — it is just no longer rendered as adapter internals.
+    if (result.errors.length > 0) {
+      log(result.status === "failed" ? "error" : "warn", "osint.discovery_errors", {
+        run_id: result.runId,
+        status: result.status,
+        error_codes: result.errors.join("; ").slice(0, 500),
+        business: publicId,
+      });
+    }
 
     return {
       runId: result.runId,

@@ -9,23 +9,17 @@ import type {
   OsintDiscoveryEnqueued,
   OsintSnapshot,
 } from "@/lib/intelligence-types";
-
-function runStatusLabel(status: string) {
-  switch (status) {
-    case "completed":
-      return "Готово";
-    case "partial":
-      return "Частично";
-    case "failed":
-      return "Ошибка";
-    case "running":
-      return "Выполняется";
-    case "queued":
-      return "В очереди";
-    default:
-      return status;
-  }
-}
+import {
+  osintBridgeStatusLabel,
+  osintProviderLabel,
+  osintProviderState,
+  osintRelationshipLabel,
+  osintRunErrorSummary,
+  osintRunStatusLabel,
+  osintSourceStatusLabel,
+  osintSourceTypeLabel,
+  osintTrustLabel,
+} from "@/lib/osintLabels";
 
 function candidateStatusLabel(status: string) {
   switch (status) {
@@ -79,8 +73,8 @@ export function OsintPanel({ businessId }: { businessId: string }) {
         businessId,
       );
       setNotice(
-        `Запуск ${runStatusLabel(outcome.status.toLowerCase())}: ` +
-          `seed-URL ${outcome.seeds} · обход пойдёт в фоне`,
+        `Запуск ${osintRunStatusLabel(outcome.status.toLowerCase())}: ` +
+          `сайтов в обработке ${outcome.seeds} · обход пойдёт в фоне`,
       );
       setReloadKey((key) => key + 1);
     } catch (e: unknown) {
@@ -104,19 +98,34 @@ export function OsintPanel({ businessId }: { businessId: string }) {
           <h2 className="intelligence-section-title">
             Присутствие в открытом интернете
           </h2>
-          <p className="account-footnote">
-            {snapshot
-              ? `Провайдеры: ${snapshot.providers
-                  .map(
-                    (provider) =>
-                      `${provider.label} (${provider.policy})` +
-                      (provider.available
-                        ? ""
-                        : ` — недоступен: ${provider.unavailableReason ?? "нет конфигурации"}`),
-                  )
-                  .join(", ")}`
-              : "Загрузка источников…"}
-          </p>
+          {snapshot ? (
+        <ul className="setup-progress__list" data-testid="osint-providers">
+          {snapshot.providers.map((provider) => {
+            const state = osintProviderState({
+              available: provider.available,
+              reason: provider.unavailableReason,
+              policy: provider.policy,
+            });
+            return (
+              <li key={provider.id} data-source-state={state.state}>
+                <strong>{osintProviderLabel(provider.id, provider.label)}</strong>{" "}
+                <span
+                  className={
+                    state.state === "ready" ? "account-footnote" : "account-error"
+                  }
+                >
+                  {state.label}
+                </span>
+                {state.detail ? (
+                  <span className="account-footnote"> — {state.detail}</span>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <p className="account-footnote">Загрузка источников…</p>
+      )}
         </div>
         <button
           type="button"
@@ -167,14 +176,17 @@ export function OsintPanel({ businessId }: { businessId: string }) {
         <div>
           <h3 className="intelligence-section-title">Запуски</h3>
           <ul className="setup-progress__list">
-            {snapshot.runs.map((run) => (
-              <li key={run.id}>
-                {runStatusLabel(run.status)} · {run.queriesCount} запросов ·{" "}
-                {run.candidatesCount} кандидатов ·{" "}
-                {new Date(run.createdAt).toLocaleString("ru-RU")}
-                {run.error ? ` · ${run.error}` : ""}
-              </li>
-            ))}
+            {snapshot.runs.map((run) => {
+              const problem = osintRunErrorSummary(run.error);
+              return (
+                <li key={run.id}>
+                  {osintRunStatusLabel(run.status)} · {run.queriesCount} запросов ·{" "}
+                  {run.candidatesCount} кандидатов ·{" "}
+                  {new Date(run.createdAt).toLocaleString("ru-RU")}
+                  {problem ? ` · ${problem}` : ""}
+                </li>
+              );
+            })}
           </ul>
         </div>
       ) : null}
@@ -193,7 +205,7 @@ export function OsintPanel({ businessId }: { businessId: string }) {
                   {candidate.title || candidate.url}
                 </a>{" "}
                 · {candidateStatusLabel(candidate.status)} ·{" "}
-                {candidate.provider}
+                {osintProviderLabel(candidate.provider)}
                 {candidate.matchReasons.length
                   ? ` · ${candidate.matchReasons.join(", ")}`
                   : ""}
@@ -211,7 +223,8 @@ export function OsintPanel({ businessId }: { businessId: string }) {
               <li key={entity.id}>
                 {entity.displayName}
                 {entity.city ? ` · ${entity.city}` : ""} ·{" "}
-                {entity.relationship} ({entity.bridgeStatus})
+                {osintRelationshipLabel(entity.relationship)} (
+                {osintBridgeStatusLabel(entity.bridgeStatus)})
               </li>
             ))}
           </ul>
@@ -231,7 +244,9 @@ export function OsintPanel({ businessId }: { businessId: string }) {
                 >
                   {source.name || source.url}
                 </a>{" "}
-                · {source.type} · {source.trustLevel} · {source.status}
+                · {osintSourceTypeLabel(source.type)} ·{" "}
+                {osintTrustLabel(source.trustLevel)} ·{" "}
+                {osintSourceStatusLabel(source.status)}
               </li>
             ))}
           </ul>

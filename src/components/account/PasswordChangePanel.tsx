@@ -1,53 +1,7 @@
 "use client";
 import { useState } from "react";
-import { Eye, EyeOff } from "lucide-react";
 import { apiRequest } from "@/lib/apiClient";
-
-function PasswordField({
-  id,
-  label,
-  autoComplete,
-  value,
-  onChange,
-}: {
-  id: string;
-  label: string;
-  autoComplete: string;
-  value: string;
-  onChange: (v: string) => void;
-}) {
-  const [visible, setVisible] = useState(false);
-  return (
-    <label className="field" htmlFor={id}>
-      <span className="field__label">{label}</span>
-      <span className="field__password">
-        <input
-          className="field__control"
-          id={id}
-          type={visible ? "text" : "password"}
-          autoComplete={autoComplete}
-          minLength={10}
-          maxLength={128}
-          required
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-        />
-        <button
-          type="button"
-          className="field__password-toggle"
-          aria-label={visible ? "Скрыть пароль" : "Показать пароль"}
-          onClick={() => setVisible((v) => !v)}
-        >
-          {visible ? (
-            <EyeOff size={18} aria-hidden />
-          ) : (
-            <Eye size={18} aria-hidden />
-          )}
-        </button>
-      </span>
-    </label>
-  );
-}
+import { LabelledPasswordField } from "@/components/ui/PasswordField";
 
 export function PasswordChangePanel() {
   const [currentPassword, setCurrentPassword] = useState("");
@@ -107,27 +61,27 @@ export function PasswordChangePanel() {
         }}
       >
         <fieldset className="form-stack form-stack--md" disabled={busy}>
-          <PasswordField
-            id="change-current-password"
-            label="Текущий пароль"
-            autoComplete="current-password"
-            value={currentPassword}
-            onChange={setCurrentPassword}
-          />
-          <PasswordField
-            id="change-new-password"
-            label="Новый пароль"
-            autoComplete="new-password"
-            value={newPassword}
-            onChange={setNewPassword}
-          />
-          <PasswordField
-            id="change-password-confirmation"
-            label="Повторите новый пароль"
-            autoComplete="new-password"
-            value={confirmation}
-            onChange={setConfirmation}
-          />
+          <LabelledPasswordField
+          id="change-current-password"
+          label="Текущий пароль"
+          autoComplete="current-password"
+          value={currentPassword}
+          onChange={setCurrentPassword}
+        />
+        <LabelledPasswordField
+          id="change-new-password"
+          label="Новый пароль"
+          autoComplete="new-password"
+          value={newPassword}
+          onChange={setNewPassword}
+        />
+        <LabelledPasswordField
+          id="change-password-confirmation"
+          label="Повторите новый пароль"
+          autoComplete="new-password"
+          value={confirmation}
+          onChange={setConfirmation}
+        />
           <p className="field-hint">
             От 10 до 128 символов. Используйте пароль, которого нет у вас в других
             сервисах.

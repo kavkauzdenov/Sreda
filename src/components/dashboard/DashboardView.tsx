@@ -4,24 +4,29 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowUpRight, RefreshCw, Search } from "lucide-react";
-import { DashboardKpis } from "./DashboardKpis";
 import { SolutionCards } from "./SolutionCards";
-import { TodaySchedule } from "./TodaySchedule";
 import { QuickActions } from "./QuickActions";
-import { DashboardAiHint } from "./DashboardAiHint";
 import { CommandSearch } from "./CommandSearch";
-import { ActivityFeed } from "./ActivityFeed";
 import { BusinessSwitcher } from "./BusinessSwitcher";
 import { LoadingPanel } from "./LoadingPanel";
 import { DetailDialog } from "./DetailDialog";
 import { SolutionModule, solutionState } from "./SolutionModule";
+import { AttentionPanel } from "./AttentionPanel";
+import { BusinessSummary } from "./BusinessSummary";
+import { DashboardEmptyState } from "./DashboardEmptyState";
 import { PlatformBadge } from "@/components/ui/PlatformBadge";
 import { SetupChecklist } from "@/components/onboarding/SetupChecklist";
 import {
   useDashboardData,
   type WorkspaceSolutionItem,
 } from "@/hooks/useDashboardData";
-import { formatRelativeDateTime } from "@/lib/format";
+import { useDashboardPulse } from "@/hooks/useDashboardPulse";
+import { useLocalDateLabel, useLocalGreeting } from "@/hooks/useLocalGreeting";
+import { buildAttentionItems, isWorkspaceEmpty } from "@/lib/dashboardAttention";
+import {
+  formatRelativeDateTime,
+  getFirstName,
+} from "@/lib/format";
 import { isDemoMode } from "@/lib/dataMode";
 import { apiRequest } from "@/lib/apiClient";
 import {
@@ -52,6 +57,9 @@ type Selection =
 export function DashboardView() {
   const data = useDashboardData();
   const router = useRouter();
+  const { pulse, loading: pulseLoading } = useDashboardPulse(data.businessId);
+  const greeting = useLocalGreeting();
+  const dateLabel = useLocalDateLabel();
   const [query, setQuery] = useState("");
   const [selection, setSelection] = useState<Selection | null>(null);
   const [selectionBusiness, setSelectionBusiness] = useState("");
@@ -164,6 +172,39 @@ export function DashboardView() {
       return "Заполните каталог товаров.";
     return "Продолжите настройку бизнеса.";
   })();
+
+  const firstName = getFirstName(data.user?.name ?? "").trim();
+  // A viewer without a name still gets the greeting — never a dangling comma.
+  const headline = [greeting, firstName].filter(Boolean).join(", ");
+  const connectedCount = data.connections.filter(
+    (connection) => connection.status === "connected",
+  ).length;
+  // Only a real connection fault counts as "requires attention"; a deliberately
+  // disconnected channel is a setup matter, not an incident.
+  const connectionProblems = data.connections.filter(
+    (connection) => connection.status === "error",
+  ).length;
+  const attentionItems = buildAttentionItems({
+    leads: pulse.leads,
+    orders: pulse.orders,
+    bookings: pulse.bookings,
+    connections: { connected: connectedCount, problemCount: connectionProblems },
+    solutions: {
+      setupRequiredCount: data.workspaceItems.filter(
+        (item) => item.status === "setup_required",
+      ).length,
+      totalCount: data.workspaceItems.length,
+    },
+    onboardingComplete: industryHint?.onboardingDone ?? false,
+  });
+  const pulseReady =
+    pulse.orders !== null || pulse.leads !== null || pulse.clients !== null;
+  const workspaceEmpty = isWorkspaceEmpty({
+    orders: pulse.orders,
+    leads: pulse.leads,
+    clients: pulse.clients ? { total: pulse.clients.total } : null,
+    bookings: pulse.bookings,
+  });
 
   const show = (value: Selection) => {
     setQuery("");
@@ -326,8 +367,11 @@ export function DashboardView() {
           <header className="biznesoty-hero">
             <div className="biznesoty-hero__copy">
               <p className="biznesoty-hero__eyebrow">{APP_NAME}</p>
-              <h1>Ваш бизнес — в порядке</h1>
-              <p>Все инструменты в одном месте. Выбрал → подключил → настроил → работает.</p>
+              {/* Greeting renders only after mount: the local hour is a client fact. */}
+              <h1 data-testid="dashboard-greeting">
+                {headline}
+              </h1>
+              <p data-testid="dashboard-date">{dateLabel}</p>
             </div>
             <div className="biznesoty-hero__tools desktop-only">
               <CommandSearch />
@@ -380,17 +424,23 @@ export function DashboardView() {
           ) : (
             <>
               <QuickActions />
-              <DashboardAiHint hint={nextSetupHint} />
-              <section className="biznesoty-pulse" aria-labelledby="biznesoty-pulse-title">
-                <div className="biznesoty-section-head">
-                  <h2 id="biznesoty-pulse-title">Пульс бизнеса</h2>
-                  <p>Ключевые показатели за период</p>
-                </div>
-                {data.businessId ? (
-                  <DashboardKpis businessId={data.businessId} />
-                ) : null}
-              </section>
-              <section className="biznesoty-solutions" aria-labelledby="biznesoty-solutions-title">
+              {pulseLoading && !pulseReady ? (
+                <LoadingPanel label="Считаем показатели" />
+              ) : workspaceEmpty ? (
+                <DashboardEmptyState
+                  hasConnections={connectedCount > 0}
+                  onboardingComplete={industryHint?.onboardingDone ?? false}
+                />
+              ) : (
+                <>
+                  <AttentionPanel items={attentionItems} />
+                  <BusinessSummary pulse={pulse} />
+                </>
+              )}
+              <section
+                className="biznesoty-solutions"
+                aria-labelledby="biznesoty-solutions-title"
+              >
                 <div className="biznesoty-section-head biznesoty-section-head--row">
                   <div>
                     <h2 id="biznesoty-solutions-title">Решения</h2>
@@ -406,46 +456,6 @@ export function DashboardView() {
                 </div>
                 <SolutionCards items={data.workspaceItems} />
               </section>
-              <div className="biznesoty-panels">
-                {data.businessId ? (
-                  <ActivityFeed businessId={data.businessId} />
-                ) : null}
-                {data.businessId ? (
-                  <TodaySchedule businessId={data.businessId} />
-                ) : null}
-              </div>
-              <aside className="biznesoty-hive desktop-only" aria-label="Живые соты">
-                <div className="biznesoty-hive__glow" aria-hidden />
-                <svg
-                  className="biznesoty-hive__pattern"
-                  viewBox="0 0 240 120"
-                  aria-hidden
-                >
-                  <g
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.2"
-                    opacity="0.35"
-                  >
-                    <path d="M40 20 l18 10 v20 l-18 10 l-18-10 v-20 z" />
-                    <path d="M76 40 l18 10 v20 l-18 10 l-18-10 v-20 z" />
-                    <path d="M112 20 l18 10 v20 l-18 10 l-18-10 v-20 z" />
-                    <path d="M148 40 l18 10 v20 l-18 10 l-18-10 v-20 z" />
-                    <path d="M184 20 l18 10 v20 l-18 10 l-18-10 v-20 z" />
-                    <path d="M112 60 l18 10 v20 l-18 10 l-18-10 v-20 z" />
-                  </g>
-                </svg>
-                <div className="biznesoty-hive__copy">
-                  <strong>Живые соты</strong>
-                  <p>
-                    Структура, рост и связь инструментов — ваш бизнес работает
-                    как единая система.
-                  </p>
-                  <p className="biznesoty-hive__motto">
-                    Выбрал → подключил → настроил → работает
-                  </p>
-                </div>
-              </aside>
             </>
           )}
         </>
