@@ -191,7 +191,10 @@ export async function releaseStaleEnrichmentRuns(
   for (const row of stale) {
     const next =
       Number(row.attempts) < ENRICHMENT_MAX_ATTEMPTS ? "queued" : "failed";
-    await db
+    // Re-check статуса в самом UPDATE: run, завершившийся в окне
+    // SELECT→UPDATE, не возвращается в queued и не закрывается failed
+    // после фактически успешного выполнения (TOCTOU).
+    const updated = await db
       .updateTable("osint_enrichment_runs")
       .set({
         status: next,
@@ -200,8 +203,9 @@ export async function releaseStaleEnrichmentRuns(
         updated_at: new Date(),
       })
       .where("id", "=", row.id)
-      .execute();
-    released += 1;
+      .where("status", "=", "running")
+      .executeTakeFirst();
+    if (Number(updated?.numUpdatedRows ?? 0) > 0) released += 1;
   }
   return released;
 }

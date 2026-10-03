@@ -25,6 +25,7 @@ import {
   releaseStaleEnrichmentRuns,
   runEnrichment,
 } from "../../src/server/intelligence/osint/enrichment.ts";
+import { releaseStaleDiscoveryRuns } from "../../src/server/intelligence/osint/discovery.ts";
 import {
   addObservation,
   attachSource,
@@ -373,6 +374,104 @@ test(
           });
           assert.equal(outcome.status, "completed");
         }
+      });
+
+      // TOCTOU (§26.11): release видит run как running, но к моменту
+      // UPDATE строка уже завершена в НЕЗАКОММИЧЕННОЙ транзакции.
+      // PostgreSQL после снятия блокировки перепроверяет квалификаторы
+      // UPDATE (EvalPlanQual) — re-check `status` обязан отбросить строку,
+      // иначе результат успешного прогона затирается в failed/requeued.
+      // Проверки не зависят от тайминга: uncommitted коммит не виден
+      // SELECT'у, а UPDATE гарантированно ждёт блокировку до коммита;
+      // sleep лишь расширяет окно между SELECT и UPDATE.
+      await t.test("discovery stale release never clobbers a run completed in the window", async () => {
+        const ctx = await scenario(db, "TOCTOU discovery");
+        const runId = randomUUID();
+        const staleStart = new Date(Date.now() - 20 * 60_000);
+        await db
+          .insertInto("osint_discovery_runs")
+          .values({
+            id: runId,
+            business_id: ctx.business.id,
+            status: "running",
+            started_at: staleStart,
+            created_at: staleStart,
+            updated_at: staleStart,
+          })
+          .execute();
+
+        const txn = await db.startTransaction().execute();
+        let committed = false;
+        try {
+          await txn
+            .updateTable("osint_discovery_runs")
+            .set({ status: "completed", updated_at: new Date() })
+            .where("id", "=", runId)
+            .execute();
+          const pending = releaseStaleDiscoveryRuns(db);
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          await txn.commit().execute();
+          committed = true;
+          const released = await pending;
+          assert.equal(released, 0, "завершённый run не выпущен как stale");
+        } finally {
+          if (!committed)
+            await txn.rollback().execute().catch(() => undefined);
+        }
+
+        const row = await db
+          .selectFrom("osint_discovery_runs")
+          .selectAll()
+          .where("id", "=", runId)
+          .executeTakeFirstOrThrow();
+        assert.equal(row.status, "completed", "статус не переписан задним числом");
+        assert.equal(row.error, null, "ошибка не навязана завершённому run'у");
+      });
+
+      await t.test("stale enrichment release skips a run completed in the window", async () => {
+        const ctx = await scenario(db, "TOCTOU enrichment");
+        const runId = randomUUID();
+        const staleStart = new Date(Date.now() - 11 * 60_000);
+        await db
+          .insertInto("osint_enrichment_runs")
+          .values({
+            id: runId,
+            business_id: ctx.business.id,
+            status: "running",
+            attempts: 1,
+            started_at: staleStart,
+          })
+          .execute();
+
+        const txn = await db.startTransaction().execute();
+        let committed = false;
+        try {
+          await txn
+            .updateTable("osint_enrichment_runs")
+            .set({
+              status: "completed",
+              finished_at: new Date(),
+              updated_at: new Date(),
+            })
+            .where("id", "=", runId)
+            .execute();
+          const pending = releaseStaleEnrichmentRuns(db);
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          await txn.commit().execute();
+          committed = true;
+          await pending;
+        } finally {
+          if (!committed)
+            await txn.rollback().execute().catch(() => undefined);
+        }
+
+        const row = await db
+          .selectFrom("osint_enrichment_runs")
+          .select(["status", "error", "finished_at"])
+          .where("id", "=", runId)
+          .executeTakeFirstOrThrow();
+        assert.equal(row.status, "completed", "completed не возвращается в queued");
+        assert.ok(row.finished_at, "завершение не стёрто повторной выдачей");
       });
 
       await t.test("stale running runs are requeued or failed by attempts cap", async () => {

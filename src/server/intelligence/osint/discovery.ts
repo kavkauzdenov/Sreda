@@ -168,7 +168,10 @@ export async function releaseStaleDiscoveryRuns(
   if (!stale.length) return 0;
   const ids = stale.map((row) => row.id);
 
-  const result = await db
+  // Re-check статуса прямо в UPDATE (compare-and-set): run, успевший
+  // завершиться или быть пере-claim'нутым в окне SELECT→UPDATE, не
+  // затирается в failed — иначе результат успешного прогона теряется.
+  const released = await db
     .updateTable("osint_discovery_runs")
     .set({
       status: "failed",
@@ -177,9 +180,14 @@ export async function releaseStaleDiscoveryRuns(
       updated_at: now,
     })
     .where("id", "in", ids)
-    .executeTakeFirst();
+    .where("status", "in", ["queued", "running"])
+    .returning("id")
+    .execute();
+  const releasedIds = released.map((row) => row.id);
+  if (!releasedIds.length) return 0;
 
-  // Очередь зависшего run'а не должна висеть fetching/queued вечно.
+  // Очередь гасится только у реально освобождённых run'ов: у живого
+  // владельца строки не должны уйти в skipped под ним.
   await db
     .updateTable("osint_crawl_queue")
     .set({
@@ -187,11 +195,11 @@ export async function releaseStaleDiscoveryRuns(
       skip_reason: "stale_run_expired",
       updated_at: now,
     })
-    .where("run_id", "in", ids)
+    .where("run_id", "in", releasedIds)
     .where("status", "in", ["queued", "fetching"])
     .execute();
 
-  return Number(result.numUpdatedRows ?? BigInt(0));
+  return releasedIds.length;
 }
 
 type PersistOutcome = Awaited<ReturnType<typeof persistCandidate>>;
