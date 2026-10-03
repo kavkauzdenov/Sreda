@@ -150,8 +150,12 @@ function fakeRegistry(results, { id = "fake" } = {}) {
  * Поэтому business_id здесь передавать нельзя, а уникальность источника
  * глобальная: UNIQUE (normalized_url).
  */
-async function seedSource(db, entityId, url, name) {
+async function seedSource(db, entityId, baseUrl, name) {
   const id = randomUUID();
+  // Источники ГЛОБАЛЬНЫ и имеют UNIQUE (normalized_url), поэтому один и тот
+  // же URL нельзя засеять дважды — даже для разных бизнесов. Добавляем
+  // уникальный сегмент, чтобы каждый посев был изолирован.
+  const url = `${baseUrl.replace(/\/$/, "")}/s${id.slice(0, 8)}`;
   await db
     .insertInto("osint_sources")
     .values({
@@ -197,7 +201,6 @@ async function seedObservation(db, { entityId, sourceId, url }) {
       kind: "search_result",
       observed_at: new Date(),
       created_at: new Date(),
-      updated_at: new Date(),
     })
     .execute();
   return id;
@@ -938,7 +941,7 @@ test(
               id: randomUUID(), business_id: ctx.business.id, fact_type: "phone",
               sides: "[]", value_count: 1, source_count: 1, status: "unresolved",
             }).execute(),
-          { constraint: "osint_intelligence_contradictions_unique" },
+          { constraint: "osint_contradictions_unique" },
         );
       });
 
@@ -1027,10 +1030,18 @@ test(
         );
 
         const { isPrivateIp } = await import("../../src/server/intelligence/osint/safe-fetch.ts");
-        for (const ip of ["127.0.0.1", "10.0.0.5", "192.168.1.1", "169.254.169.254", "::1", "::ffff:7f00:1", "fc00::1"]) {
+        for (const ip of [
+          "127.0.0.1", "10.0.0.5", "192.168.1.1", "169.254.169.254",
+          "172.16.0.1", "100.64.0.1", "::1", "::ffff:7f00:1", "fc00::1", "fe80::1",
+        ]) {
           assert.equal(isPrivateIp(ip), true, `guard обязан ловить приватный адрес: ${ip}`);
         }
-        for (const ip of ["203.0.113.10", "8.8.8.8"]) {
+        // Документационные диапазоны (TEST-NET-1/2/3) тоже не должны
+        // использоваться как реальные цели: они не маршрутизируются.
+        for (const ip of ["192.0.2.5", "198.51.100.5", "203.0.113.10"]) {
+          assert.equal(isPrivateIp(ip), true, `недоступный диапазон не должен считаться целью: ${ip}`);
+        }
+        for (const ip of ["8.8.8.8", "1.1.1.1", "172.32.0.1", "11.0.0.1"]) {
           assert.equal(isPrivateIp(ip), false, `публичный адрес не должен считаться приватным: ${ip}`);
         }
       });

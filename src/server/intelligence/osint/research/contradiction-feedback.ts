@@ -136,7 +136,10 @@ export function assessConflict(sides: ContradictionSide[]): ConflictAssessment {
   // зависел от ошибок округления: 1.4 - 0.9 = 0.4999... и «очевидное»
   // преимущество в свидетельствах молча считалось равным.
   const rank = (evidence: SideEvidence): number => {
-    const authorityPoints = evidence.authority >= 1 ? 3 : evidence.authority > 0 ? 1 : 0;
+    // Первичный (официальный) источник — качественно другое свидетельство,
+    // чем каталог: его вес поэтому заметно выше. Иначе два каталога,
+    // цитирующие одно и то же, «перевесили» бы сайт самой компании.
+    const authorityPoints = evidence.authority >= 1 ? 4 : evidence.authority > 0 ? 1 : 0;
     return (
       authorityPoints +
       Math.min(evidence.independentSources, 3) +

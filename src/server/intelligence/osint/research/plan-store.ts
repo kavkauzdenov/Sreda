@@ -358,7 +358,10 @@ export async function recordSourceAccess(
         last_status_code: input.statusCode ?? null,
         last_checked_at: now,
         last_success_at: ok ? now : sql`osint_source_access.last_success_at`,
-        first_blocked_at: ok ? null : sql`osint_source_access.first_blocked_at`,
+        // Дата ПЕРВОЙ блокировки не затирается последующим успехом: она нужна,
+        // чтобы понимать историю недоступности источника. Обнуление здесь
+        // стирало бы её при каждой удачной проверке.
+        first_blocked_at: sql`osint_source_access.first_blocked_at`,
         updated_at: now,
       }),
     )

@@ -445,7 +445,7 @@ test(
       });
 
       await t.test("tenant isolation: каскадное удаление бизнеса уносит агента", async () => {
-        await scenario(db, "Каскад агента");
+        const ctx = await scenario(db, "Каскад агента");
         const runId = await makeRun(db, ctx.business.id);
         await persistHypotheses(db, {
           runId,
@@ -464,7 +464,7 @@ test(
       });
 
       await t.test("удаление run каскадно уносит действия и гипотезы", async () => {
-        await scenario(db, "Каскад run");
+        const ctx = await scenario(db, "Каскад run");
         const runId = await makeRun(db, ctx.business.id);
         const identity = buildIdentityFromSeed({ name: "Кафе Агент", city: "Барнаул" });
         const query = queriesForHypothesis(identity, hypothesisFixture()[0])[0];
