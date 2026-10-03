@@ -2,7 +2,7 @@
 --
 -- Автономный research agent (§Research Agent). Цель: пользователь сообщает,
 -- какой бизнес исследовать, а агент сам решает как. Модель Research Passport
--- (074) описывала provider-centric план; здесь появляется исполнитель.
+-- (074) описывала provider-centric план, здесь появляется исполнитель.
 --
 -- Принципы:
 --   1. Append-only. Ни одна уже применённая миграция не меняется (checksum-guard
@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS osint_research_actions (
     CONSTRAINT osint_research_actions_status_check
     CHECK (status IN ('pending','running','done','failed','skipped','exhausted')),
   -- Что действие дало: 1 действие = N новых фактов. Это база метрики
-  -- «полезные факты на единицу бюджета» (§69), которой нет у爬rawler без цели.
+  -- «полезные факты на единицу бюджета» (§69), которой нет у краулера без цели.
   outcome text NOT NULL DEFAULT 'pending'
     CONSTRAINT osint_research_actions_outcome_check
     CHECK (outcome IN ('pending','productive','empty','duplicate','blocked','error')),
