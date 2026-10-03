@@ -23,6 +23,7 @@ import {
 import { identityConfidence, hasStrongIdentity } from "./osint/research/identity.ts";
 import { DIMENSION_LABELS } from "./osint/research/coverage.ts";
 import { countBarrenActions, countPendingActions } from "./osint/research/plan-store.ts";
+import { computeResearchStats } from "./osint/research/stats.ts";
 import { createBuiltinRegistry } from "./osint/providers/builtin.ts";
 import type { OsintResearchPurpose } from "./osint/schema.ts";
 
@@ -209,6 +210,8 @@ export async function getResearchProgress(
 
   if (!run) return null;
 
+  const real = await computeResearchStats(db, member.id);
+
   const actions = await db
     .selectFrom("osint_research_actions")
     .select(["query", "purpose", "status", "outcome", "reason", "new_sources", "new_facts"])
@@ -240,12 +243,20 @@ export async function getResearchProgress(
     runId: run.id,
     status: run.status,
     phase: run.phase,
+    // Счётчики — по фактическим данным, а не по счётчику действий.
+    // Факты принадлежат бизнесу, а не запуску, поэтому считаются по
+    // business_id; источники — только через мост osint_business_entities,
+    // что не даёт протечь данным другого тенанта.
     stats: {
       queries: actions.length,
       completed: done.length,
       pending,
-      sources: Number(run.plan && typeof run.plan === "object" ? 0 : 0),
-      facts: done.reduce((sum, a) => sum + a.new_facts, 0),
+      sources: real.sources,
+      facts: real.facts,
+      confirmedFacts: real.confirmedFacts,
+      entities: real.entities,
+      observations: real.observations,
+      contradictions: real.contradictions,
       barrenActions: barren,
     },
     whatWeKnow: (run.knowledge as Record<string, unknown> | null) ?? {},
