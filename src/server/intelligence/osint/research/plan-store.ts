@@ -174,7 +174,7 @@ export async function persistActions(
     query: entry.query.query.slice(0, 500),
     target_url: entry.targetUrl ?? null,
     reason: (entry.reason ?? entry.query.derivedFrom).slice(0, 500),
-    priority: toDbPriority(entry.priority),
+    priority: toDbPriority(entry.priority ?? entry.query.priority),
     status: "pending" as OsintResearchActionStatus,
     outcome: "pending" as OsintResearchOutcome,
     results_count: 0,
@@ -214,6 +214,25 @@ export async function knownActionKeys(
  * Claim через compare-and-set по status: два конкурента получат разные
  * действия, и оба конфликта не приведут к двойному исполнению.
  */
+/**
+ * Следующее действие БЕЗ захвата.
+ *
+ * Отличается от claimNextAction принципиально: ничего не меняет в статусе.
+ * Это нужно для отчёта «что агент собирается делать дальше» — иначе
+ * вызывающий (в том числе HTTP-эндпоинт) забирал действие себе, воркер его
+ * не видел, а действие навсегда оставалось в running без исполнителя.
+ */
+export async function peekNextAction(db: Kysely<Database>, runId: string) {
+  return db
+    .selectFrom("osint_research_actions")
+    .select(["id", "query", "purpose", "reason"])
+    .where("run_id", "=", runId)
+    .where("status", "=", "pending")
+    .orderBy("priority", "desc")
+    .orderBy("created_at", "asc")
+    .executeTakeFirst();
+}
+
 export async function claimNextAction(db: Kysely<Database>, runId: string) {
   const candidates = await db
     .selectFrom("osint_research_actions")

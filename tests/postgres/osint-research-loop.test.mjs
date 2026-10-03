@@ -505,6 +505,44 @@ test(
         assert.equal(Number(stillRunning.rows[0].n), 3, "остальные остаются running до завершения");
       });
 
+      await t.test("B1a. agentTick не забирает действие из очереди", async () => {
+        const ctx = await scenario(db, "Не крадём");
+        const runId = await makeRun(db, ctx.business.id);
+        const profile = await loadDiscoveryProfile(db, ctx.business.id);
+        await seedFact(db, {
+          businessId: ctx.business.id, entityId: ctx.entityId,
+          factType: "phone", factKey: "contact.phone",
+          value: "+73852551010", url: "https://peek.example/p",
+        });
+        const identity = buildIdentityFromSeed(identitySeedFromProfile(profile));
+        await runFeedback(db, { runId, businessId: ctx.business.id, identity, maxQueries: 5 });
+
+        const { agentTick, DEFAULT_AGENT_CONFIG } = await import("../../src/server/intelligence/osint/research/agent.ts");
+        const seed = identitySeedFromProfile(profile);
+        const tick = await agentTick(db, { runId, businessId: ctx.business.id, seed, knowledge: { discovered: [], confirmed: {}, blockers: {} }, config: DEFAULT_AGENT_CONFIG });
+
+        // nextAction нужен для отчёта, но планировщик не должен забирать его:
+        // иначе HTTP-эндпоинт крадёт действие у воркера, а оно навсегда
+        // остаётся в running без исполнителя.
+        const rows = await db
+          .selectFrom("osint_research_actions")
+          .select(["id", "status"])
+          .where("run_id", "=", runId)
+          .execute();
+        assert.ok(rows.length > 0, "планирование должно было записать действия");
+        assert.ok(
+          rows.every((row) => row.status === "pending"),
+          `agentTick не должен забирать действия: ${JSON.stringify(rows)}`,
+        );
+        if (tick.nextAction) {
+          const stillPending = rows.find((row) => row.id === tick.nextAction.id);
+          assert.ok(
+            stillPending?.status === "pending",
+            "«следующее действие» должно оставаться в очереди после планирования",
+          );
+        }
+      });
+
       await t.test("B1b. дробный приоритет не роняет запись (priority — integer)", async () => {
         const ctx = await scenario(db, "Приоритет");
         const runId = await makeRun(db, ctx.business.id);

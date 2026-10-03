@@ -40,7 +40,7 @@ import {
   type StopReason,
 } from "./coverage.ts";
 import {
-  claimNextAction,
+  peekNextAction,
   countBarrenActions,
   countPendingActions,
   knownActionKeys,
@@ -245,7 +245,9 @@ export async function agentTick(
     },
   });
 
-  const next = await claimNextAction(db, input.runId);
+  // Подглядываем, а НЕ забираем: захват здесь оставлял бы действие в running
+  // без исполнителя — воркер его больше не видел, и исследование зависало.
+  const next = await peekNextAction(db, input.runId);
 
   return {
     plannedActions: planned,

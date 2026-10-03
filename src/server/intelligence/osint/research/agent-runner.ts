@@ -142,7 +142,7 @@ export async function tickResearchRun(
       await setRunPhase(db, run.id, "planning");
       const current = await computeResearchStats(db, run.business_id);
       const confirmed = confirmedAreasFromFacts(current.confirmedAreas);
-      const planned = await agentTick(db, {
+      await agentTick(db, {
         runId: run.id,
         businessId: run.business_id,
         seed,
@@ -153,7 +153,12 @@ export async function tickResearchRun(
         },
         config: { ...DEFAULT_AGENT_CONFIG, maxQueries },
       });
-      pending = planned.plannedActions;
+      // Состояние очереди читаем из БД, а не берём из отчётного значения
+      // планировщика. Планировщик возвращает СВОИ НАМЕРЕНИЯ; если все
+      // запросы уже известны (dedupe отсёк их), в базе ноль строк — а по
+      // намерению ненулевое число. Поверив намерению, агент зависал бы в
+      // цикле планирования и никогда не завершил бы исследование.
+      pending = await countPendingActions(db, run.id);
     }
 
     if (pending === 0) {
@@ -164,6 +169,10 @@ export async function tickResearchRun(
 
     // 4. Исполняем ровно одно действие.
     const action = await claimNextAction(db, run.id);
+    // Взять нечего, хотя счётчик показывает незавершённые действия, значит
+    // они все в running. Возвращать их немедленно нельзя: их может держать
+    // другой живой воркер, и мы бы получили двойное исполнение. Их вернёт
+    // requeueClaimedActions по таймауту — это и есть штатное восстановление.
     if (!action) return { ...base, ticked: true, did: "planned" };
 
     await setRunPhase(db, run.id, "searching");
