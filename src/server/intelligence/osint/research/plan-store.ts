@@ -349,11 +349,16 @@ export async function recordSourceAccess(
         status: input.status,
         http_status: input.httpStatus ?? null,
         detail: (input.detail ?? "").slice(0, 500),
-        consecutive_count: ok ? 0 : sql`${sql.ref("consecutive_count")} + 1`,
+        // Ссылки квалифицированы именем таблицы: в DO UPDATE видны и целевая
+        // таблица, и псевдотаблица excluded, поэтому `consecutive_count`
+        // без префикса даёт "column reference is ambiguous" (SQLSTATE 42702).
+        consecutive_count: ok
+          ? 0
+          : sql`osint_source_access.consecutive_count + 1`,
         last_status_code: input.statusCode ?? null,
         last_checked_at: now,
-        last_success_at: ok ? now : sql.ref("last_success_at"),
-        first_blocked_at: ok ? null : sql.ref("first_blocked_at"),
+        last_success_at: ok ? now : sql`osint_source_access.last_success_at`,
+        first_blocked_at: ok ? null : sql`osint_source_access.first_blocked_at`,
         updated_at: now,
       }),
     )

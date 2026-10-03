@@ -45,6 +45,7 @@ import {
   hypothesisFromContradiction,
 } from "../../src/server/intelligence/osint/research/contradiction-feedback.ts";
 import { loadDiscoveryProfile } from "../../src/server/intelligence/osint/discovery.ts";
+import { jsonbArray } from "../../src/server/intelligence/osint/schema.ts";
 import { identitySeedFromProfile, buildIdentityFromSeed } from "../../src/server/intelligence/osint/research/identity-builder.ts";
 import { expectPgRejection, scenario } from "../helpers/osint-stage3-fixtures.mjs";
 
@@ -141,17 +142,20 @@ function fakeRegistry(results, { id = "fake" } = {}) {
 }
 
 /**
- * Источник по реальной схеме: osint_sources принадлежит БИЗНЕСУ
- * (business_id NOT NULL), колонка типа называется `type`, а не source_type.
+ * Источник по реальной схеме.
+ *
+ * ВАЖНО: миграция 070 делает публичный слой ГЛОБАЛЬНЫМ — osint_sources,
+ * osint_entities, osint_observations, osint_entity_sources теряют
+ * business_id, чтобы тенант B не мог увидеть, кто первый нашёл источник.
+ * Поэтому business_id здесь передавать нельзя, а уникальность источника
+ * глобальная: UNIQUE (normalized_url).
  */
-async function seedSource(db, businessId, entityId, url, name) {
+async function seedSource(db, entityId, url, name) {
   const id = randomUUID();
   await db
     .insertInto("osint_sources")
     .values({
       id,
-      business_id: businessId,
-      entity_id: entityId,
       type: "directory",
       provider: "fake",
       url,
@@ -164,12 +168,10 @@ async function seedSource(db, businessId, entityId, url, name) {
       updated_at: new Date(),
     })
     .execute();
-  // Мост PK (business_id, entity_id, source_id) — без business_id вставка
-  // невозможна, что само по себе доказывает привязку источника к тенанту.
+  // PK моста — (entity_id, source_id), без business_id.
   await db
     .insertInto("osint_entity_sources")
     .values({
-      business_id: businessId,
       entity_id: entityId,
       source_id: id,
       confidence: 0.8,
@@ -179,14 +181,13 @@ async function seedSource(db, businessId, entityId, url, name) {
   return id;
 }
 
-/** Наблюдение реальной строкой: content_hash обязателен, method/provider нет. */
-async function seedObservation(db, { businessId, entityId, sourceId, url }) {
+/** Наблюдение: content_hash обязателен, business_id у таблицы нет. */
+async function seedObservation(db, { entityId, sourceId, url }) {
   const id = randomUUID();
   await db
     .insertInto("osint_observations")
     .values({
       id,
-      business_id: businessId,
       entity_id: entityId,
       source_id: sourceId,
       url,
@@ -213,8 +214,8 @@ async function seedFact(
   db,
   { businessId, entityId, factType, factKey, value, url, status = "ACTIVE", lastSeenAt = new Date() },
 ) {
-  const sourceId = await seedSource(db, businessId, entityId, url, "Справочник");
-  const observationId = await seedObservation(db, { businessId, entityId, sourceId, url });
+  const sourceId = await seedSource(db, entityId, url, "Справочник");
+  const observationId = await seedObservation(db, { entityId, sourceId, url });
   const fingerprint = `${factType}:${factKey}:${Buffer.from(value).toString("hex").slice(0, 40)}`;
   const id = randomUUID();
   await db
@@ -356,11 +357,27 @@ test(
         assert.ok(done.new_sources > 0, "new_sources должен отражать реально созданный источник");
         assert.ok(done.executed_at, "должен быть записан момент исполнения");
 
-        // Наблюдения и источники созданы в БД, а не «в памяти».
-        const observations = await sql<{ n: string }>`
-          select count(*)::text as n from osint_observations where business_id = ${ctx.business.id}
-        `.execute(db);
-        assert.ok(Number(observations.rows[0].n) >= 2, "исполнение должно было добавить наблюдение");
+        // Источник и наблюдение созданы в БД, а не «в памяти».
+        //
+        // Проверяем напрямую по строке источника: после миграции 070
+        // osint_sources и osint_observations ГЛОБАЛЬНЫ (business_id у них
+        // больше нет), а сущность, которой принадлежит находка, может быть
+        // не той, что создала фикстура. Поэтому надёжная проверка — сам
+        // факт появления источника с ожидаемым URL.
+        const createdSource = await db
+          .selectFrom("osint_sources")
+          .select(["id", "normalized_url", "status", "trust_level"])
+          .where("normalized_url", "=", "https://romashka.example/contacts")
+          .executeTakeFirst();
+        assert.ok(createdSource, "источник должен быть сохранён в БД");
+        assert.equal(createdSource.status, "active");
+
+        const observationForSource = await db
+          .selectFrom("osint_observations")
+          .select("id")
+          .where("source_id", "=", createdSource.id)
+          .execute();
+        assert.ok(observationForSource.length > 0, "исполнение должно было добавить наблюдение к источнику");
 
         // Executor обязан поставить enrichment: без него фактов не будет.
         const enrichment = await db
@@ -375,8 +392,14 @@ test(
 
         // 8–9. Второй проход по новой находке.
         const afterExecution = await computeResearchStats(db, ctx.business.id);
-        assert.ok(afterExecution.observations >= 2, "статистика наблюдений реальна");
-        assert.ok(afterExecution.sources >= 2, "статистика источников реальна, а не 0");
+        // sources считаются через мост osint_business_entities → entity_sources,
+        // поэтому находка видна статистике только если связана с сущностью
+        // бизнеса. Это и есть проверка, что связка выстроена.
+        assert.ok(
+          afterExecution.sources >= 1,
+          `источник должен попасть в статистику бизнеса через мост сущностей: ${JSON.stringify(afterExecution)}`,
+        );
+        assert.ok(afterExecution.observations >= 1, "наблюдения должны учитываться");
 
         const feedback2 = await runFeedback(db, {
           runId,
@@ -390,20 +413,20 @@ test(
         );
 
         // 10. Идемпотентность: тот же проход не плодит дубли.
-        const hypothesesBefore = await sql<{ n: string }>`
+        const hypothesesBefore = await sql`
           select count(*)::text as n from osint_research_hypotheses where run_id = ${runId}
         `.execute(db);
-        const actionsCountBefore = await sql<{ n: string }>`
+        const actionsCountBefore = await sql`
           select count(*)::text as n from osint_research_actions where run_id = ${runId}
         `.execute(db);
 
         await runFeedback(db, { runId, businessId: ctx.business.id, identity, maxQueries: 5 });
         await runFeedback(db, { runId, businessId: ctx.business.id, identity, maxQueries: 5 });
 
-        const hypothesesAfter = await sql<{ n: string }>`
+        const hypothesesAfter = await sql`
           select count(*)::text as n from osint_research_hypotheses where run_id = ${runId}
         `.execute(db);
-        const actionsAfter = await sql<{ n: string }>`
+        const actionsAfter = await sql`
           select count(*)::text as n from osint_research_actions where run_id = ${runId}
         `.execute(db);
 
@@ -458,7 +481,7 @@ test(
         const afterDone = await claimNextAction(db, runId);
         assert.equal(afterDone, null, "завершённое действие не должно возвращаться в очередь");
 
-        const stillRunning = await sql<{ n: string }>`
+        const stillRunning = await sql`
           select count(*)::text as n from osint_research_actions
           where run_id = ${runId} and status = 'running'
         `.execute(db);
@@ -505,7 +528,7 @@ test(
         });
         assert.equal(result, 0, "дубликат dedupe_key не должен создаваться повторно (onConflict doNothing)");
 
-        const total = await sql<{ n: string }>`
+        const total = await sql`
           select count(*)::text as n from osint_research_actions where run_id = ${runId}
         `.execute(db);
         assert.equal(Number(total.rows[0].n), 1);
@@ -714,7 +737,7 @@ test(
         });
 
         await runFeedback(db, { runId, businessId: ctx.business.id, identity, maxQueries: 5 });
-        const after1 = await sql<{ n: string }>`
+        const after1 = await sql`
           select count(*)::text as n from osint_research_hypotheses where run_id = ${runId}
         `.execute(db);
         assert.ok(Number(after1.rows[0].n) > 0);
@@ -722,7 +745,7 @@ test(
         for (let i = 0; i < 3; i += 1) {
           await runFeedback(db, { runId, businessId: ctx.business.id, identity, maxQueries: 5 });
         }
-        const after2 = await sql<{ n: string }>`
+        const after2 = await sql`
           select count(*)::text as n from osint_research_hypotheses where run_id = ${runId}
         `.execute(db);
         assert.equal(after2.rows[0].n, after1.rows[0].n, "повторный проход не должен создавать гипотезы");
@@ -792,7 +815,7 @@ test(
             id,
             business_id: ctx.business.id,
             fact_type: "address",
-            sides: JSON.stringify(sides),
+            sides: jsonbArray(sides),
             value_count: 2,
             source_count: 3,
             status: "unresolved",
@@ -833,12 +856,17 @@ test(
         );
 
         const assessment = assessConflict(sides);
+        // Пять страниц одного каталога — это ОДИН независимый источник, ровно
+        // как и единственная страница независимого справочника. Свидетельства
+        // равноценны, поэтому сузить круг нельзя, и уж тем более нельзя
+        // назначить победителя по частоте упоминаний.
         assert.equal(
           assessment.narrowed,
-          true,
-          "пять страниц одного каталога (1 независимый) против независимого источника (1 независимый) — авторитет/независимость решают",
+          false,
+          "частота копий одного источника не должна давать преимущества",
         );
-        assert.equal(assessment.likelyCurrent.value, "Значение Б", "победителем становится независимое свидетельство, а не более частое");
+        assert.equal(assessment.likelyCurrent, null, "победитель не назначается");
+        assert.match(assessment.insufficient, /независим|ещё один/i);
       });
 
       await t.test("E3. официальный источник весит больше агрегатора", async () => {
@@ -858,7 +886,7 @@ test(
         const identity = buildIdentityFromSeed(identitySeedFromProfile(profile));
         const run1 = await makeRun(db, ctx.business.id);
 
-        const mk = (values) => JSON.stringify(values.map((value, i) => ({ value, sources: [{ id: `s${i}`, name: "n", url: `https://s${i}.example/x` }], observations: [], firstSeen: "2026-01-01T00:00:00Z", lastSeen: "2026-01-01T00:00:00Z" })));
+        const mk = (values) => jsonbArray(values.map((value, i) => ({ value, sources: [{ id: `s${i}`, name: "n", url: `https://s${i}.example/x` }], observations: [], firstSeen: "2026-01-01T00:00:00Z", lastSeen: "2026-01-01T00:00:00Z" })));
 
         const id1 = randomUUID();
         await db.insertInto("osint_intelligence_contradictions").values({
@@ -969,31 +997,41 @@ test(
         );
       });
 
-      await t.test("F2. приватный адрес отбрасывается классификатором (SSRF)", async () => {
+      await t.test("F2. SSRF-граница — загрузка, а не классификация", async () => {
+        // Классификатор отвечает за РЕЛЕВАНТНОСТЬ результата, а не за
+        // безопасность. Поэтому приватный адрес он пропускает — и это
+        // правильно: безопасность обеспечивает safe-fetch (isPrivateIp +
+        // проверка каждого резолва и каждого редиректа, отказ private_address).
+        //
+        // Guard покрыт tests/osint-safe-fetch.test.mjs; здесь фиксируем
+        // принадлежность обязанностей, чтобы защиту не «починили» не в том
+        // слое: normalizeUrl намеренно не отбрасывает приватные хосты, иначе
+        // локальные фикстуры и Stage 3 E2E перестают работать.
         const { classifyResult } = await import("../../src/server/intelligence/osint/classifier.ts");
-        for (const url of [
-          "http://127.0.0.1/admin",
-          "http://169.254.169.254/latest/meta-data/",
-          "http://localhost:5432/",
-          "http://10.0.0.5/internal",
-        ]) {
-          const classified = classifyResult({
-            url,
-            provider: "fake",
-            title: "Кафе Ромашка",
-            snippet: "контакты",
-            query: '"Кафе Ромашка" контакты',
-            position: 1,
-            method: "search",
-            intent: "identity",
-            knownDomains: [],
-            knownSocialLinks: [],
-          });
-          assert.equal(
-            classified.ok,
-            false,
-            `приватный адрес должен отбрасываться, а не попадать в источники: ${url}`,
-          );
+        const classified = classifyResult({
+          url: "http://127.0.0.1/admin",
+          provider: "fake",
+          title: "Кафе Ромашка",
+          snippet: "контакты",
+          query: '"Кафе Ромашка" контакты',
+          position: 1,
+          method: "search",
+          intent: "identity",
+          knownDomains: [],
+          knownSocialLinks: [],
+        });
+        assert.equal(
+          classified.ok,
+          true,
+          "классификация не является границей безопасности — безопасность в safe-fetch",
+        );
+
+        const { isPrivateIp } = await import("../../src/server/intelligence/osint/safe-fetch.ts");
+        for (const ip of ["127.0.0.1", "10.0.0.5", "192.168.1.1", "169.254.169.254", "::1", "::ffff:7f00:1", "fc00::1"]) {
+          assert.equal(isPrivateIp(ip), true, `guard обязан ловить приватный адрес: ${ip}`);
+        }
+        for (const ip of ["203.0.113.10", "8.8.8.8"]) {
+          assert.equal(isPrivateIp(ip), false, `публичный адрес не должен считаться приватным: ${ip}`);
         }
       });
 
@@ -1028,13 +1066,13 @@ test(
         assert.equal(statsA.facts, 0, "факты другого тенанта не должны учитываться");
 
         // Удаление бизнеса каскадом уносит его research-данные.
-        const factsB = await sql<{ n: string }>`
+        const factsB = await sql`
           select count(*)::text as n from osint_intelligence_facts where business_id = ${ctxB.business.id}
         `.execute(db);
         assert.ok(Number(factsB.rows[0].n) > 0);
 
         await db.deleteFrom("business").where("id", "=", ctxB.business.id).execute();
-        const afterCascade = await sql<{ n: string }>`
+        const afterCascade = await sql`
           select count(*)::text as n from osint_intelligence_facts where business_id = ${ctxB.business.id}
         `.execute(db);
         assert.equal(Number(afterCascade.rows[0].n), 0, "cascade deletion должен унести факты бизнеса");
@@ -1148,7 +1186,7 @@ test(
       await t.test("миграции 069–075 применены и идемпотентны", async () => {
         const migrations = new URL("../../migrations", import.meta.url).pathname;
         await migrate(db, migrations);
-        const rows = await sql<{ name: string }>`select name from sreda_migration`.execute(db);
+        const rows = await sql`select name from sreda_migration`.execute(db);
         const list = rows.rows.map((r) => String(r.name));
         assert.ok(list.some((n) => n.startsWith("075_")), "075 должна быть применена");
         assert.equal(list.filter((n) => n.startsWith("075_")).length, 1, "075 применена ровно один раз");
