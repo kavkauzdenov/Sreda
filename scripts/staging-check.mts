@@ -39,7 +39,14 @@ if (
     const beats = (
       await pool.query("select name,seen_at from worker_heartbeat")
     ).rows;
-    for (const name of ["telegram", "vk", "autopost", "booking_reminders"]) {
+    for (const name of [
+      "background",
+      "osint",
+      "telegram",
+      "vk",
+      "autopost",
+      "booking_reminders",
+    ]) {
       const valid = beats.some(
         (b) => b.name === name && +new Date(b.seen_at) > Date.now() - 60000,
       );

@@ -196,7 +196,12 @@ test("production HTTPS account and workspace lifecycle", { timeout: 120000 }, as
       assert.equal((await request(base + "/solutions", { cookie: owner.cookie })).json[0].status, "setup_required");
       assert.equal((await request(base + "/telegram/start", { method: "POST", cookie: owner.cookie, body: {} })).status, 503);
       assert.equal((await request("/api/telegram/00000000-0000-0000-0000-000000000000", { method: "POST", body: { update_id: 1 } })).status, 503);
-      assert.equal((await request("/api/health")).status, 200);
+      const health = await request("/api/health");
+      assert.equal(health.status, 200);
+      assert.ok(
+        health.json?.checks && "osint" in health.json.checks,
+        "OSINT-воркер подключён к обязательным heartbeat-проверкам /api/health",
+      );
     });
     await t.test("server restart retains accounts, sessions and business data", async () => {
       await stopApp(); await startApp();

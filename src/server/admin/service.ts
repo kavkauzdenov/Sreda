@@ -1913,6 +1913,8 @@ export class AdminService {
         vk: "disabled",
         autopost: "disabled",
         booking_reminders: "disabled",
+        background: "disabled",
+        osint: "disabled",
       },
       storageConfigured:
         process.env.ATTACHMENT_STORAGE === "s3" &&
@@ -1927,7 +1929,10 @@ export class AdminService {
       const telegramEnabled =
         process.env.TELEGRAM_WEBHOOKS_ENABLED === "true";
       const vkEnabled = process.env.VK_WEBHOOKS_ENABLED === "true";
+      const backgroundEnabled =
+        process.env.BACKGROUND_WORKER_ENABLED === "true";
       const required = [
+        ...(backgroundEnabled ? ["background", "osint"] : []),
         ...(telegramEnabled ? ["telegram"] : []),
         ...(vkEnabled ? ["vk"] : []),
       ];
@@ -1955,6 +1960,8 @@ export class AdminService {
         .selectAll()
         .execute();
       for (const name of [
+        "background",
+        "osint",
         "telegram",
         "vk",
         "autopost",

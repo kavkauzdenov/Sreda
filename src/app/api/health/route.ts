@@ -14,7 +14,7 @@ export async function GET() {
 
     const required = new Set<string>([
       ...(r.backgroundEnabled
-        ? ["background", "notifications", "entity_reminders", "setup_drafts"]
+        ? ["background", "notifications", "entity_reminders", "setup_drafts", "osint"]
         : []),
       ...(r.telegramEnabled ? ["telegram"] : []),
       ...(r.vkEnabled ? ["vk"] : []),
@@ -61,6 +61,7 @@ export async function GET() {
       "booking_reminders",
       "entity_reminders",
       "setup_drafts",
+      "osint",
     ];
 
     for (const name of names) {
