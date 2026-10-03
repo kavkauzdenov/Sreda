@@ -41,6 +41,8 @@ import {
 
 export const ENRICHMENT_MAX_ATTEMPTS = 3;
 const STALE_RUNNING_MS = 10 * 60 * 1000;
+/** Backoff перед повторной выдачей упавшего run'а: 30s × номер попытки. */
+export const ENRICHMENT_BACKOFF_MS = 30_000;
 
 export type EnrichmentStats = {
   observations: number;
@@ -162,6 +164,7 @@ export async function claimNextEnrichment(
     WHERE id = (
       SELECT id FROM osint_enrichment_runs
       WHERE status = 'queued'
+        AND available_at <= now()
       ORDER BY created_at
       FOR UPDATE SKIP LOCKED
       LIMIT 1
@@ -389,6 +392,9 @@ async function requeueOrFail(
       error,
       started_at: null,
       updated_at: new Date(),
+      // Backoff (D5): без него упавший run выдаётся вновь на каждом тике
+      // и съедает лимит попыток быстрее, чем воркер успевает отработать.
+      available_at: new Date(Date.now() + ENRICHMENT_BACKOFF_MS * attempts),
     })
     .where("id", "=", runId)
     .execute();

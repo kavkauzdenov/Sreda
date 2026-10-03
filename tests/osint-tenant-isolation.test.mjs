@@ -41,6 +41,9 @@ const TENANT_TABLES = [
   "osint_fact_changes",
   "osint_intelligence_contradictions",
   "osint_enrichment_runs",
+  "osint_research_passports",
+  "osint_research_passport_revisions",
+  "osint_research_launches",
 ];
 
 const TENANT_REFS = [
@@ -57,6 +60,9 @@ const TENANT_REFS = [
   "'osint_fact_changes'",
   "'osint_intelligence_contradictions'",
   "'osint_enrichment_runs'",
+  "'osint_research_passports'",
+  "'osint_research_passport_revisions'",
+  "'osint_research_launches'",
 ].join(",");
 
 async function makeUser() {

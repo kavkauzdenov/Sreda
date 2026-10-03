@@ -235,6 +235,13 @@ export const OSINT_CHANGE_KINDS: readonly OsintChangeKind[] = [
 /** Очередь enrichment Stage 4 (§26.11): ограниченный retry, без бесконечных. */
 export type OsintEnrichmentStatus = "queued" | "running" | "completed" | "failed";
 
+/** Запуск паспорта исследования (§26): статус синхронизируется с run'ом. */
+export type OsintResearchLaunchStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed";
+
 /** numeric(4,3) читается из PostgreSQL как строка — как и money-поля проекта. */
 export interface OsintTables {
   osint_discovery_runs: {
@@ -591,6 +598,47 @@ export interface OsintTables {
     attempts: Generated<number>;
     error: string | null;
     stats: Generated<unknown>;
+    available_at: Generated<Date>;
+    created_at: Generated<Date>;
+    started_at: Date | null;
+    finished_at: Date | null;
+    updated_at: Generated<Date>;
+  };
+  /** Паспорт исследования: одна конфигурация на бизнес + revision. */
+  osint_research_passports: {
+    id: string;
+    business_id: string;
+    revision: Generated<number>;
+    format_version: Generated<number>;
+    content: Generated<unknown>;
+    created_by: string | null;
+    updated_by: string | null;
+    created_at: Generated<Date>;
+    updated_at: Generated<Date>;
+  };
+  /** Append-only история ревизий паспорта (UNIQUE passport_id+revision). */
+  osint_research_passport_revisions: {
+    id: string;
+    business_id: string;
+    passport_id: string;
+    revision: number;
+    format_version: number;
+    content: unknown;
+    created_by: string | null;
+    created_at: Generated<Date>;
+  };
+  /** Запуск исследования: снимок паспорта и плана на момент запуска. */
+  osint_research_launches: {
+    id: string;
+    business_id: string;
+    passport_id: string | null;
+    passport_revision: number | null;
+    passport_snapshot: unknown;
+    plan: unknown;
+    run_id: string | null;
+    status: Generated<OsintResearchLaunchStatus>;
+    error: string | null;
+    created_by: string | null;
     created_at: Generated<Date>;
     started_at: Date | null;
     finished_at: Date | null;
