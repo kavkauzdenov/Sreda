@@ -64,10 +64,17 @@ test(
       await admin.query(`CREATE DATABASE "${databaseName}"`);
       created = true;
       source.pathname = "/" + databaseName;
+      // DROP ... WITH (FORCE) оборывает сокеты, которые pool.end() ещё
+      // закрывает: pg-pool шлёт 'error' без слушателя, и Node превращает
+      // это в uncaughtException уже после завершения теста. Ошибки обрыва
+      // соединения на teardown гасим — падения запросов всё равно видны
+      // по результатам самих запросов.
+      const pool = new Pool({ connectionString: source.href, max: 6 });
+      pool.on("error", (error) => {
+        if (!/terminat/i.test(String(error?.message ?? error))) throw error;
+      });
       db = new Kysely({
-        dialect: new PostgresDialect({
-          pool: new Pool({ connectionString: source.href, max: 6 }),
-        }),
+        dialect: new PostgresDialect({ pool }),
       });
 
       const migrations = new URL("../../migrations", import.meta.url).pathname;
