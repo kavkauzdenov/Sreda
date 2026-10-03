@@ -133,7 +133,8 @@ export function ResearchPassportPanel({ businessId }: { businessId: string }) {
       if (!alive) return;
       setLoading(true);
       setPlan(null);
-      setNotice("");
+      // notice намеренно НЕ очищаем: save()/launch() дёргают reloadKey сразу
+      // после успешного действия, и вычистка в эффекте стёрла бы их сообщение.
       setError("");
     });
     getOsintResearch(businessId)

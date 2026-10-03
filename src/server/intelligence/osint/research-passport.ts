@@ -758,7 +758,7 @@ export function buildResearchPlan(
     goals,
     identification: {
       displayName: content.identification.displayName,
-      hasOfficialUrl: officialSources.length > 0 || Boolean(profile.website),
+      hasOfficialUrl: officialSources.length > 0,
       urlCount: activeUrls.length,
       excludedCount: content.identification.urls.length - activeUrls.length,
       domains: content.identification.domains,

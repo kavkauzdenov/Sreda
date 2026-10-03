@@ -1245,6 +1245,239 @@ test("production HTTPS account and workspace lifecycle", { timeout: 120000 }, as
         }
       },
     );
+
+    // Research brief (§2 задачи Stage 4): паспорт через реальные
+    // production-маршруты — GET/PUT, предпросмотр, запуск, лимиты,
+    // origin-проверка и тенант-изоляция.
+    await t.test(
+      "Research passport over production HTTPS routes",
+      async () => {
+        const researchPath = (id) =>
+          `/api/v1/businesses/${id}/intelligence/osint/research`;
+        const previewPath = (id) => `${researchPath(id)}/preview`;
+        const launchPath = (id) => `${researchPath(id)}/launch`;
+        const content = {
+          formatVersion: 1,
+          identification: {
+            displayName: "Кафе Research HTTP",
+            legalName: null,
+            aliases: [],
+            category: "Кафе",
+            country: "Россия",
+            region: null,
+            city: "Барнаул",
+            address: null,
+            urls: [
+              { url: "https://research-http.example/", role: "official" },
+              { url: "https://skip-http.example/", role: "excluded" },
+            ],
+            domains: [],
+            phones: [],
+            emails: [],
+            notes: "HTTP-фикстура паспорта.",
+          },
+          goals: {
+            selected: ["contacts"],
+            importantNotes: null,
+            excludeNotes: null,
+            geoLimits: null,
+            searchPhrases: ["research фраза"],
+          },
+        };
+
+        // --- 401 без сессии на всех трёх эндпоинтах ------------------------
+        const anonymousGet = await request(
+          researchPath("biz_0000000000000000"),
+        );
+        assert.equal(anonymousGet.status, 401, anonymousGet.text);
+        assert.equal(anonymousGet.json.error.code, "UNAUTHENTICATED");
+        for (const path of [
+          previewPath("biz_0000000000000000"),
+          launchPath("biz_0000000000000000"),
+        ]) {
+          const anonymous = await request(path, { method: "POST", body: {} });
+          assert.equal(anonymous.status, 401, `${path}: ${anonymous.text}`);
+          assert.equal(anonymous.json.error.code, "UNAUTHENTICATED");
+        }
+
+        const owner = await account();
+        const created = await request("/api/v1/businesses", {
+          method: "POST",
+          cookie: owner.cookie,
+          body: { name: "Research HTTP", timezone: "Europe/Moscow" },
+          headers: { "idempotency-key": randomUUID() },
+        });
+        assert.equal(created.status, 201, created.text);
+        const publicId = created.json.id;
+
+        // --- GET: паспорта нет → prefill из карточки ------------------------
+        const initial = await request(researchPath(publicId), {
+          cookie: owner.cookie,
+        });
+        assert.equal(initial.status, 200, initial.text);
+        assert.equal(initial.json.passport, null);
+        assert.equal(initial.json.prefill.displayName, "Research HTTP");
+        assert.equal(initial.json.history.length, 0);
+        assert.equal(initial.json.launch, null);
+        assert.equal(initial.json.goals.length, 10);
+        assert.ok(initial.json.providers.length > 0);
+
+        // --- 405: POST на GET/PUT-маршрут ----------------------------------
+        const wrongMethod = await request(researchPath(publicId), {
+          method: "POST",
+          cookie: owner.cookie,
+          body: {},
+        });
+        assert.equal(wrongMethod.status, 405, wrongMethod.text);
+        assert.equal(wrongMethod.json, undefined, "405 от Next без тела");
+
+        // --- 403: чужой Origin на записи -----------------------------------
+        const evilOrigin = await request(researchPath(publicId), {
+          method: "PUT",
+          cookie: owner.cookie,
+          body: { content, expectedRevision: null },
+          headers: { origin: "https://evil.invalid" },
+        });
+        assert.equal(evilOrigin.status, 403, evilOrigin.text);
+        assert.equal(evilOrigin.json.error.code, "INVALID_ORIGIN");
+
+        // --- PUT: создание и восстановление --------------------------------
+        const saved = await request(researchPath(publicId), {
+          method: "PUT",
+          cookie: owner.cookie,
+          body: { content, expectedRevision: null },
+        });
+        assert.equal(saved.status, 200, saved.text);
+        assert.equal(saved.json.revision, 1);
+
+        const restored = await request(researchPath(publicId), {
+          cookie: owner.cookie,
+        });
+        assert.equal(restored.status, 200, restored.text);
+        assert.equal(restored.json.passport.revision, 1);
+        assert.equal(
+          restored.json.passport.content.identification.displayName,
+          "Кафе Research HTTP",
+        );
+        assert.equal(restored.json.history.length, 1);
+        assert.equal(restored.json.prefill, null, "prefill убран после сохранения");
+
+        // --- PUT: устаревшая ревизия → 409 ---------------------------------
+        const stale = await request(researchPath(publicId), {
+          method: "PUT",
+          cookie: owner.cookie,
+          body: { content, expectedRevision: 99 },
+        });
+        assert.equal(stale.status, 409, stale.text);
+        assert.equal(stale.json.error.code, "PASSPORT_REVISION_CONFLICT");
+
+        // --- POST preview: план без записи ---------------------------------
+        const runsBefore = await db
+          .selectFrom("osint_discovery_runs")
+          .select("id")
+          .where("business_id", "=", (await db
+            .selectFrom("business").select("id")
+            .where("public_id", "=", publicId)
+            .executeTakeFirstOrThrow()).id)
+          .execute();
+        assert.equal(runsBefore.length, 0);
+        const preview = await request(previewPath(publicId), {
+          method: "POST",
+          cookie: owner.cookie,
+          body: { content },
+        });
+        assert.equal(preview.status, 200, preview.text);
+        assert.equal(preview.json.plan.queries[0].templateId, "passport_phrase");
+        assert.deepEqual(
+          preview.json.plan.goals.map((goal) => goal.id),
+          ["contacts"],
+        );
+        assert.equal(preview.json.plan.identification.hasOfficialUrl, true);
+        const runsAfterPreview = await db
+          .selectFrom("osint_discovery_runs")
+          .select("id")
+          .where("business_id", "=", (await db
+            .selectFrom("business").select("id")
+            .where("public_id", "=", publicId)
+            .executeTakeFirstOrThrow()).id)
+          .execute();
+        assert.equal(runsAfterPreview.length, 0, "preview не создаёт run");
+
+        // --- 422: запуск без обязательных данных ---------------------------
+        const noGoals = await request(launchPath(publicId), {
+          method: "POST",
+          cookie: owner.cookie,
+          body: {
+            content: { ...content, goals: { ...content.goals, selected: [] } },
+            expectedRevision: 1,
+          },
+        });
+        assert.equal(noGoals.status, 422, noGoals.text);
+        assert.equal(noGoals.json.error.code, "RESEARCH_GOALS_REQUIRED");
+
+        // --- 201: первый запуск создаёт run; дубли идемпотентны ------------
+        const first = await request(launchPath(publicId), {
+          method: "POST",
+          cookie: owner.cookie,
+          body: { content, expectedRevision: 1 },
+        });
+        assert.equal(first.status, 201, first.text);
+        assert.equal(first.json.created, true);
+        assert.ok(first.json.runId);
+        assert.equal(first.json.passportRevision, 1);
+
+        // Лимит 5/60: один 422 + первый запуск + три дубля = пять вызовов,
+        // шестой уходит в 429. Дубли идемпотентны и возвращают тот же запуск.
+        for (let index = 0; index < 3; index += 1) {
+          const duplicate = await request(launchPath(publicId), {
+            method: "POST",
+            cookie: owner.cookie,
+            body: { content, expectedRevision: 1 },
+          });
+          assert.equal(duplicate.status, 200, duplicate.text);
+          assert.equal(duplicate.json.created, false);
+          assert.equal(duplicate.json.launchId, first.json.launchId);
+        }
+
+        // --- 429: лимит запусков 5/60 --------------------------------------
+        const limited = await request(launchPath(publicId), {
+          method: "POST",
+          cookie: owner.cookie,
+          body: { content, expectedRevision: 1 },
+        });
+        assert.equal(limited.status, 429, limited.text);
+        assert.equal(limited.json.error.code, "RATE_LIMITED");
+
+        const run = await db
+          .selectFrom("osint_discovery_runs")
+          .selectAll()
+          .where("id", "=", first.json.runId)
+          .executeTakeFirstOrThrow();
+        assert.equal(run.status, "queued");
+        const extra = JSON.parse(JSON.stringify(run.extra_queries));
+        assert.equal(extra.length, 1);
+        assert.equal(extra[0].text, "research фраза");
+        const launchCount = await db
+          .selectFrom("osint_research_launches")
+          .select("id")
+          .execute();
+        assert.equal(launchCount.length, 1, "дубли не создали строк");
+
+        // --- тенант-изоляция ------------------------------------------------
+        const stranger = await account();
+        const foreign = await request(researchPath(publicId), {
+          cookie: stranger.cookie,
+        });
+        assert.equal(foreign.status, 404, foreign.text);
+        assert.equal(foreign.json.error.code, "BUSINESS_NOT_FOUND");
+        const foreignWrite = await request(researchPath(publicId), {
+          method: "PUT",
+          cookie: stranger.cookie,
+          body: { content, expectedRevision: 1 },
+        });
+        assert.equal(foreignWrite.status, 404, foreignWrite.text);
+      },
+    );
   } finally {
     await stopApp();
     if (proxy) { proxy.closeAllConnections(); await new Promise((resolve) => proxy.close(resolve)); }

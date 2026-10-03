@@ -214,6 +214,17 @@ jobs:
         run: |
           mkdir -p artifacts/orders-v2-ui-audit
           npx playwright test e2e/orders-v2.spec.mjs --project=webkit
+      - name: Playwright intelligence research passport (Chromium)
+        env:
+          E2E_BASE_URL: ${{ steps.app.outputs.origin }}
+          AUDIT_BASE_URL: ${{ steps.app.outputs.origin }}
+          AUDIT_STORAGE_STATE: artifacts/audit-storage.json
+          AUDIT_OUTPUT: artifacts/intelligence-research-ui-audit
+          E2E_SCREENSHOT_DIR: artifacts/intelligence-research-ui-audit
+          AUDIT_IGNORE_HTTPS_ERRORS: "1"
+        run: |
+          mkdir -p artifacts/intelligence-research-ui-audit
+          npx playwright test e2e/intelligence-research.spec.mjs --project=chromium
       - name: Playwright contrast computed styles
         env:
           E2E_BASE_URL: ${{ steps.app.outputs.origin }}
