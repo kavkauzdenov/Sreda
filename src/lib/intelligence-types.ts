@@ -523,3 +523,177 @@ export type OsintIntelProfile = {
   byType: { factType: OsintIntelFactType; count: number }[];
   lastRun: OsintIntelLastRun | null;
 };
+
+/* ================== Research brief: «Паспорт исследования» ============== */
+
+export type OsintResearchUrlRole =
+  | "official"
+  | "confirmed"
+  | "candidate"
+  | "excluded";
+
+export type OsintResearchUrl = { url: string; role: OsintResearchUrlRole };
+
+export type OsintResearchIdentification = {
+  displayName: string;
+  legalName: string | null;
+  aliases: string[];
+  category: string | null;
+  country: string | null;
+  region: string | null;
+  city: string | null;
+  address: string | null;
+  urls: OsintResearchUrl[];
+  domains: string[];
+  phones: string[];
+  emails: string[];
+  notes: string | null;
+};
+
+export type OsintResearchGoalId =
+  | "reviews"
+  | "services_goods"
+  | "prices"
+  | "contacts"
+  | "website_changes"
+  | "news_mentions"
+  | "social_activity"
+  | "competitors"
+  | "new_sources"
+  | "custom_task";
+
+export type OsintResearchGoals = {
+  selected: OsintResearchGoalId[];
+  importantNotes: string | null;
+  excludeNotes: string | null;
+  geoLimits: string | null;
+  searchPhrases: string[];
+};
+
+export type OsintResearchContent = {
+  formatVersion: 1;
+  identification: OsintResearchIdentification;
+  goals: OsintResearchGoals;
+};
+
+export type OsintResearchGoalLevel = "supported" | "partial" | "unsupported";
+
+export type OsintResearchGoal = {
+  id: OsintResearchGoalId;
+  label: string;
+  description: string;
+  outcome: string;
+  sourceTypes: string[];
+  level: OsintResearchGoalLevel;
+  reason: string | null;
+};
+
+export type OsintResearchProvider = {
+  id: string;
+  label: string;
+  role: "search" | "crawl";
+  available: boolean;
+  reason: string | null;
+  willParticipate: boolean;
+};
+
+export type OsintResearchQuery = {
+  text: string;
+  templateId: string;
+  intent: string;
+  servedBy: string[];
+};
+
+/** Предпросмотр плана — детерминирован, без запуска обхода и поиска. */
+export type OsintResearchPlan = {
+  goals: OsintResearchGoal[];
+  identification: {
+    displayName: string;
+    hasOfficialUrl: boolean;
+    urlCount: number;
+    excludedCount: number;
+    domains: string[];
+  };
+  providers: OsintResearchProvider[];
+  officialSources: OsintResearchUrl[];
+  extraUrls: OsintResearchUrl[];
+  excludedUrls: string[];
+  queries: OsintResearchQuery[];
+  ignoredPhrases: string[];
+  phrases: string[];
+  crawl: {
+    enabled: boolean;
+    maxDepth: number;
+    maxPages: number;
+    maxRequests: number;
+    maxTotalBytes: number;
+    maxDurationMs: number;
+  };
+  budget: Record<string, number>;
+  unsupported: string[];
+  needsConfirmation: { url: string }[];
+  results: string[];
+  timeHorizon: { supported: false; reason: string };
+  geoLimits: string | null;
+};
+
+export type OsintResearchPassport = {
+  revision: number;
+  formatVersion: number;
+  content: OsintResearchContent;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type OsintResearchPrefill = {
+  displayName: string;
+  aliases: string[];
+  category: string | null;
+  city: string | null;
+  region: string | null;
+  address: string | null;
+  urls: OsintResearchUrl[];
+  phones: string[];
+  emails: string[];
+  notes: string | null;
+};
+
+export type OsintResearchLaunch = {
+  id: string;
+  status: "queued" | "running" | "completed" | "failed";
+  runId: string | null;
+  runStatus: string | null;
+  error: string | null;
+  passportRevision: number | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+};
+
+/** `GET .../osint/research` — паспорт, цели, история и последний запуск. */
+export type OsintResearch = {
+  passport: OsintResearchPassport | null;
+  /** Предложения из карточки бизнеса — только пока паспорта нет. */
+  prefill: OsintResearchPrefill | null;
+  goals: OsintResearchGoal[];
+  providers: OsintResearchProvider[];
+  history: { revision: number; createdAt: string }[];
+  launch: OsintResearchLaunch | null;
+};
+
+export type OsintResearchSaved = {
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type OsintResearchPreview = { plan: OsintResearchPlan };
+
+export type OsintResearchLaunched = {
+  launchId: string;
+  runId: string | null;
+  status: "queued" | "running" | "completed" | "failed";
+  passportRevision: number | null;
+  /** false → активный запуск уже есть, возвращён существующий. */
+  created: boolean;
+};

@@ -16,7 +16,6 @@ import {
   mergeDiscoveryBudget,
 } from "./config.ts";
 import type { DiscoveryProfile } from "./profile.ts";
-import { buildDiscoveryProfile } from "./profile.ts";
 import { buildDiscoveryQueries, type GeneratedQuery } from "./queries.ts";
 import type { ProviderRegistry } from "./providers/registry.ts";
 import type { OsintSourceType } from "./schema.ts";
@@ -725,10 +724,7 @@ export function buildResearchPlan(
 
   const activeUrls = content.identification.urls.filter((entry) => entry.role !== "excluded");
   const startUrls = activeUrls.filter((entry) => !isUrlExcluded(entry.url, excluded));
-  const intents: DiscoveryIntent[] = [...new Set(goals.flatMap((goal) => {
-    const descriptor = GOAL_CATALOG.find((item) => item.id === goal.id);
-    return descriptor?.intents ?? (["any"] as const);
-  }))];
+  const intents = selectedIntents(content);
   const participating = new Set(
     registry.select(null, intents).map((provider) => provider.descriptor.id),
   );
@@ -826,6 +822,41 @@ export function buildResearchPlan(
   };
 }
 
+/**
+ * Глубокое равенство без учёта порядка ключей: content приходит из jsonb
+ * (порядок ключей нормализуется БД) и свежего parse — сравниваем содержимое.
+ */
+export function passportEquals(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length)
+      return false;
+    return a.every((item, index) => passportEquals(item, b[index]));
+  }
+  if (a && b && typeof a === "object" && typeof b === "object") {
+    const left = a as Record<string, unknown>;
+    const right = b as Record<string, unknown>;
+    const leftKeys = Object.keys(left);
+    const rightKeys = Object.keys(right);
+    if (leftKeys.length !== rightKeys.length) return false;
+    return leftKeys.every(
+      (key) => key in right && passportEquals(left[key], right[key]),
+    );
+  }
+  return false;
+}
+
+/** Интенты выбранных целей — фильтр провайдеров при запуске. */
+export function selectedIntents(content: PassportContent): DiscoveryIntent[] {
+  const intents = new Set<DiscoveryIntent>();
+  for (const id of content.goals.selected) {
+    const goal = GOAL_CATALOG.find((item) => item.id === id);
+    for (const intent of goal?.intents ?? []) intents.add(intent);
+  }
+  if (!intents.size) intents.add("any");
+  return [...intents];
+}
+
 /** Причины отказа запуска (422) — отдельно от валидации содержимого. */
 export function assertLaunchable(content: PassportContent, registry: ProviderRegistry): void {
   if (!content.identification.displayName)
@@ -845,7 +876,10 @@ export function assertLaunchable(content: PassportContent, registry: ProviderReg
     );
 }
 
-/** Профиль предзаполнения из карточки бизнеса: предложения, не перезапись. */
+/**
+ * Профиль предзаполнения из карточки бизнеса: значения предлагаются как
+ * начальные и никогда не перезаписывают сохранённый паспорт молча.
+ */
 export type PassportPrefill = {
   displayName: string;
   aliases: string[];
@@ -859,27 +893,15 @@ export type PassportPrefill = {
   notes: string | null;
 };
 
-export function prefillFromBusiness(input: {
-  name: string;
-  description?: string | null;
-  contact_info?: string | null;
-  industry?: string | null;
-  ai_geography?: string | null;
-}): PassportPrefill {
-  const profile = buildDiscoveryProfile({
-    name: input.name,
-    description: input.description ?? null,
-    contact_info: input.contact_info ?? null,
-    industry: input.industry ?? null,
-    ai_geography: input.ai_geography ?? null,
-  });
+export function prefillFromProfile(profile: DiscoveryProfile): PassportPrefill {
   const urls: { url: string; role: PassportUrlRole }[] = [];
   if (profile.website) urls.push({ url: profile.website, role: "candidate" });
   for (const link of profile.knownSocialLinks)
-    if (!urls.some((entry) => entry.url === link)) urls.push({ url: link, role: "candidate" });
+    if (!urls.some((entry) => entry.url === link))
+      urls.push({ url: link, role: "candidate" });
   return {
-    displayName: input.name ?? "",
-    aliases: profile.aliases.filter((alias) => alias !== input.name),
+    displayName: profile.businessName,
+    aliases: profile.aliases.filter((alias) => alias !== profile.businessName),
     category: profile.category,
     city: profile.city,
     region: profile.region,

@@ -211,3 +211,105 @@ export function intelligenceOsintContradictionsHandler(
     );
   });
 }
+
+/**
+ * `GET|PUT .../osint/research` — паспорт OSINT-исследования (research brief).
+ * GET: сохранённый паспорт (или предложения из карточки), цели с уровнями
+ * поддержки, история ревизий и последний запуск. PUT: строгая валидация и
+ * версионируемое сохранение по expectedRevision — без запуска и сети.
+ */
+export function intelligenceOsintResearchHandler(
+  request: Request,
+  publicId: string,
+) {
+  return respond(request, async () => {
+    if (request.method !== "GET" && request.method !== "PUT")
+      return json({ error: "method" }, 405);
+    const runtime = getRuntime();
+    const user = await createApplication(runtime).requireUser(request.headers);
+    const service = new OsintService(runtime.db);
+    if (request.method === "GET")
+      return json(await service.getResearch(user.id, publicId));
+    requireOrigin(request, runtime.origin);
+    await limit(
+      runtime.db,
+      runtime.secret,
+      "osint-research:" + publicId + ":" + user.id,
+      30,
+      60,
+    );
+    const body = await readJson(request, 16384);
+    return json(
+      await service.savePassport(
+        user.id,
+        publicId,
+        body.content,
+        body.expectedRevision,
+      ),
+    );
+  });
+}
+
+/**
+ * `POST .../osint/research/preview` — детерминированный предпросмотр плана:
+ * цели, источники, запросы, бюджет и неподдерживаемое. Никакой записи и сети.
+ */
+export function intelligenceOsintResearchPreviewHandler(
+  request: Request,
+  publicId: string,
+) {
+  return respond(request, async () => {
+    if (request.method !== "POST") return json({ error: "method" }, 405);
+    const runtime = getRuntime();
+    const user = await createApplication(runtime).requireUser(request.headers);
+    requireOrigin(request, runtime.origin);
+    await limit(
+      runtime.db,
+      runtime.secret,
+      "osint-research-preview:" + publicId + ":" + user.id,
+      30,
+      60,
+    );
+    const body = await readJson(request, 16384);
+    return json(
+      await new OsintService(runtime.db).previewResearch(
+        user.id,
+        publicId,
+        body.content,
+        body.budget,
+      ),
+    );
+  });
+}
+
+/**
+ * `POST .../osint/research/launch` — явный запуск исследования: транзакция
+ * (паспорт по expectedRevision → snapshot плана → discovery run). Повтор при
+ * активном запуске возвращает существующий (`created:false`).
+ */
+export function intelligenceOsintResearchLaunchHandler(
+  request: Request,
+  publicId: string,
+) {
+  return respond(request, async () => {
+    if (request.method !== "POST") return json({ error: "method" }, 405);
+    const runtime = getRuntime();
+    const user = await createApplication(runtime).requireUser(request.headers);
+    requireOrigin(request, runtime.origin);
+    await limit(
+      runtime.db,
+      runtime.secret,
+      "osint-research-launch:" + publicId + ":" + user.id,
+      5,
+      60,
+    );
+    const body = await readJson(request, 16384);
+    const outcome = await new OsintService(runtime.db).launchResearch(
+      user.id,
+      publicId,
+      body.content,
+      body.expectedRevision,
+    );
+    return json(outcome, outcome.created ? 201 : 200);
+  });
+}

@@ -1,13 +1,16 @@
+import { randomUUID } from "node:crypto";
 import type { Kysely } from "kysely";
 import { sql } from "kysely";
 import type { Database } from "../db/schema.ts";
 import type { Claim, Evidence } from "@/lib/intelligence-contracts.ts";
 import { requireBusiness } from "../access/permissions.ts";
 import { AppError } from "../http/errors.ts";
+import { logIntelligenceEvent } from "./audit.ts";
 import { createBuiltinRegistry } from "./osint/providers/builtin.ts";
 import type { ProviderRegistry } from "./osint/providers/registry.ts";
 import {
   createDiscoveryRun,
+  loadDiscoveryProfile,
   releaseStaleDiscoveryRuns,
   runDiscovery,
   type CrawlPhaseOptions,
@@ -28,6 +31,22 @@ import {
 import { extractClaims } from "./osint/claims.ts";
 import { assessClaims } from "./osint/assessment.ts";
 import {
+  GOAL_CATALOG,
+  assertLaunchable,
+  buildResearchPlan,
+  excludedIndex,
+  goalLevel,
+  parsePassportContent,
+  passportEquals,
+  phraseQueries,
+  prefillFromProfile,
+  profileFromPassport,
+  researchCapabilities,
+  sanitizePhrases,
+  selectedIntents,
+  type PassportContent,
+} from "./osint/research-passport.ts";
+import {
   buildProfile,
   listChanges,
   listContradictions,
@@ -42,6 +61,15 @@ import type {
   OsintIntelPage,
   OsintIntelProfile,
   OsintRunStatusInfo,
+  OsintResearch,
+  OsintResearchContent,
+  OsintResearchGoal,
+  OsintResearchLaunched,
+  OsintResearchLaunch,
+  OsintResearchPlan,
+  OsintResearchPreview,
+  OsintResearchProvider,
+  OsintResearchSaved,
   OsintSnapshot,
   Stage3Assessment,
   Stage3EntityInfo,
@@ -60,6 +88,43 @@ const RUN_FAILURE_LIMIT = 10;
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isUniqueViolation(error: unknown): boolean {
+  return Boolean(
+    error &&
+      typeof error === "object" &&
+      (error as { code?: string }).code === "23505",
+  );
+}
+
+/**
+ * expectedRevision-контракт: только null (первый паспорт) или целое ≥ 1,
+ * равное текущей ревизии. Всё прочее — явная ошибка клиента.
+ */
+function normalizeExpectedRevision(raw: unknown): number | null {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw === "number" && Number.isInteger(raw) && raw >= 1)
+    return raw;
+  if (typeof raw === "string" && /^\d+$/.test(raw)) {
+    const parsed = Number(raw);
+    if (parsed >= 1) return parsed;
+  }
+  throw new AppError(
+    400,
+    "INVALID_EXPECTED_REVISION",
+    "expectedRevision должен быть null или номером текущей ревизии.",
+  );
+}
+
+/** Статус запуска из статуса discovery run'а (read-through). */
+function launchStatusFromRun(
+  status: string,
+): OsintResearchLaunch["status"] {
+  if (status === "running") return "running";
+  if (status === "completed" || status === "partial") return "completed";
+  if (status === "failed") return "failed";
+  return "queued";
+}
 
 /**
  * Опции сервиса. По умолчанию crawl выключен — синхронный startDiscovery
@@ -876,5 +941,552 @@ export class OsintService {
       "analytics.view",
     );
     return listContradictions(this.db, member.id);
+  }
+
+  /* ===== Паспорт OSINT-исследования (research brief) ==================== */
+
+  /** Read-through: статус запуска следует за состоянием discovery run'а. */
+  private async syncLaunchRow(
+    row: {
+      id: string;
+      business_id: string;
+      run_id: string | null;
+      status: OsintResearchLaunch["status"];
+      error: string | null;
+      passport_revision: number | null;
+      created_at: Date;
+      started_at: Date | null;
+      finished_at: Date | null;
+    },
+  ): Promise<OsintResearchLaunch> {
+    let current = row;
+    let runStatus: string | null = null;
+    if (current.run_id) {
+      const run = await this.db
+        .selectFrom("osint_discovery_runs")
+        .select(["status", "error", "started_at", "finished_at"])
+        .where("id", "=", current.run_id)
+        .where("business_id", "=", current.business_id)
+        .executeTakeFirst();
+      if (run) {
+        runStatus = run.status;
+        const mapped = launchStatusFromRun(run.status);
+        if (mapped !== current.status) {
+          const updated = await this.db
+            .updateTable("osint_research_launches")
+            .set({
+              status: mapped,
+              error: run.error,
+              started_at: run.started_at,
+              finished_at: run.finished_at,
+              updated_at: new Date(),
+            })
+            .where("id", "=", current.id)
+            .where("status", "=", current.status)
+            .executeTakeFirst();
+          if (updated && updated.numUpdatedRows === BigInt(1)) {
+            current = {
+              ...current,
+              status: mapped,
+              error: run.error,
+              started_at: run.started_at,
+              finished_at: run.finished_at,
+            };
+          }
+        }
+      }
+    }
+    return {
+      id: current.id,
+      status: current.status,
+      runId: current.run_id,
+      runStatus,
+      error: current.error,
+      passportRevision: current.passport_revision,
+      createdAt: iso(current.created_at)!,
+      startedAt: iso(current.started_at),
+      finishedAt: iso(current.finished_at),
+    };
+  }
+
+  /**
+   * UPSERТ паспорта внутри транзакции: контракт expectedRevision,
+   * compare-and-set по revision, append-only история. Без изменений —
+   * без новой ревизии (сравнение содержимое-в-содержимое, jsonb не
+   * сохраняет порядок ключей).
+   */
+  private async upsertPassport(
+    tx: Kysely<Database>,
+    businessId: string,
+    userId: string,
+    existing:
+      | {
+          id: string;
+          revision: number;
+          content: unknown;
+          created_at: Date;
+          updated_at: Date;
+        }
+      | undefined,
+    expected: number | null,
+    content: PassportContent,
+  ): Promise<{
+    id: string;
+    revision: number;
+    createdAt: string;
+    updatedAt: string;
+    created: boolean;
+  }> {
+    const now = new Date();
+    if (!existing) {
+      if (expected !== null)
+        throw new AppError(
+          409,
+          "PASSPORT_REVISION_CONFLICT",
+          "Паспорт уже изменён — обновите страницу.",
+        );
+      const id = randomUUID();
+      await tx
+        .insertInto("osint_research_passports")
+        .values({
+          id,
+          business_id: businessId,
+          revision: 1,
+          format_version: content.formatVersion,
+          content: content as unknown as Record<string, unknown>,
+          created_by: userId,
+          updated_by: userId,
+          created_at: now,
+          updated_at: now,
+        })
+        .execute();
+      await tx
+        .insertInto("osint_research_passport_revisions")
+        .values({
+          id: randomUUID(),
+          business_id: businessId,
+          passport_id: id,
+          revision: 1,
+          format_version: content.formatVersion,
+          content: content as unknown as Record<string, unknown>,
+          created_by: userId,
+          created_at: now,
+        })
+        .execute();
+      return {
+        id,
+        revision: 1,
+        createdAt: iso(now)!,
+        updatedAt: iso(now)!,
+        created: true,
+      };
+    }
+
+    if (expected === null || existing.revision !== expected)
+      throw new AppError(
+        409,
+        "PASSPORT_REVISION_CONFLICT",
+        "Паспорт уже изменён другим действием — перезагрузите страницу.",
+      );
+
+    if (passportEquals(existing.content, content))
+      return {
+        id: existing.id,
+        revision: existing.revision,
+        createdAt: iso(existing.created_at)!,
+        updatedAt: iso(existing.updated_at)!,
+        created: false,
+      };
+
+    const revision = existing.revision + 1;
+    const updated = await tx
+      .updateTable("osint_research_passports")
+      .set({
+        revision,
+        format_version: content.formatVersion,
+        content: content as unknown as Record<string, unknown>,
+        updated_by: userId,
+        updated_at: now,
+      })
+      .where("id", "=", existing.id)
+      .where("revision", "=", existing.revision)
+      .executeTakeFirst();
+    if (!updated || updated.numUpdatedRows !== BigInt(1))
+      throw new AppError(
+        409,
+        "PASSPORT_REVISION_CONFLICT",
+        "Паспорт уже изменён — обновите страницу.",
+      );
+    await tx
+      .insertInto("osint_research_passport_revisions")
+      .values({
+        id: randomUUID(),
+        business_id: businessId,
+        passport_id: existing.id,
+        revision,
+        format_version: content.formatVersion,
+        content: content as unknown as Record<string, unknown>,
+        created_by: userId,
+        created_at: now,
+      })
+      .execute();
+    return {
+      id: existing.id,
+      revision,
+      createdAt: iso(existing.created_at)!,
+      updatedAt: iso(now)!,
+      created: true,
+    };
+  }
+
+  /**
+   * `GET .../osint/research` — паспорт (или предложения из карточки),
+   * цели с уровнями поддержки, история ревизий и последний запуск.
+   */
+  async getResearch(
+    userId: string,
+    publicId: string,
+  ): Promise<OsintResearch> {
+    const member = await requireBusiness(
+      this.db,
+      userId,
+      publicId,
+      "analytics.view",
+    );
+    const registry = this.registry();
+    const caps = researchCapabilities(registry);
+    const goals: OsintResearchGoal[] = GOAL_CATALOG.map((goal) =>
+      goalLevel(goal, caps),
+    );
+
+    const passportRow = await this.db
+      .selectFrom("osint_research_passports")
+      .selectAll()
+      .where("business_id", "=", member.id)
+      .executeTakeFirst();
+
+    let history: { revision: number; createdAt: string }[] = [];
+    if (passportRow) {
+      const rows = await this.db
+        .selectFrom("osint_research_passport_revisions")
+        .select(["revision", "created_at"])
+        .where("passport_id", "=", passportRow.id)
+        .orderBy("revision", "desc")
+        .limit(10)
+        .execute();
+      history = rows.map((row) => ({
+        revision: row.revision,
+        createdAt: iso(row.created_at)!,
+      }));
+    }
+
+    const passportContent = passportRow
+      ? (passportRow.content as OsintResearchContent)
+      : null;
+    const intents = passportContent
+      ? selectedIntents(passportContent as unknown as PassportContent)
+      : null;
+    const participating = new Set(
+      registry.select(null, intents ?? undefined).map((p) => p.descriptor.id),
+    );
+    const providers: OsintResearchProvider[] = [
+      ...caps.search.map((entry) => ({
+        id: entry.id,
+        label: entry.label,
+        role: "search" as const,
+        available: entry.available,
+        reason: entry.reason,
+        willParticipate: entry.available && participating.has(entry.id),
+      })),
+      ...caps.crawl.map((entry) => ({
+        id: entry.id,
+        label: entry.label,
+        role: "crawl" as const,
+        available: entry.available,
+        reason: entry.reason,
+        willParticipate: entry.available,
+      })),
+    ];
+
+    const launchRow = await this.db
+      .selectFrom("osint_research_launches")
+      .selectAll()
+      .where("business_id", "=", member.id)
+      .orderBy("created_at", "desc")
+      .orderBy("id", "desc")
+      .limit(1)
+      .executeTakeFirst();
+    const launch = launchRow ? await this.syncLaunchRow(launchRow) : null;
+
+    let prefill = null;
+    if (!passportRow) {
+      prefill = prefillFromProfile(
+        await loadDiscoveryProfile(this.db, member.id),
+      );
+    }
+
+    return {
+      passport: passportRow
+        ? {
+            revision: passportRow.revision,
+            formatVersion: passportRow.format_version,
+            content: passportRow.content as OsintResearchContent,
+            createdAt: iso(passportRow.created_at)!,
+            updatedAt: iso(passportRow.updated_at)!,
+          }
+        : null,
+      prefill,
+      goals,
+      providers,
+      history,
+      launch,
+    };
+  }
+
+  /**
+   * `PUT .../osint/research` — сохранение паспорта (без запуска, без сети).
+   * expectedRevision: null только для первого сохранения.
+   */
+  async savePassport(
+    userId: string,
+    publicId: string,
+    rawContent: unknown,
+    expectedRevision: unknown,
+  ): Promise<OsintResearchSaved> {
+    const member = await requireBusiness(
+      this.db,
+      userId,
+      publicId,
+      "intelligence.manage",
+    );
+    const content = parsePassportContent(rawContent);
+    const expected = normalizeExpectedRevision(expectedRevision);
+
+    try {
+      const result = await this.db.transaction().execute(async (tx) => {
+        const existing = await tx
+          .selectFrom("osint_research_passports")
+          .selectAll()
+          .where("business_id", "=", member.id)
+          .forUpdate()
+          .executeTakeFirst();
+        return this.upsertPassport(tx, member.id, userId, existing, expected, content);
+      });
+      await logIntelligenceEvent(this.db, {
+        businessId: member.id,
+        userId,
+        operation: "osint.research.save",
+        source: "osint",
+        result: result.created ? "ok" : "unchanged",
+        metadata: { revision: result.revision },
+      });
+      return {
+        revision: result.revision,
+        createdAt: result.createdAt,
+        updatedAt: result.updatedAt,
+      };
+    } catch (error) {
+      if (isUniqueViolation(error))
+        throw new AppError(
+          409,
+          "PASSPORT_REVISION_CONFLICT",
+          "Паспорт уже создан — обновите страницу.",
+        );
+      throw error;
+    }
+  }
+
+  /**
+   * `POST .../osint/research/preview` — детерминированный план без БД-записи
+   * и сети: цели, источники, запросы, бюджет и чего система не сможет.
+   */
+  async previewResearch(
+    userId: string,
+    publicId: string,
+    rawContent: unknown,
+    rawBudget?: unknown,
+  ): Promise<OsintResearchPreview> {
+    const member = await requireBusiness(
+      this.db,
+      userId,
+      publicId,
+      "analytics.view",
+    );
+    void member;
+    const content = parsePassportContent(rawContent);
+    const plan = buildResearchPlan(content, this.registry(), rawBudget);
+    return { plan: plan as unknown as OsintResearchPlan };
+  }
+
+  /**
+   * `POST .../osint/research/launch` — транзакционный запуск: upsert
+   * паспорта по expectedRevision → snapshot плана → discovery run.
+   * Идемпотентность: активный запуск возвращается как есть (created:false).
+   */
+  async launchResearch(
+    userId: string,
+    publicId: string,
+    rawContent: unknown,
+    expectedRevision: unknown,
+  ): Promise<OsintResearchLaunched> {
+    const member = await requireBusiness(
+      this.db,
+      userId,
+      publicId,
+      "intelligence.manage",
+    );
+    const content = parsePassportContent(rawContent);
+    const expected = normalizeExpectedRevision(expectedRevision);
+    const registry = this.registry();
+    assertLaunchable(content, registry);
+
+    // Освобождаем упавшие run'ы до проверки активности запуска.
+    await releaseStaleDiscoveryRuns(this.db);
+
+    // Read-through: синхронизируем последний запуск, чтобы активность
+    // определялась фактическим состоянием run'а, а не устаревшей строкой.
+    const latest = await this.db
+      .selectFrom("osint_research_launches")
+      .selectAll()
+      .where("business_id", "=", member.id)
+      .orderBy("created_at", "desc")
+      .orderBy("id", "desc")
+      .limit(1)
+      .executeTakeFirst();
+    if (latest) {
+      const synced = await this.syncLaunchRow(latest);
+      if (synced.status === "queued" || synced.status === "running")
+        return {
+          launchId: synced.id,
+          runId: synced.runId,
+          status: synced.status,
+          passportRevision: synced.passportRevision,
+          created: false,
+        };
+    }
+
+    try {
+      const outcome = await this.db.transaction().execute(async (tx) => {
+        const active = await tx
+          .selectFrom("osint_research_launches")
+          .select(["id", "run_id", "status", "passport_revision"])
+          .where("business_id", "=", member.id)
+          .where("status", "in", ["queued", "running"])
+          .executeTakeFirst();
+        if (active)
+          return {
+            launchId: active.id,
+            runId: active.run_id,
+            status: launchStatusFromRun(active.status),
+            passportRevision: active.passport_revision,
+            created: false,
+          };
+
+        const passport = await tx
+          .selectFrom("osint_research_passports")
+          .selectAll()
+          .where("business_id", "=", member.id)
+          .forUpdate()
+          .executeTakeFirst();
+        const saved = await this.upsertPassport(
+          tx,
+          member.id,
+          userId,
+          passport,
+          expected,
+          content,
+        );
+
+        const plan = buildResearchPlan(content, registry);
+        const excluded = excludedIndex(content);
+        const { phrases } = sanitizePhrases(content.goals.searchPhrases);
+        const launchId = randomUUID();
+        const now = new Date();
+        await tx
+          .insertInto("osint_research_launches")
+          .values({
+            id: launchId,
+            business_id: member.id,
+            passport_id: saved.id,
+            passport_revision: saved.revision,
+            passport_snapshot: content as unknown as Record<string, unknown>,
+            plan: plan as unknown as Record<string, unknown>,
+            run_id: null,
+            status: "queued",
+            error: null,
+            created_by: userId,
+            created_at: now,
+            started_at: null,
+            finished_at: null,
+            updated_at: now,
+          })
+          .execute();
+
+        const created = await createDiscoveryRun(tx, {
+          businessId: member.id,
+          registry,
+          budget: plan.budget,
+          intents: selectedIntents(content),
+          profile: profileFromPassport(content),
+          crawl: true,
+          extraQueries: phraseQueries(phrases, excluded),
+          excludeUrls: excluded,
+        });
+
+        await tx
+          .updateTable("osint_research_launches")
+          .set({ run_id: created.runId, updated_at: new Date() })
+          .where("id", "=", launchId)
+          .execute();
+
+        return {
+          launchId,
+          runId: created.runId,
+          status: "queued" as const,
+          passportRevision: saved.revision,
+          created: true,
+        };
+      });
+
+      await logIntelligenceEvent(this.db, {
+        businessId: member.id,
+        userId,
+        operation: "osint.research.launch",
+        source: "osint",
+        result: outcome.created ? "created" : "existing",
+        metadata: {
+          launchId: outcome.launchId,
+          runId: outcome.runId,
+          revision: outcome.passportRevision,
+        },
+      });
+      return outcome;
+    } catch (error) {
+      if (isUniqueViolation(error)) {
+        // Гонка параллельных запусков: активный индекс уже занят.
+        const existing = await this.db
+          .selectFrom("osint_research_launches")
+          .selectAll()
+          .where("business_id", "=", member.id)
+          .where("status", "in", ["queued", "running"])
+          .orderBy("created_at", "desc")
+          .limit(1)
+          .executeTakeFirst();
+        if (existing)
+          return {
+            launchId: existing.id,
+            runId: existing.run_id,
+            status: launchStatusFromRun(existing.status),
+            passportRevision: existing.passport_revision,
+            created: false,
+          };
+        throw new AppError(
+          409,
+          "PASSPORT_REVISION_CONFLICT",
+          "Паспорт уже изменён — обновите страницу.",
+        );
+      }
+      throw error;
+    }
   }
 }

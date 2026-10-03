@@ -9,6 +9,10 @@ import type {
   OsintIntelProfile,
   OsintRunStatusInfo,
   OsintSnapshot,
+  OsintResearch,
+  OsintResearchLaunched,
+  OsintResearchPreview,
+  OsintResearchSaved,
 } from "@/lib/intelligence-types";
 
 export async function getIntelligenceOverview(
@@ -92,5 +96,43 @@ export async function getOsintIntelContradictions(
 ): Promise<{ businessId: string; contradictions: OsintIntelContradiction[] }> {
   return apiRequest<{ businessId: string; contradictions: OsintIntelContradiction[] }>(
     `${osintBase(businessId)}/contradictions`,
+  );
+}
+
+/* ============ Research brief: «Паспорт OSINT-исследования» ============== */
+
+export async function getOsintResearch(
+  businessId: string,
+): Promise<OsintResearch> {
+  return apiRequest<OsintResearch>(`${osintBase(businessId)}/research`);
+}
+
+export async function saveOsintResearch(
+  businessId: string,
+  body: { content: unknown; expectedRevision: number | null },
+): Promise<OsintResearchSaved> {
+  return apiRequest<OsintResearchSaved>(`${osintBase(businessId)}/research`, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function previewOsintResearch(
+  businessId: string,
+  body: { content: unknown; budget?: unknown },
+): Promise<OsintResearchPreview> {
+  return apiRequest<OsintResearchPreview>(
+    `${osintBase(businessId)}/research/preview`,
+    { method: "POST", body: JSON.stringify(body) },
+  );
+}
+
+export async function launchOsintResearch(
+  businessId: string,
+  body: { content: unknown; expectedRevision: number | null },
+): Promise<OsintResearchLaunched> {
+  return apiRequest<OsintResearchLaunched>(
+    `${osintBase(businessId)}/research/launch`,
+    { method: "POST", body: JSON.stringify(body) },
   );
 }
