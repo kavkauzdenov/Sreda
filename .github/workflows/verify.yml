@@ -225,6 +225,54 @@ jobs:
         run: |
           mkdir -p artifacts/intelligence-research-ui-audit
           npx playwright test e2e/intelligence-research.spec.mjs --project=chromium
+
+      # UX gate для рефакторинга deceabb: главная, кнопка пароля, Intelligence.
+      # Public /login — отдельная спека, авторизация не нужна.
+      - name: Playwright password field geometry (Chromium)
+        env:
+          E2E_BASE_URL: ${{ steps.app.outputs.origin }}
+          AUDIT_BASE_URL: ${{ steps.app.outputs.origin }}
+          AUDIT_IGNORE_HTTPS_ERRORS: "1"
+        run: npx playwright test e2e/password-field.spec.mjs --project=chromium
+      - name: Playwright password field geometry (WebKit)
+        env:
+          E2E_BASE_URL: ${{ steps.app.outputs.origin }}
+          AUDIT_BASE_URL: ${{ steps.app.outputs.origin }}
+          AUDIT_IGNORE_HTTPS_ERRORS: "1"
+        run: npx playwright test e2e/password-field.spec.mjs --project=webkit
+      - name: Playwright dashboard UX (Chromium)
+        env:
+          E2E_BASE_URL: ${{ steps.app.outputs.origin }}
+          AUDIT_BASE_URL: ${{ steps.app.outputs.origin }}
+          AUDIT_STORAGE_STATE: artifacts/audit-storage.json
+          AUDIT_OUTPUT: artifacts/dashboard-ux-ui-audit
+          E2E_SCREENSHOT_DIR: artifacts/dashboard-ux-ui-audit
+          AUDIT_IGNORE_HTTPS_ERRORS: "1"
+        run: |
+          mkdir -p artifacts/dashboard-ux-ui-audit
+          npx playwright test e2e/dashboard-ux.spec.mjs --project=chromium
+      - name: Playwright dashboard UX (WebKit)
+        env:
+          E2E_BASE_URL: ${{ steps.app.outputs.origin }}
+          AUDIT_BASE_URL: ${{ steps.app.outputs.origin }}
+          AUDIT_STORAGE_STATE: artifacts/audit-storage.json
+          AUDIT_OUTPUT: artifacts/dashboard-ux-ui-audit
+          E2E_SCREENSHOT_DIR: artifacts/dashboard-ux-ui-audit
+          AUDIT_IGNORE_HTTPS_ERRORS: "1"
+        run: |
+          mkdir -p artifacts/dashboard-ux-ui-audit
+          npx playwright test e2e/dashboard-ux.spec.mjs --project=webkit
+      - name: Playwright Intelligence human-readable states (Chromium)
+        env:
+          E2E_BASE_URL: ${{ steps.app.outputs.origin }}
+          AUDIT_BASE_URL: ${{ steps.app.outputs.origin }}
+          AUDIT_STORAGE_STATE: artifacts/audit-storage.json
+          AUDIT_OUTPUT: artifacts/intelligence-labels-ui-audit
+          E2E_SCREENSHOT_DIR: artifacts/intelligence-labels-ui-audit
+          AUDIT_IGNORE_HTTPS_ERRORS: "1"
+        run: |
+          mkdir -p artifacts/intelligence-labels-ui-audit
+          npx playwright test e2e/intelligence-osint-labels.spec.mjs --project=chromium
       - name: Playwright contrast computed styles
         env:
           E2E_BASE_URL: ${{ steps.app.outputs.origin }}
