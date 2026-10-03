@@ -32,6 +32,29 @@ import type { SearchQuery } from "./query-generator.ts";
  * Сохраняет гипотезы исследования. Повторы по dedupe_key пропускаются,
  * поэтому вызывать это безопасно на каждой итерации планирования.
  */
+/**
+ * Приводит приоритет к виду, который принимает PostgreSQL.
+ *
+ * osint_research_actions.priority и osint_research_hypotheses.priority —
+ * целые с CHECK (-1000..1000). Внутри планировщик считает приоритет с
+ * дробями (затухание, веса признаков), и это правильно: точность нужна для
+ * сортировки кандидатов. Но в базу дробь писать нельзя — PostgreSQL отвечает
+ * "invalid input syntax for type integer" и роняет весь тик агента.
+ *
+ * Поэтому округление и ограничение диапазона живут ЗДЕСЬ, на границе записи:
+ * любой вызывающий код может считать как угодно и не сможет сломать запись.
+ */
+function toDbPriority(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(1000, Math.max(-1000, Math.round(value)));
+}
+
+/** Доверие — numeric(4,3) с CHECK (0..1). */
+function toDbConfidence(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(1, Math.max(0, Math.round(value * 1000) / 1000));
+}
+
 export async function persistHypotheses(
   db: Kysely<Database>,
   input: { runId: string; businessId: string; hypotheses: Hypothesis[] },
@@ -46,8 +69,8 @@ export async function persistHypotheses(
     type: hypothesis.type,
     statement: hypothesis.statement,
     reason: hypothesis.reason,
-    priority: hypothesis.priority,
-    confidence: hypothesis.confidence,
+    priority: toDbPriority(hypothesis.priority),
+    confidence: toDbConfidence(hypothesis.confidence),
     status: "open" as OsintHypothesisStatus,
     source_entity_id: null,
     subject_key: hypothesis.subjectKey,
@@ -151,7 +174,7 @@ export async function persistActions(
     query: entry.query.query.slice(0, 500),
     target_url: entry.targetUrl ?? null,
     reason: (entry.reason ?? entry.query.derivedFrom).slice(0, 500),
-    priority: entry.priority,
+    priority: toDbPriority(entry.priority),
     status: "pending" as OsintResearchActionStatus,
     outcome: "pending" as OsintResearchOutcome,
     results_count: 0,

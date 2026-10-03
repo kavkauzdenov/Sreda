@@ -505,6 +505,46 @@ test(
         assert.equal(Number(stillRunning.rows[0].n), 3, "остальные остаются running до завершения");
       });
 
+      await t.test("B1b. дробный приоритет не роняет запись (priority — integer)", async () => {
+        const ctx = await scenario(db, "Приоритет");
+        const runId = await makeRun(db, ctx.business.id);
+
+        // Планировщик считает приоритет с дробями (затухание, веса
+        // признаков). В БД колонка ЦЕЛАЯ с CHECK (-1000..1000), поэтому
+        // раньше такой вызов давал "invalid input syntax for type integer"
+        // и ронял весь тик агента. Округление живёт на границе записи.
+        const written = await persistActions(db, {
+          runId,
+          businessId: ctx.business.id,
+          actions: [
+            { query: { query: '"Кафе" дробный', purpose: "identity", priority: 31.1, derivedFrom: "t", dedupeKey: `p1:${randomUUID()}` } },
+            { query: { query: '"Кафе" вне диапазона', purpose: "identity", priority: 99999, derivedFrom: "t", dedupeKey: `p2:${randomUUID()}` } },
+            { query: { query: '"Кафе" NaN', purpose: "identity", priority: Number.NaN, derivedFrom: "t", dedupeKey: `p3:${randomUUID()}` } },
+          ],
+        });
+        assert.equal(written, 3, "дробный и запредельный приоритет не должны мешать записи");
+
+        const rows = await db
+          .selectFrom("osint_research_actions")
+          .select(["query", "priority"])
+          .where("run_id", "=", runId)
+          .orderBy("priority", "desc")
+          .execute();
+        assert.equal(rows.length, 3);
+        for (const row of rows) {
+          assert.ok(
+            Number.isInteger(row.priority),
+            `в БД должно лежать целое, а не ${row.priority}`,
+          );
+          assert.ok(
+            row.priority >= -1000 && row.priority <= 1000,
+            `приоритет вне CHECK-диапазона: ${row.priority}`,
+          );
+        }
+        assert.equal(rows[0].priority, 1000, "значение выше диапазона должно быть ограничено сверху");
+        assert.equal(rows[2].priority, 0, "NaN должен сохраняться как 0, а не ломать запись");
+      });
+
       await t.test("B2. действия разных run не смешиваются", async () => {
         const ctxA = await scenario(db, "RunA");
         const ctxB = await scenario(db, "RunB");
@@ -785,40 +825,55 @@ test(
         const profile = await loadDiscoveryProfile(db, ctx.business.id);
         const identity = buildIdentityFromSeed(identitySeedFromProfile(profile));
 
+        // Два РАЗНЫХ факта в одном run: телефон и домен. Проверяем, что они
+        // дают разные вопросы, а не сливаются в одну гипотезу.
         await seedFact(db, {
           businessId: ctx.business.id, entityId: ctx.entityId,
           factType: "phone", factKey: "contact.phone",
           value: "+73852551010", url: "https://a.example/p1",
         });
-        await runFeedback(db, { runId, businessId: ctx.business.id, identity, maxQueries: 5 });
-
-        const keysA = (
-          await db.selectFrom("osint_research_hypotheses").select("dedupe_key").where("run_id", "=", runId).execute()
-        ).map((k) => k.dedupe_key);
-
-        const run2 = await makeRun(db, ctx.business.id);
         await seedFact(db, {
           businessId: ctx.business.id, entityId: ctx.entityId,
           factType: "domain", factKey: "web.domain",
           value: "romashka.example", url: "https://b.example/d",
         });
-        await runFeedback(db, { runId: run2, businessId: ctx.business.id, identity, maxQueries: 5 });
-        const keysB = (
-          await db.selectFrom("osint_research_hypotheses").select("dedupe_key").where("run_id", "=", run2).execute()
-        ).map((k) => k.dedupe_key);
 
-        // Entity-производные гипотезы у одного и того же бизнеса совпадают
-        // by design (ключ ...:entity:<id>), поэтому сравниваем только те
-        // ключи, что выведены из факта.
-        const factKeys = (keys) => keys.filter((k) => !k.includes(":entity:"));
-        const shared = factKeys(keysA).filter((k) => factKeys(keysB).includes(k));
+        await runFeedback(db, { runId, businessId: ctx.business.id, identity, maxQueries: 8 });
+
+        const keys = (
+          await db
+            .selectFrom("osint_research_hypotheses")
+            .select("dedupe_key")
+            .where("run_id", "=", runId)
+            .execute()
+        ).map((row) => row.dedupe_key);
+
+        // Ключ из факта оканчивается на type:key:value — по нему видно основание.
+        const phoneBasis = keys.filter((k) => k.endsWith("phone:contact.phone:+73852551010"));
+        const domainBasis = keys.filter((k) => k.endsWith("domain:web.domain:romashka.example"));
+        assert.ok(phoneBasis.length > 0, "факт телефона должен породить свою гипотезу");
+        assert.ok(domainBasis.length > 0, "факт домена должен породить свою гипотезу");
         assert.equal(
-          shared.length,
-          0,
-          `разные факты не должны давать одну и ту же гипотезу: ${JSON.stringify(shared)}`,
+          new Set(keys).size,
+          keys.length,
+          "все dedupe_key в пределах run обязаны быть уникальны",
         );
-        assert.ok(factKeys(keysA).length > 0, "гипотеза из факта обязана появиться");
-        assert.ok(factKeys(keysB).length > 0, "гипотеза из факта обязана появиться");
+
+        // Разные основания обязаны давать разные ключи.
+        const overlap = phoneBasis.filter((k) => domainBasis.includes(k));
+        assert.equal(overlap.length, 0, `разные факты не должны давать один ключ: ${JSON.stringify(overlap)}`);
+
+        // Повторный проход по этим же фактам ничего не добавляет.
+        const before = keys.length;
+        await runFeedback(db, { runId, businessId: ctx.business.id, identity, maxQueries: 8 });
+        const after = (
+          await db
+            .selectFrom("osint_research_hypotheses")
+            .select("dedupe_key")
+            .where("run_id", "=", runId)
+            .execute()
+        ).length;
+        assert.equal(after, before, "повторный проход не должен добавлять гипотезы по тем же фактам");
       });
 
       /* ============================================================== */

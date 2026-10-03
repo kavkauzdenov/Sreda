@@ -248,7 +248,11 @@ export async function runFeedback(
     };
     return queriesForHypothesis(input.identity, draft).map((query) => ({
       query,
-      priority: Math.round(row.priority * 10) / 10,
+      // priority в osint_research_actions — ЦЕЛОЕ (CHECK -1000..1000).
+      // Дробное значение здесь давало "invalid input syntax for type integer"
+      // и роняло весь тик агента. Гипотеза уже хранится с целым priority,
+      // поэтому масштабировать его не нужно.
+      priority: row.priority,
       reason: row.reason,
       hypothesisId: row.id,
     }));
