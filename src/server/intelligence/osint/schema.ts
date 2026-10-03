@@ -271,6 +271,8 @@ export interface OsintTables {
     stats: Generated<Record<string, unknown>>;
     /** Сущность, с которой стартовал обход. */
     root_entity_id: string | null;
+    /** Детерминированные extra-запросы (фразы паспорта) — в начале списка. */
+    extra_queries: Generated<unknown[]>;
   };
   osint_entities: {
     id: string;

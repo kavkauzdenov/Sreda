@@ -130,3 +130,40 @@ export function hostMatches(host: string, domain: string): boolean {
   if (!left || !right) return false;
   return left === right || left.endsWith("." + right);
 }
+
+/** Набор исключений паспорта: точные URL и регистрируемые домены. */
+export type UrlExclusion = {
+  urls: readonly string[];
+  domains: readonly string[];
+};
+
+/**
+ * Исключён ли URL: точное совпадение/префикс нормализованного URL либо
+ * совпадение хоста/регистрируемого домена. Match детерминирован и читается
+ * человеком — для чтения человеком нужны обе ветки.
+ */
+export function isUrlExcluded(url: string, excluded: UrlExclusion): boolean {
+  let host = "";
+  let domain: string | null = null;
+  try {
+    host = new URL(url).hostname.toLowerCase();
+    domain = registrableDomain(host);
+  } catch {
+    return false;
+  }
+  for (const entry of excluded.urls) {
+    if (!entry) continue;
+    if (url === entry || url.startsWith(entry)) return true;
+    try {
+      const entryDomain = registrableDomain(new URL(entry).hostname);
+      if (entryDomain && entryDomain === domain) return true;
+    } catch {
+      /* entry должен быть нормализован вызывающим — иначе это не совпадение */
+    }
+  }
+  for (const entry of excluded.domains) {
+    if (!entry) continue;
+    if (entry === domain || entry === host) return true;
+  }
+  return false;
+}

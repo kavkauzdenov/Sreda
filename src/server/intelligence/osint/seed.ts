@@ -1,6 +1,6 @@
 import type { Kysely } from "kysely";
 import type { Database } from "../../db/schema.ts";
-import { normalizeUrl } from "./url.ts";
+import { isUrlExcluded, normalizeUrl, type UrlExclusion } from "./url.ts";
 import type { DiscoveryProfile } from "./profile.ts";
 
 /**
@@ -96,6 +96,11 @@ export type CollectSeedInput = {
   /** Читать ли прежние источники/кандидаты тенанта (для новых run'ов). */
   includePrior?: boolean;
   maxSeeds?: number;
+  /**
+   * Исключения паспорта: seed отбрасывается по точному URL/префиксу или по
+   * регистрируемому домену. Применяется ко ВСЕМ источникам seed'ов.
+   */
+  exclude?: UrlExclusion | null;
 };
 
 /**
@@ -111,6 +116,7 @@ export async function collectSeedUrls(
   const merged: SeedUrl[] = [];
   const push = (seed: SeedUrl | undefined) => {
     if (!seed || merged.some((item) => item.url === seed.url)) return;
+    if (input.exclude && isUrlExcluded(seed.url, input.exclude)) return;
     if (merged.length < maxSeeds) merged.push(seed);
   };
 

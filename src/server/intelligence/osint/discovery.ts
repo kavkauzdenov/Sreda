@@ -20,12 +20,13 @@ import {
   buildDiscoveryProfile,
   type DiscoveryProfile,
 } from "./profile.ts";
-import { buildDiscoveryQueries } from "./queries.ts";
+import { buildDiscoveryQueries, type GeneratedQuery } from "./queries.ts";
 import { jsonbArray } from "./schema.ts";
 import type { ProviderRegistry } from "./providers/registry.ts";
 import type { OsintPageProvider } from "./providers/types.ts";
 import type { RobotsChecker } from "./robots.ts";
 import { collectSeedUrls, SEED_PRIORITY, type SeedUrl } from "./seed.ts";
+import type { UrlExclusion } from "./url.ts";
 import {
   enqueueCrawlUrls,
   followDomainsFor,
@@ -87,6 +88,16 @@ export type CreateRunInput = {
   crawl?: boolean;
   /** Явные seed'ы оператора (только вместе с crawl). */
   explicitSeeds?: readonly SeedUrl[] | null;
+  /**
+   * Детерминированные дополнительные запросы (фразы паспорта): идут ПЕРЕД
+   * шаблонами и делят общий cap бюджета — так же, как в preview плана.
+   */
+  extraQueries?: readonly GeneratedQuery[] | null;
+  /**
+   * Исключения паспорта: excluded-URL не попадают в seed-очередь (по
+   * URL/префиксу и регистрируемому домену). Обход-уровневого блока нет.
+   */
+  excludeUrls?: UrlExclusion | null;
 };
 
 export type CreateRunResult = {
@@ -218,6 +229,31 @@ function emptyTotals() {
 }
 
 /**
+ * Детерминированная санитизация extra-запросов: только валидные строки,
+ * без control-символов и повторов, cap — максимум запросов бюджета.
+ */
+function sanitizeExtraQueries(
+  input: readonly GeneratedQuery[] | null | undefined,
+  maxQueries: number,
+): GeneratedQuery[] {
+  const out: GeneratedQuery[] = [];
+  for (const query of input ?? []) {
+    if (out.length >= maxQueries) break;
+    if (!query || typeof query !== "object") continue;
+    const text = typeof query.text === "string"
+      ? query.text.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim()
+      : "";
+    if (!text || text.length > 120) continue;
+    const templateId = typeof query.templateId === "string" && query.templateId
+      ? query.templateId.slice(0, 64)
+      : "extra";
+    if (out.some((entry) => entry.text === text)) continue;
+    out.push({ templateId, intent: query.intent ?? "any", text });
+  }
+  return out;
+}
+
+/**
  * Создаёт run в статусе queued (+ seed-очередь при включённом crawl).
  * Никакой сети — только профиль, выбор провайдеров и нормализация seed'ов.
  */
@@ -258,6 +294,7 @@ export async function createDiscoveryRun(
       max_depth: budget.maxDepth,
       stats: {},
       root_entity_id: null,
+      extra_queries: jsonbArray(sanitizeExtraQueries(input.extraQueries, budget.maxQueries)),
     })
     .execute();
 
@@ -267,6 +304,7 @@ export async function createDiscoveryRun(
       businessId: input.businessId,
       profile,
       explicit: input.explicitSeeds ?? undefined,
+      exclude: input.excludeUrls ?? null,
     });
     seedCount = await enqueueCrawlUrls(db, {
       runId,
@@ -301,6 +339,7 @@ export async function executeDiscoveryRun(
       "profile",
       "budget",
       "providers",
+      "extra_queries",
       "error",
     ])
     .where("id", "=", runId)
@@ -332,7 +371,13 @@ export async function executeDiscoveryRun(
         ? rowProviders
         : null;
 
-  const queries = buildDiscoveryQueries(profile, budget);
+  const extra = Array.isArray(existing.extra_queries)
+    ? (existing.extra_queries as GeneratedQuery[])
+    : [];
+  const queries = [
+    ...sanitizeExtraQueries(extra, budget.maxQueries),
+    ...buildDiscoveryQueries(profile, budget),
+  ].slice(0, budget.maxQueries);
   const selectedProviders = options.registry.select(requested, options.intents);
   const totals = emptyTotals();
   const userId = options.userId ?? null;

@@ -76,3 +76,8 @@ ALTER TABLE osint_enrichment_runs
 CREATE INDEX IF NOT EXISTS osint_discovery_runs_queued_created_idx
   ON osint_discovery_runs (created_at)
   WHERE status = 'queued';
+
+-- Фразы паспорта — детерминированные запросы, добавляемые в начало списка
+-- задачи run'а (executeDiscoveryRun: extra-запросы, затем шаблоны, общий cap).
+ALTER TABLE osint_discovery_runs
+  ADD COLUMN IF NOT EXISTS extra_queries jsonb NOT NULL DEFAULT '[]';
