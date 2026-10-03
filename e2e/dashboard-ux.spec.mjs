@@ -69,6 +69,12 @@ for (const viewport of VIEWPORTS) {
   test.describe(`dashboard · ${viewport.name}`, () => {
     test.use({ viewport: { width: viewport.width, height: viewport.height } });
 
+    // Without this Playwright never applies the CI session and every page
+    // silently lands on /login, which reads as "dashboard missing".
+    if (hasStorage) {
+      test.use({ storageState: storageStatePath });
+    }
+
     test("приветствие по местному времени и дата", async ({ page }) => {
       if (!hasStorage) await registerAndBusiness(page);
       await openDashboard(page);

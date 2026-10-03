@@ -80,6 +80,11 @@ async function openIntelligence(page) {
 }
 
 test.describe("intelligence · human-readable states", () => {
+  // Apply the CI session; without it every request lands on /login.
+  if (hasStorage) {
+    test.use({ storageState: storageStatePath });
+  }
+
   test("в интерфейсе нет внутренних кодов и enum-значений", async ({ page }) => {
     if (!hasStorage) await registerAndBusiness(page);
     await openIntelligence(page);
