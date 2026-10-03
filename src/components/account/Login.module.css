@@ -71,12 +71,16 @@
 }
 .card input::placeholder { color: var(--auth-placeholder); opacity: 1; font-size: 14px; }
 .card input:focus-visible { outline: 2px solid #F6C344; outline-offset: 2px; }
-.password { position: relative; }
-.card .password input { padding-right: 54px; }
+/* Positioning wrapper for the password field. It wraps ONLY the input (never the
+   label) so the absolutely positioned toggle is measured against the field itself. */
+.password { position: relative; display: block; }
+/* Reserve room for the 44px toggle + its 6px inset so typed text never runs under it. */
+.card .password input { padding-right: 56px; }
 .reveal {
   position: absolute;
-  right: 5px;
-  top: 5px;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
   width: 44px;
   height: 44px;
   display: grid;
@@ -85,8 +89,10 @@
   border-radius: 8px;
   background: transparent;
   color: var(--auth-muted);
+  cursor: pointer;
 }
-.reveal:hover { background: #F6C34422; }
+.reveal:hover { background: #F6C34422; color: var(--auth-text); }
+.reveal:focus-visible { outline: 2px solid #F6C344; outline-offset: 2px; }
 .recover { display: block; width: fit-content; padding: 10px 0; margin-top: 3px; font-size: 14px; line-height: 1.6; color: var(--auth-muted); }
 .recover:hover, .footer a:hover { text-decoration: underline; text-underline-offset: 3px; }
 .card .submit {
@@ -130,7 +136,10 @@
   .card label { margin-top: 18px; }
   .card fieldset > label:first-child { margin-top: 0; }
   .card input { height: 50px; min-height: 50px; }
-  .reveal { top: 3px; right: 4px; }
+  /* Toggle keeps its own 44px box and stays centred — only the inset shrinks,
+     so the field geometry is identical to desktop. */
+  .reveal { right: 3px; }
+  .card .password input { padding-right: 52px; }
   .card .submit { min-height: 54px; margin-top: 13px; font-size: 17px; }
   .card .footer { margin-top: 22px; font-size: 14px; }
 }

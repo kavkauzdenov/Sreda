@@ -118,7 +118,7 @@ function AdminLoginForm() {
               }}
             />
             <label htmlFor="admin-password">Пароль</label>
-            <div style={{ position: "relative" }}>
+            <div className="admin-password">
               <input
                 id="admin-password"
                 type={showPassword ? "text" : "password"}
@@ -131,9 +131,10 @@ function AdminLoginForm() {
               />
               <button
                 type="button"
-                className="admin-search__clear"
-                style={{ top: 8 }}
+                className="admin-password__toggle"
                 aria-label={showPassword ? "Скрыть пароль" : "Показать пароль"}
+                aria-controls="admin-password"
+                aria-pressed={showPassword}
                 onClick={() => setShowPassword((v) => !v)}
               >
                 {showPassword ? (

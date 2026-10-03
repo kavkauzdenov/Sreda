@@ -1,15 +1,15 @@
 "use client";
 import Link from "next/link";
 import { useState } from "react";
-import { ArrowRight, Eye, EyeOff, LockKeyhole } from "lucide-react";
+import { ArrowRight, LockKeyhole } from "lucide-react";
 import styles from "./Login.module.css";
 import { apiRequest, ClientError } from "@/lib/apiClient";
 import { RecoveryCodesPanel } from "./RecoveryCodesPanel";
+import { PasswordField } from "@/components/ui/PasswordField";
 
 export function LoginForm({ register = false }: { register?: boolean }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
   const [confirmation, setConfirmation] = useState("");
   const [pin, setPin] = useState("");
   const [needsPin, setNeedsPin] = useState(false);
@@ -51,13 +51,21 @@ export function LoginForm({ register = false }: { register?: boolean }) {
             pattern="[a-zA-Z0-9_.]{3,30}" value={username} onChange={(event) => { setUsername(event.target.value); setNeedsPin(false); setPin(""); }} aria-describedby="login-hint" />
           <p id="login-hint" className={register ? "field-hint" : styles.hidden}>3–30 символов: латинские буквы, цифры, точка или подчёркивание.</p>
         </div>
-        <div className={register ? "field" : styles.password}>
+        <div className={register ? "field" : undefined}>
           <label className={register ? "field__label" : undefined} htmlFor="account-password">Пароль</label>
-          <input id="account-password" className={register ? "field__control" : undefined} placeholder="Введите пароль" type={!register && showPassword ? "text" : "password"} autoComplete={register ? "new-password" : "current-password"} required minLength={10} maxLength={128}
-            value={password} onChange={(event) => setPassword(event.target.value)} aria-describedby={register ? "password-hint" : undefined} />
-          {!register && <button type="button" className={styles.reveal} aria-label={showPassword ? "Скрыть пароль" : "Показать пароль"} aria-controls="account-password" aria-pressed={showPassword} onClick={() => setShowPassword(!showPassword)}>
-            {showPassword ? <EyeOff size={21} aria-hidden="true" /> : <Eye size={21} aria-hidden="true" />}
-          </button>}
+          {register ? (
+            <input id="account-password" className="field__control" placeholder="Введите пароль" type="password" autoComplete="new-password" required minLength={10} maxLength={128}
+              value={password} onChange={(event) => setPassword(event.target.value)} aria-describedby="password-hint" />
+          ) : (
+            <PasswordField
+              id="account-password"
+              className={styles.password}
+              toggleClassName={styles.reveal}
+              placeholder="Введите пароль"
+              value={password}
+              onChange={setPassword}
+            />
+          )}
           {register ? <p id="password-hint" className="field-hint">От 10 символов.</p> : null}
         </div>
         {register ? (

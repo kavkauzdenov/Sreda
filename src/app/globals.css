@@ -8862,6 +8862,115 @@ body {
   color: var(--brand-primary) !important;
 }
 
+/* ===== Dashboard: attention list + business summary =====
+   The dashboard is a summary and a set of entry points: compact grids, no tables.
+   Profile sections own the full record views. */
+
+.biznesoty-attention,
+.biznesoty-summary {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.biznesoty-attention__list {
+  display: grid;
+  gap: var(--space-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.biznesoty-attention__item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 12px 14px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-card);
+}
+
+.biznesoty-attention__item.is-action {
+  border-left: 3px solid var(--brand-primary);
+}
+.biznesoty-attention__item.is-warning {
+  border-left: 3px solid var(--warning);
+}
+.biznesoty-attention__item.is-neutral {
+  border-left: 3px solid var(--border-strong);
+}
+
+.biznesoty-attention__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+}
+.biznesoty-attention__item.is-action .biznesoty-attention__icon {
+  color: var(--brand-primary);
+}
+.biznesoty-attention__item.is-warning .biznesoty-attention__icon {
+  color: var(--warning);
+}
+
+.biznesoty-attention__body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.biznesoty-summary__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-3);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.biznesoty-summary__card {
+  display: grid;
+  gap: 4px;
+  padding: 14px 16px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-card);
+  min-width: 0;
+}
+
+.biznesoty-summary__label {
+  font-size: var(--font-size-label);
+  line-height: var(--line-height-snug);
+  color: var(--text-secondary);
+}
+
+.biznesoty-summary__value {
+  font-size: var(--font-size-card);
+  line-height: 1.15;
+  color: var(--text-primary);
+}
+
+@media (max-width: 699px) {
+  .biznesoty-attention__item {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  /* The CTA drops to its own row so the label never gets squeezed. */
+  .biznesoty-attention__item .button {
+    grid-column: 1 / -1;
+    justify-self: stretch;
+  }
+  .biznesoty-summary__grid {
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  }
+}
+
 /* Solution cards premium polish */
 .biznesoty-solution-card {
   border-radius: var(--radius-xl);
@@ -11093,8 +11202,9 @@ a.biznesoty-activity__row {
   position: relative;
   display: block;
 }
+/* Reserve room for the 44px toggle + its 6px inset so typed text never runs under it. */
 .field__password .field__control {
-  padding-right: 48px;
+  padding-right: 56px;
 }
 .field__password-toggle {
   position: absolute;
@@ -11104,8 +11214,11 @@ a.biznesoty-activity__row {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
+  /* 44px keeps the toggle at the repo's minimum touch target (responsive-audit TOUCH_MIN). */
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
   border: 0;
   border-radius: 10px;
   background: transparent;
@@ -11115,6 +11228,10 @@ a.biznesoty-activity__row {
 .field__password-toggle:hover {
   color: var(--text-primary);
   background: var(--border-subtle);
+}
+.field__password-toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .text-label {

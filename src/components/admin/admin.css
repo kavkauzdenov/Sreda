@@ -789,13 +789,52 @@
 
 .admin-login__card input {
   width: 100%;
-  height: 42px;
+  /* 48px (--field-height-md) so the 44px password toggle fits inside the field. */
+  height: 48px;
   margin-bottom: 12px;
   padding: 0 12px;
   border: 1px solid var(--field-border);
   border-radius: 8px;
   background: var(--field-bg);
   color: var(--field-text);
+}
+
+/* Password field wrapper contains only the input, so the toggle is centred
+   against the field itself instead of drifting when the field height changes. */
+.admin-password {
+  position: relative;
+  display: block;
+}
+/* Reserve room for the 44px toggle + 6px inset so text never runs underneath. */
+.admin-password input {
+  padding-right: 56px;
+}
+.admin-password__toggle {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* 44px keeps the toggle at the repo's minimum touch target (responsive-audit TOUCH_MIN). */
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.admin-password__toggle:hover {
+  color: var(--text-primary);
+  background: var(--border-subtle);
+}
+.admin-password__toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .admin-login__card fieldset {
