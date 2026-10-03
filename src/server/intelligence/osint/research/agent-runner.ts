@@ -28,6 +28,7 @@ import { executeResearchAction, finalizeAction } from "./executor.ts";
 import { identitySeedFromProfile, buildIdentityFromSeed } from "./identity-builder.ts";
 import {
   claimNextAction,
+  completeRun,
   countBarrenActions,
   countPendingActions,
   saveRunPlan,
@@ -41,8 +42,11 @@ export type AgentTickResult = {
   /** Активных исследований было что делать. */
   ticked: boolean;
   runId: string | null;
-  /** Что именно произошло на этом тике. */
-  did: "none" | "planned" | "feedback" | "executed" | "finished" | "error";
+  /**
+   * Что именно произошло на этом тике.
+   * `inactive` — run уже терминальный, трогать его нельзя.
+   */
+  did: "none" | "planned" | "feedback" | "executed" | "finished" | "error" | "inactive";
   /** Человекочитаемая причина, если тик завершил исследование. */
   stopReason: string | null;
 };
@@ -103,6 +107,18 @@ export async function tickResearchRun(
   const base: AgentTickResult = { ticked: false, runId: run.id, did: "none", stopReason: null };
 
   try {
+    // Терминальный run больше не активен. Без этой проверки вызов тика по
+    // завершённому исследованию снова поставил бы гипотезы и исполнил
+    // действие — то есть «оживил» бы то, что уже закончено.
+    const state = await db
+      .selectFrom("osint_discovery_runs")
+      .select("status")
+      .where("id", "=", run.id)
+      .executeTakeFirst();
+    if (!state || !["queued", "running"].includes(state.status)) {
+      return { ...base, did: "inactive", stopReason: "исследование уже завершено" };
+    }
+
     await requeueClaimedActions(db, run.id);
 
     const profile = await loadDiscoveryProfile(db, run.business_id);
@@ -157,6 +173,10 @@ export async function tickResearchRun(
       profile,
     });
 
+    // Снимок ДО исполнения: new_facts должен быть приростом за это
+    // действие, а не накопленной суммой по всему бизнесу.
+    const before = await computeResearchStats(db, run.business_id);
+
     const result = await executeResearchAction(
       db,
       {
@@ -183,9 +203,9 @@ export async function tickResearchRun(
       await setHypothesisStatus(db, action.hypothesis_id, "exhausted");
     }
 
-    const stats = await computeResearchStats(db, run.business_id);
+    const after = await computeResearchStats(db, run.business_id);
     await finalizeAction(db, action.id, result, {
-      newFacts: result.outcome === "productive" ? Math.max(1, stats.facts) : 0,
+      newFacts: Math.max(0, after.facts - before.facts),
     });
 
     await saveRunPlan(db, {
@@ -283,6 +303,14 @@ async function finishRun(
   });
 
   await setRunPhase(db, runId, "saturating");
+
+  // Терминальный статус. Без него run остаётся активным навсегда и воркер
+  // продолжает тикать по уже завершённому исследованию.
+  await completeRun(db, runId, {
+    confirmedAreas: confirmedAreas.size,
+    facts: stats.facts,
+    stopReason: stop,
+  });
 
   return stop ?? "no_useful_actions";
 }

@@ -127,12 +127,15 @@ export async function computeResearchStats(
  * никто не проверял. Пока фактов нет, такие направления остаются
  * неизвестными и видны в `unknown`.
  *
+ * (Тип `business_name` существует и относится к identity — это название
+ * БИЗНЕСА, найденное как факт, а не свидетельство изученности отзывов.)
+ *
  * Позволяет перевести «есть активные факты» в «направление подтверждено»
  * без выдумывания: направление считается закрытым, только если в нём есть
  * подтверждённый факт соответствующего типа.
  */
 const FACT_TYPES_BY_AREA: Record<string, string[]> = {
-  identity: ["brand_name", "legal_name"],
+  identity: ["business_name", "brand_name", "legal_name"],
   contact: ["phone", "email", "address"],
   website: ["website", "domain"],
   social: ["telegram", "vk", "instagram", "facebook", "youtube", "tiktok", "other_social"],

@@ -376,6 +376,43 @@ export async function setRunPhase(
     .execute();
 }
 
+/**
+ * Переводит исследование в терминальный статус.
+ *
+ * Без этого run навсегда остаётся в (queued, running), а тики воркера
+ * продолжают его поднимать: исследование, у которого очередь пуста, было бы
+ * «завершено» в UI, но никогда не завершилось бы по-настоящему.
+ *
+ * Статус выбирается по тому, что реально найдено, а не по факту остановки:
+ *   - confirmed — есть подтверждённые находки, исследование своё дело сделало;
+ *   - partial   — ветки исчерпаны или заблокированы, но что-то найдено;
+ *   - completed — находок нет вовсе: технически успешно, содержательно пусто.
+ */
+export async function completeRun(
+  db: Kysely<Database>,
+  runId: string,
+  input: {
+    confirmedAreas: number;
+    facts: number;
+    stopReason: string | null;
+  },
+): Promise<"completed" | "partial"> {
+  const status: "completed" | "partial" =
+    input.confirmedAreas > 0 || input.facts > 0 ? "completed" : "partial";
+  await db
+    .updateTable("osint_discovery_runs")
+    .set({
+      status,
+      finished_at: new Date(),
+      updated_at: new Date(),
+    })
+    .where("id", "=", runId)
+    // Защита от повторной записи: терминальный статус не переигрывается.
+    .where("status", "in", ["queued", "running"])
+    .execute();
+  return status;
+}
+
 export async function saveRunPlan(
   db: Kysely<Database>,
   input: {

@@ -42,6 +42,7 @@ export type Contradiction = {
 
 /** Типы фактов, где конфликт действительно что-то значит. */
 const MEANINGFUL: Record<string, string> = {
+  business_name: "название",
   phone: "телефон",
   address: "адрес",
   website: "сайт",

@@ -24,6 +24,8 @@ import {
   persistCandidate,
 } from "../candidates.ts";
 import { ensureObservation } from "../observations.ts";
+import { enqueueEnrichment } from "../enrichment.ts";
+import { log } from "../../../observability/log.ts";
 import { recordSourceAccess, completeAction } from "./plan-store.ts";
 import {
   ACCESS_STATUS_BY_REASON,
@@ -243,6 +245,32 @@ export async function executeResearchAction(
 
     // Провайдер ответил — фиксируем доступность «зелёной» не нужно:
     // доступность пишется по факту загрузки источника, а не поиска.
+  }
+
+  // ── Enrichment ─────────────────────────────────────────────────────────
+  // Наблюдения сами по себе не являются фактами: факты выделяет Stage 4.
+  // Без постановки в очередь enrichment наблюдения этого действия так и
+  // остались бы сырыми данными — feedback loop не получил бы ничего и
+  // цикл фактически не был бы замкнут.
+  if (newSources > 0) {
+    try {
+      await enqueueEnrichment(db, {
+        businessId: action.business_id,
+        discoveryRunId: action.run_id,
+      });
+    } catch (error) {
+      // Отказ постановки не должен отменять уже сохранённые наблюдения,
+      // но обязан быть виден: иначе потеря знания выглядит как «нового
+      // ничего не найдено».
+      log("error", "OSINT_AGENT_ENRICHMENT_ENQUEUE_FAILED", {
+        action_id: action.id,
+        run_id: action.run_id,
+        error:
+          error instanceof Error
+            ? `${error.name}: ${error.message}`.replace(/\s+/g, " ").slice(0, 300)
+            : String(error).slice(0, 300),
+      });
+    }
   }
 
   // ── Исход ──────────────────────────────────────────────────────────────
