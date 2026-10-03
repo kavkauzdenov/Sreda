@@ -7,6 +7,7 @@ import { LoadingPanel } from "@/components/dashboard/LoadingPanel";
 import { getIntelligenceOverview } from "@/services/intelligence.service";
 import { OsintPanel } from "@/components/intelligence/OsintPanel";
 import { IntelligenceProfilePanel } from "@/components/intelligence/IntelligenceProfilePanel";
+import { ResearchPassportPanel } from "@/components/intelligence/ResearchPassportPanel";
 import type {
   BusinessInsight,
   BusinessRecommendation,
@@ -249,6 +250,8 @@ export function IntelligenceCommandCenter() {
           </p>
         </>
       ) : null}
+
+      <ResearchPassportPanel businessId={businessId} />
 
       <OsintPanel businessId={businessId} />
 
