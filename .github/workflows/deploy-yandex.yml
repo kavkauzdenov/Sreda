@@ -65,6 +65,34 @@ jobs:
           printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
 
+      # Preflight: до передачи образа убеждаемся, что сервер вообще доступен
+      # из раннера, ключ принят, а ожидаемый каталог на месте.
+      #
+      # Раньше единственной проверкой связи был scp внутри шага доставки, и
+      # недоступный хост выглядел как «сбой деплоя»: тот же шаг отвечает и за
+      # backup, миграции и health-check. Теперь недоступность отсекается
+      # отдельно и с ограниченным таймаутом, до отправки многосотенного мегабайтного архива образа.
+      - name: SSH preflight
+        timeout-minutes: 2
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          LOGIN: ${{ secrets.DEPLOY_USER }}
+        run: |
+          set -euo pipefail
+          [[ "$LOGIN" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          [[ "$HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]
+
+          # Секреты не печатаем: в лог уходят только обезличенные сообщения.
+          if ! ssh -n                     -o BatchMode=yes                     -o StrictHostKeyChecking=yes                     -o ConnectTimeout=15                     -o ConnectionAttempts=1                     "$LOGIN@$HOST"                     'test -d /opt/biznesoty/deploy'; then
+            {
+              echo "::error::SSH preflight failed: deploy host unreachable from this runner, key rejected, or /opt/biznesoty/deploy is missing."
+              echo "::error::Nothing was transferred and no server state was changed."
+              echo "::error::Check network reachability to port 22 from GitHub-hosted runners and the deploy credentials."
+            } >&2
+            exit 1
+          fi
+          echo "SSH preflight ok: deploy host reachable, key accepted, deploy directory present."
+
       - name: Deliver immutable image and release
         env:
           HOST: ${{ secrets.DEPLOY_HOST }}
@@ -75,6 +103,8 @@ jobs:
           [[ "$LOGIN" =~ ^[a-z_][a-z0-9_-]*$ ]]
           [[ "$HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]
 
-          scp -o BatchMode=yes -o StrictHostKeyChecking=yes             deploy/compose.yml             deploy/Caddyfile             deploy/release.sh             deploy/backup.sh             deploy/restore-drill.sh             /tmp/biznesoty-image.tar.gz             /tmp/biznesoty-image.tar.gz.sha256             "$LOGIN@$HOST:/opt/biznesoty/deploy/"
+          # ConnectTimeout ограничивает и здесь: без него зависшая сеть
+          # держит job до общего таймаута в 40 минут вместо отказа сразу.
+          scp -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -o ConnectionAttempts=1             deploy/compose.yml             deploy/Caddyfile             deploy/release.sh             deploy/backup.sh             deploy/restore-drill.sh             /tmp/biznesoty-image.tar.gz             /tmp/biznesoty-image.tar.gz.sha256             "$LOGIN@$HOST:/opt/biznesoty/deploy/"
 
-          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$LOGIN@$HOST"             "set -euo pipefail;              cd /opt/biznesoty/deploy;              sha256sum -c biznesoty-image.tar.gz.sha256;              gzip -dc biznesoty-image.tar.gz | docker load;              docker image inspect '$IMAGE' >/dev/null;              rm -f biznesoty-image.tar.gz biznesoty-image.tar.gz.sha256;              bash /opt/biznesoty/deploy/release.sh '$IMAGE'"
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -o ConnectionAttempts=1 "$LOGIN@$HOST"             "set -euo pipefail;              cd /opt/biznesoty/deploy;              sha256sum -c biznesoty-image.tar.gz.sha256;              gzip -dc biznesoty-image.tar.gz | docker load;              docker image inspect '$IMAGE' >/dev/null;              rm -f biznesoty-image.tar.gz biznesoty-image.tar.gz.sha256;              bash /opt/biznesoty/deploy/release.sh '$IMAGE'"
