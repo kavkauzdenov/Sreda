@@ -72,3 +72,103 @@ test("restore drill never targets production database", () => {
   assert.match(drill, /pg_restore/);
   assert.equal(/deploy-db-1/.test(drill), false);
 });
+
+/**
+ * SSH preflight перед передачей образа.
+ *
+ * Без него единственной проверкой связи был scp внутри шага доставки. Из-за
+ * этого недоступный хост выглядел как «сбой деплоя» в шаге, который отвечает
+ * ещё и за backup, миграции и health-check: два прогона (37182616336,
+ * 37199303967) закончились одинаково — «Deliver immutable image and release —
+ * exit 255» с `ssh: connect to host … port 22: Connection timed out`, и по
+ * логу нельзя было отличить «сервер недоступен» от «деплой сломался».
+ */
+test("SSH preflight отсекает недоступный сервер до передачи образа", () => {
+  const workflow = read(".github/workflows/deploy-yandex.yml");
+
+  // Порядок шагов важен: preflight обязан идти после настройки ключей
+  // (иначе нечем подключаться) и до доставки (иначе смысла нет).
+  const configureIdx = workflow.indexOf("- name: Configure SSH");
+  const preflightIdx = workflow.indexOf("- name: SSH preflight");
+  const deliverIdx = workflow.indexOf("- name: Deliver immutable image and release");
+  assert.ok(configureIdx > 0, "шаг Configure SSH должен существовать");
+  assert.ok(preflightIdx > 0, "шаг SSH preflight должен существовать");
+  assert.ok(deliverIdx > 0, "шаг доставки должен существовать");
+  assert.ok(
+    configureIdx < preflightIdx,
+    "preflight обязан идти после Configure SSH — иначе ключ ещё не создан",
+  );
+  assert.ok(
+    preflightIdx < deliverIdx,
+    "preflight обязан идти ДО доставки — иначе он не выполнит свою задачу",
+  );
+});
+
+test("preflight ограничен по времени и не полагается на таймаут по умолчанию", () => {
+  const workflow = read(".github/workflows/deploy-yandex.yml");
+  const preflight = workflow.slice(
+    workflow.indexOf("- name: SSH preflight"),
+    workflow.indexOf("- name: Deliver immutable image and release"),
+  );
+
+  // Шаг ограничен целиком: зависший ssh не должен занимать job до 40 минут.
+  assert.match(preflight, /timeout-minutes:\s*\d+/);
+  // ConnectTimeout ограничивает именно установку соединения — именно она
+  // молчала при Connection timed out.
+  assert.match(preflight, /-o ConnectTimeout=\d+/);
+  assert.match(preflight, /-o ConnectionAttempts=1/);
+});
+
+test("preflight переиспользует те же секреты и настройки SSH, что и доставка", () => {
+  const workflow = read(".github/workflows/deploy-yandex.yml");
+  const preflight = workflow.slice(
+    workflow.indexOf("- name: SSH preflight"),
+    workflow.indexOf("- name: Deliver immutable image and release"),
+  );
+
+  assert.match(preflight, /HOST: \$\{\{ secrets\.DEPLOY_HOST \}\}/);
+  assert.match(preflight, /LOGIN: \$\{\{ secrets\.DEPLOY_USER \}\}/);
+  // Те же инварианты, что и в доставке: BatchMode запрещает интерактивный
+  // пароль, StrictHostKeyChecking — accepting нового хоста без проверки.
+  assert.match(preflight, /-o BatchMode=yes/);
+  assert.match(preflight, /-o StrictHostKeyChecking=yes/);
+  // -n не даёт пробросить stdin и заблокировать пробу.
+  assert.match(preflight, /ssh -n/);
+});
+
+test("preflight не публикует секреты в лог", () => {
+  const workflow = read(".github/workflows/deploy-yandex.yml");
+  const preflight = workflow.slice(
+    workflow.indexOf("- name: SSH preflight"),
+    workflow.indexOf("- name: Deliver immutable image and release"),
+  );
+
+  // Ни ключ, ни хост, ни логин не печатаются: в лог идут только
+  // обезличенные сообщения об ошибке.
+  assert.equal(/echo\s+"?\$SSH_KEY/.test(preflight), false, "ключ не должен печататься");
+  assert.equal(/echo\s+"?\$KNOWN_HOSTS/.test(preflight), false, "known_hosts не должен печататься");
+  assert.equal(/echo\s+"?\$HOST/.test(preflight), false, "хост не должен печататься");
+  assert.equal(/echo\s+"?\$LOGIN/.test(preflight), false, "логин не должен печататься");
+  // set -x бы вывел все секреты в лог.
+  assert.equal(/set -x/.test(preflight), false, "set -x раскрыл бы секреты в логах");
+});
+
+test("preflight проверяет наличие каталога доставки до передачи данных", () => {
+  const workflow = read(".github/workflows/deploy-yandex.yml");
+  const preflight = workflow.slice(
+    workflow.indexOf("- name: SSH preflight"),
+    workflow.indexOf("- name: Deliver immutable image and release"),
+  );
+  // Проба должна быть только чтением и не менять состояние сервера.
+  assert.match(preflight, /test -d \/opt\/biznesoty\/deploy/);
+  assert.equal(/docker|systemctl|bash \/|migrate|rm -|curl -X/i.test(preflight), false,
+    "preflight не должен менять состояние сервера");
+});
+
+test("шаг доставки тоже ограничен по времени соединения", () => {
+  const workflow = read(".github/workflows/deploy-yandex.yml");
+  const deliver = workflow.slice(workflow.indexOf("- name: Deliver immutable image and release"));
+  // Без ConnectTimeout зависшая сеть держала бы job до общего таймаута.
+  assert.match(deliver, /scp[^\n]*-o ConnectTimeout=\d+/);
+  assert.match(deliver, /ssh[^\n]*-o ConnectTimeout=\d+/);
+});
