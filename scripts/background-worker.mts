@@ -9,6 +9,7 @@ import { queueBookingReminder } from "../src/server/booking/worker.ts";
 import { processEntityReminder } from "../src/server/calendar/worker.ts";
 import { processSetupDrafts } from "../src/server/solutions/setup-draft-worker.ts";
 import { processQueuedDiscoveryRuns } from "../src/server/intelligence/osint/runner.ts";
+import { tickResearchAgent } from "../src/server/intelligence/osint/research/agent-runner.ts";
 import { processQueuedEnrichments } from "../src/server/intelligence/osint/enrichment.ts";
 import { createBuiltinRegistry } from "../src/server/intelligence/osint/providers/builtin.ts";
 import { createRobotsChecker } from "../src/server/intelligence/osint/robots.ts";
@@ -75,14 +76,28 @@ try {
       await processSetupDrafts(db);
       await heartbeat("setup_drafts");
 
-      // OSINT discovery: реестр и robots-кэш свежие на каждый тик — один
-      // run получает собственный emit-once набор провайдеров (§25).
-      await processQueuedDiscoveryRuns(db, {
-        registry: createBuiltinRegistry(),
-        crawl: { robots: createRobotsChecker() },
-        limit: 1,
-        signal: shutdown.signal,
-      });
+      // Автономный агент: исполняет ОДНО действие из очереди research
+      // actions и замыкает цикл «факт → гипотеза → следующее действие».
+      // Если у него есть очередь — шаблонный discovery ниже пропускается:
+      // иначе одно и то же исследование пошло бы двумя маршрутами сразу.
+      const agentResults = await tickResearchAgent(db, { signal: shutdown.signal });
+      const agentHasWork = agentResults.some(
+        (entry) => entry.did === "executed" || entry.did === "planned" || entry.did === "feedback",
+      );
+      if (agentHasWork) await heartbeat("osint");
+
+      // Шаблонный discovery нужен для запусков без исследовательской
+      // очереди (legacy-путь и HTTP-интеграционные тесты). Реестр и
+      // robots-кэш свежие на каждый тик — один run получает собственный
+      // emit-once набор провайдеров (§25).
+      if (!agentHasWork) {
+        await processQueuedDiscoveryRuns(db, {
+          registry: createBuiltinRegistry(),
+          crawl: { robots: createRobotsChecker() },
+          limit: 1,
+          signal: shutdown.signal,
+        });
+      }
 
       // Stage 4 (§26.11): enrichment очередь — facts/changes/contradictions
       // считаются в воркере, не в HTTP-запросе. Тот же heartbeat "osint".
